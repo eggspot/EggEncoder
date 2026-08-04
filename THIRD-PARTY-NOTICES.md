@@ -1,0 +1,40 @@
+# Third-Party Notices
+
+EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
+The package also redistributes two pre-built native codec libraries as separate, unmodified
+binary files under `Native/win-x64/`. Their licenses apply to those files independently.
+
+## libmp3lame.dll — LAME MP3 encoder
+
+- **Project**: [LAME](https://lame.sourceforge.io/)
+- **License**: GNU Lesser General Public License v2.1 (LGPL-2.1) — full text at
+  https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+- **How it's used**: EggEncoder loads `libmp3lame.dll` dynamically at runtime via
+  `NativeLibrary.Load` / P/Invoke (see `Native/Mp3Native.cs`, `Native/NativeLibraryLoader.cs`).
+  It is shipped as a separate, unmodified binary file alongside the managed assembly, not
+  statically linked or embedded — consumers of this package may replace the DLL with their own
+  LGPL-compliant build without recompiling EggEncoder, satisfying LGPL-2.1's relinking
+  requirement.
+- **Source availability**: LAME source code is available at https://lame.sourceforge.io/download.php
+
+## libFLAC.dll — FLAC reference codec
+
+- **Project**: [FLAC](https://xiph.org/flac/) (Xiph.Org Foundation)
+- **License**: BSD-style Xiph.Org license (permissive) — full text at
+  https://xiph.org/flac/license.html
+- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
+  `Native/FlacNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
+  binary file under `Native/win-x64/`.
+- **Source availability**: FLAC source code is available at https://github.com/xiph/flac
+
+## NLayer — managed MP3 decoder
+
+- **Project**: [NLayer](https://github.com/naudio/NLayer)
+- **License**: MIT / LGPL dual-licensed (used here under MIT)
+- **How it's used**: Referenced as a standard NuGet `PackageReference` for MP3 decoding
+  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored.
+
+---
+
+*Before the first public release, verify the license text links above still resolve and
+match the exact terms distributed with the bundled binaries.*

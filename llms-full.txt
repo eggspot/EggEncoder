@@ -1,0 +1,325 @@
+# EggEncoder — Full Reference
+
+> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA decode, waveform generation, and an ffmpeg wrapper fallback, behind one IMediaEncoder interface.
+
+## Overview
+
+EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, backed by two interchangeable implementations:
+
+- `NativeEncoder` — pure .NET codec implementations (AAC, FLAC, MP3, WAV, WMA) plus native P/Invoke bindings to `libmp3lame` and `libFLAC`. No external process, no ffmpeg install required. Windows x64 only.
+- `FfmpegEncoder` — shells out to an `ffmpeg`/`ffprobe` binary you provide. Broader format support (including video container probing via MOV/MP4), useful when you need formats the native codecs don't cover, or non-Windows deployment.
+
+Both implementations return the same `ProbeResult` shape (duration, sample rate, bit depth, bitrate, waveform peaks) so callers can switch between them via configuration without touching call sites.
+
+## Installation
+
+```bash
+dotnet add package EggEncoder
+```
+
+Targets `net8.0`, `net9.0`, `net10.0`. Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`) for `win-x64` ship inside the package via the NuGet `contentFiles` convention and are copied to your output directory at `Native/win-x64/*.dll` automatically — no separate install step.
+
+## Core Interface
+
+```csharp
+namespace EggEncoder;
+
+public interface IMediaEncoder
+{
+    Task<ProbeResult> Probe(string filePath);
+    Task ConvertFile(string sourceFilePath, string destFilePath);
+    Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+}
+```
+
+```csharp
+public class ProbeResult
+{
+    public int DurationInSeconds { get; set; }
+    public int? BitsPerSample { get; set; }
+    public int? BitRate { get; set; }
+    public int? SampleRate { get; set; }
+    public int? Height { get; set; }             // set for video containers (MOV/MP4), null for audio
+    public int? Width { get; set; }
+    public string? Result { get; set; }           // raw JSON detail from the probing engine
+    public string? WaveformResult { get; set; }   // JSON array of normalized peak windows in [0,1], or null
+}
+```
+
+## Dependency Injection
+
+```csharp
+using EggEncoder;
+
+// Native engine — no further config needed
+builder.Services.AddEggEncoder(options =>
+{
+    options.UseNativeEncoder = true;
+});
+
+// Ffmpeg engine — FfmpegBinPath is required
+builder.Services.AddEggEncoder(options =>
+{
+    options.UseNativeEncoder = false;
+    options.FfmpegBinPath = @"C:\tools\ffmpeg"; // directory containing ffmpeg.exe and ffprobe.exe
+});
+```
+
+```csharp
+public class EggEncoderOptions
+{
+    public bool UseNativeEncoder { get; set; }   // default false
+    public string? FfmpegBinPath { get; set; }   // required when UseNativeEncoder is false
+}
+```
+
+`AddEggEncoder` registers `IMediaEncoder` as scoped. When `UseNativeEncoder` is `false` it also registers `FfmpegEncoderConfiguration` and `IFfmpegEncoderBinFactory` (both singleton). `FfmpegEncoderBinFactory`'s constructor validates `ffmpeg.exe`/`ffprobe.exe` exist at `FfmpegBinPath` and throws `FileNotFoundException` immediately if either is missing — this library does not download or provision ffmpeg.
+
+### Consuming IMediaEncoder
+
+```csharp
+public class MediaService(IMediaEncoder mediaEncoder)
+{
+    public Task<ProbeResult> Inspect(string filePath) => mediaEncoder.Probe(filePath);
+    public Task Transcode(string sourcePath, string destPath) => mediaEncoder.ConvertFile(sourcePath, destPath);
+    public Task Trim(string sourcePath, string destPath, int startSeconds, int endSeconds) =>
+        mediaEncoder.CutFile(sourcePath, destPath, startSeconds, endSeconds);
+}
+```
+
+### Without DI
+
+```csharp
+using EggEncoder;
+using Microsoft.Extensions.Logging.Abstractions;
+
+IMediaEncoder encoder = new NativeEncoder(NullLogger<NativeEncoder>.Instance);
+var probeResult = await encoder.Probe("track.flac");
+```
+
+### From a background worker (no request-scoped DI)
+
+```csharp
+public class TranscodeWorker(IServiceProvider serviceProvider)
+{
+    public async Task RunAsync(string sourcePath, string destPath)
+    {
+        await using var scope = serviceProvider.CreateAsyncScope();
+        var mediaEncoder = scope.ServiceProvider.GetRequiredService<IMediaEncoder>();
+        await mediaEncoder.ConvertFile(sourcePath, destPath);
+    }
+}
+```
+
+## Supported Formats
+
+| Format | Native probe | Native decode | Native encode | ffmpeg |
+|--------|:---:|:---:|:---:|:---:|
+| WAV    | yes | yes | yes | yes |
+| FLAC   | yes | yes | yes | yes |
+| MP3    | yes | yes | yes | yes |
+| AAC    | yes | yes | yes | yes |
+| WMA    | yes | yes | no  | yes |
+| MOV/MP4 (metadata only) | yes | no | no | yes |
+
+`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) supports WAV, FLAC, MP3, and AAC — sample-accurate, no re-encode of the untouched region. `WmaDecoder` is decode-only and mono-only: real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`.
+
+## Codec Reference
+
+### AAC — `EggEncoder.Codecs.Aac`
+
+```csharp
+public static class AacDecoder
+{
+    public static AacStreamInfo Decode(string aacFilePath, Action<ReadOnlySpan<int>, int, int, int, long> onBlockDecoded);
+}
+
+public static class AacEncoder
+{
+    public static void Encode(string destFilePath, short[] samples, int channels, int sampleRate);
+    // throws NotSupportedException for channels != 1 or unsupported sample rates
+}
+```
+
+### FLAC — `EggEncoder.Codecs.Flac`
+
+```csharp
+public static class FlacDecoder
+{
+    public static FlacStreamInfo Decode(string flacFilePath, Action<ReadOnlySpan<int>, int, int, int, long> onBlockDecoded);
+}
+
+public static class FlacEncoder
+{
+    public const uint DefaultCompressionLevel = 5;
+    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel);
+}
+```
+
+Both wrap native `libFLAC` P/Invoke bindings (`EggEncoder.Native.FlacNative`).
+
+### MP3 — `EggEncoder.Codecs.Mp3`
+
+```csharp
+public static class Mp3Decoder // backed by the NLayer managed decoder — no native call
+{
+    public static Mp3StreamInfo Decode(string mp3FilePath, Action<ReadOnlySpan<int>, int, int, int, long> onBlockDecoded);
+}
+
+public static class Mp3Encoder // native libmp3lame P/Invoke
+{
+    public const int DefaultBitRateKbps = 320;
+    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
+}
+
+public static class Mp3Probe // manual MPEG frame-header parsing (Xing/Info/VBRI-aware), no native call
+{
+    public static Mp3ProbeResult Probe(string mp3FilePath);
+    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate
+}
+```
+
+### WAV — `EggEncoder.Codecs.Wav`
+
+```csharp
+public sealed class WavReader : IDisposable
+{
+    public static WavReader Open(string filePath);
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+    // throws NotSupportedException for unsupported bit depths
+}
+
+public sealed class WavWriter : IAudioSink, IDisposable
+{
+    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Every other codec's `Convert`/`Cut` path reads from or writes to WAV as the common interchange format.
+
+### WMA — `EggEncoder.Codecs.Wma`
+
+```csharp
+public static class WmaDecoder
+{
+    public static WmaStreamInfo Decode(string wmaFilePath, Action<ReadOnlySpan<int>, int, int, int, long> onBlockDecoded);
+    // throws NotSupportedException for stereo (mid/side coding unsupported) or channel counts other than 1/2
+}
+```
+
+Container parsing via the internal `AsfContainerReader`. Decode-only — there is no `WmaEncoder`.
+
+### MOV/MP4 — `EggEncoder.Codecs.Mov`
+
+```csharp
+public static class MovProbe
+{
+    public static MovProbeResult Probe(string filePath); // walks the ISO base media atom tree directly
+}
+
+public class MovProbeResult
+{
+    public int DurationInSeconds { get; init; }
+    public int? Width { get; init; }
+    public int? Height { get; init; }
+    public string? CodecFourCc { get; init; }
+}
+```
+
+Metadata-only — no native dependency, no audio/video decode.
+
+## AudioCutter — `EggEncoder.Codecs`
+
+Format-dispatching convert/cut used internally by `NativeEncoder`; also usable directly:
+
+```csharp
+public static class AudioCutter
+{
+    public static void Convert(string sourceFilePath, string destFilePath);
+    // dispatches by extension: .wav/.flac/.mp3/.aac/.wma source -> any supported dest extension
+
+    public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+    // requires source and dest extensions to match (trims, does not transcode)
+    // returns false (and writes no file) if the requested range is entirely outside the source duration
+    // supports .wav, .flac, .mp3, .aac
+}
+```
+
+## Waveform Generation — `EggEncoder.Waveform`
+
+```csharp
+public sealed class WaveformCalculator
+{
+    public const int DefaultWindowCount = 200;
+
+    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
+    public void AddBlock(ReadOnlySpan<int> interleavedSamples); // call repeatedly across decode callbacks
+    public List<double> GetNormalizedWindows(); // each value in [0, 1]
+}
+```
+
+Example, decoding a WAV file directly instead of via `IMediaEncoder.Probe`:
+
+```csharp
+using var wavReader = WavReader.Open("track.wav");
+var calculator = new WaveformCalculator(wavReader.TotalSamples, wavReader.Channels, wavReader.BitsPerSample);
+
+var buffer = new int[4096 * wavReader.Channels];
+int framesRead;
+while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+{
+    calculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * wavReader.Channels));
+}
+
+List<double> windows = calculator.GetNormalizedWindows();
+```
+
+## Decode Callback Shape
+
+Every codec's `Decode` method streams blocks through the same callback signature instead of returning the full signal in memory:
+
+```csharp
+Action<ReadOnlySpan<int> block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel>
+```
+
+`block` is interleaved samples for whatever chunk the decoder just produced. Accumulate it yourself (into a `List<int>`, a `WaveformCalculator`, an internal `IAudioSink` implementation) as needed — this keeps memory bounded for large files and lets `NativeEncoder`/`AudioCutter` pipe decode output directly into an encoder session without buffering the whole track.
+
+## Choosing an Engine at Runtime
+
+Because both implementations share the exact same `ProbeResult` shape, you can register both concrete types and pick per-call:
+
+```csharp
+public class MediaService(NativeEncoder nativeEncoder, FfmpegEncoder ffmpegEncoder)
+{
+    public Task<ProbeResult> Probe(string filePath)
+    {
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        IMediaEncoder encoder = extension is ".mov" or ".mp4" ? ffmpegEncoder : nativeEncoder;
+        return encoder.Probe(filePath);
+    }
+}
+```
+
+## Constraints and Gotchas
+
+- **Windows x64 only for native codecs.** `NativeEncoder`, `Mp3Encoder`, and `FlacEncoder`/`FlacDecoder` P/Invoke into bundled `win-x64` binaries. Use `FfmpegEncoder` on Linux/macOS, ARM, or other RIDs.
+- **WMA is decode-only and mono-only.** Genuine stereo WMA files (mid/side coded, the real-world default) throw `NotSupportedException` by design rather than decoding incorrectly.
+- **ffmpeg is not provisioned by this library.** `FfmpegEncoderBinFactory` throws `FileNotFoundException` at construction if `ffmpeg.exe`/`ffprobe.exe` are missing from `FfmpegBinPath` — install/provision ffmpeg yourself.
+- **`AudioCutter.Cut` requires matching extensions.** It trims, it does not transcode; mismatched source/dest extensions throw `NotSupportedException`. Use `Convert` (or `ConvertFile`) to change format.
+- **AAC encoding is mono-only** and restricted to a fixed set of MPEG-4 sample rates (see `AacTables.SampleRates`); other combinations throw `NotSupportedException`.
+
+## License
+
+MIT (see LICENSE). EggEncoder bundles pre-built `libmp3lame.dll` (LGPL-2.1) and `libFLAC.dll` (BSD-style Xiph.Org license) as separate, dynamically-loaded native binaries, not statically linked — see THIRD-PARTY-NOTICES.md for details and source links.
+
+## Links
+
+- Full documentation: https://eggspot.github.io/EggEncoder/
+- NuGet: https://www.nuget.org/packages/EggEncoder
+- GitHub: https://github.com/eggspot/EggEncoder
+- Issues: https://github.com/eggspot/EggEncoder/issues

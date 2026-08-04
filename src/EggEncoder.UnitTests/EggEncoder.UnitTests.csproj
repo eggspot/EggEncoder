@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.0" />
+    <PackageReference Include="Moq" Version="4.20.70" />
+    <ProjectReference Include="..\EggEncoder\EggEncoder.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Codecs\Aac\tone_mono.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample_ffmpeg.flac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mov\test.mov" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mov\test.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\cbr128.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\no_xing.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\tone.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\vbr_q4.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wma\tone_mono.wma" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wma\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wma\tone_stereo.wma" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — EggEncoder</title>
+  <meta name="description" content="Full type reference for EggEncoder: IMediaEncoder, NativeEncoder, FfmpegEncoder, codecs, and supporting types.">
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="assets/css/eggspot.css">
+  <link rel="stylesheet" href="assets/css/prism-eggspot.css">
+</head>
+<body>
+<header class="site-header">
+  <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+  </button>
+  <a class="header-logo" href="index.html">
+    <img src="assets/images/logo.png" alt="EggEncoder">
+    <span class="header-logo-text">Egg<span>Encoder</span></span>
+  </a>
+  <div class="header-spacer"></div>
+  <nav class="header-links">
+    <a class="header-link" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a class="header-link" href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+  </nav>
+</header>
+<div class="sidebar-overlay" id="overlay"></div>
+<div class="page-layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-section-label">EggEncoder</div>
+    <a class="nav-link" href="index.html">Home</a>
+    <div class="nav-divider"></div>
+    <div class="nav-section-label">Guide</div>
+    <a class="nav-link nav-link-sub" href="Getting-Started.html">Getting Started</a>
+    <a class="nav-link nav-link-sub" href="Configuration.html">Configuration</a>
+    <a class="nav-link nav-link-sub" href="Dependency-Injection.html">Dependency Injection</a>
+    <a class="nav-link nav-link-sub" href="Advanced-Features.html">Advanced Features</a>
+    <div class="nav-divider"></div>
+    <a class="nav-link" href="API-Reference.html">API Reference</a>
+  </nav>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <h1>API Reference</h1>
+
+      <h2>IMediaEncoder</h2>
+      <p>The core abstraction. Implemented by <code>NativeEncoder</code> and <code>FfmpegEncoder</code>.</p>
+      <pre><code class="language-csharp">public interface IMediaEncoder
+{
+    Task&lt;ProbeResult&gt; Probe(string filePath);
+    Task ConvertFile(string sourceFilePath, string destFilePath);
+    Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+}</code></pre>
+
+      <h2>ProbeResult</h2>
+      <pre><code class="language-csharp">public class ProbeResult
+{
+    public int DurationInSeconds { get; set; }
+    public int? BitsPerSample { get; set; }
+    public int? BitRate { get; set; }
+    public int? SampleRate { get; set; }
+    public int? Height { get; set; }
+    public int? Width { get; set; }
+    public string? Result { get; set; }
+    public string? WaveformResult { get; set; }
+}</code></pre>
+
+      <h2>NativeEncoder</h2>
+      <p>Namespace: <code>EggEncoder</code>. Dispatches to a codec under <code>Codecs/</code> by file extension. No external process.</p>
+      <pre><code class="language-csharp">public class NativeEncoder : IMediaEncoder
+{
+    public NativeEncoder(ILogger&lt;NativeEncoder&gt; logger);
+}</code></pre>
+      <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
+
+      <h2>FfmpegEncoder</h2>
+      <p>Namespace: <code>EggEncoder</code>. Shells out to <code>ffmpeg</code>/<code>ffprobe</code>.</p>
+      <pre><code class="language-csharp">public class FfmpegEncoder : IMediaEncoder
+{
+    public FfmpegEncoder(IFfmpegEncoderBinFactory ffmpegEncoderBinFactory, ILogger&lt;FfmpegEncoder&gt; logger);
+}
+
+public interface IFfmpegEncoderBinFactory
+{
+    string FfmpegPath { get; }
+    string FfprobePath { get; }
+}
+
+public class FfmpegEncoderConfiguration
+{
+    public required string FfmpegBinPath { get; set; }
+}</code></pre>
+
+      <h2>ServiceCollectionExtensions</h2>
+      <pre><code class="language-csharp">public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddEggEncoder(this IServiceCollection services, Action&lt;EggEncoderOptions&gt; configure);
+}
+
+public class EggEncoderOptions
+{
+    public bool UseNativeEncoder { get; set; }
+    public string? FfmpegBinPath { get; set; }
+}</code></pre>
+
+      <h2>AudioCutter</h2>
+      <p>Namespace: <code>EggEncoder.Codecs</code>. Format-dispatching convert/cut used internally by <code>NativeEncoder</code>; also usable directly.</p>
+      <pre><code class="language-csharp">public static class AudioCutter
+{
+    public static void Convert(string sourceFilePath, string destFilePath);
+    public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+}</code></pre>
+
+      <h2>WaveformCalculator</h2>
+      <p>Namespace: <code>EggEncoder.Waveform</code>.</p>
+      <pre><code class="language-csharp">public sealed class WaveformCalculator
+{
+    public const int DefaultWindowCount = 200;
+
+    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
+    public void AddBlock(ReadOnlySpan&lt;int&gt; interleavedSamples);
+    public List&lt;double&gt; GetNormalizedWindows();
+}</code></pre>
+
+      <h2>Codecs</h2>
+
+      <h3>AAC — <code>EggEncoder.Codecs.Aac</code></h3>
+      <pre><code class="language-csharp">public static class AacDecoder
+{
+    public static AacStreamInfo Decode(string aacFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+}
+
+public static class AacEncoder
+{
+    public static void Encode(string destFilePath, short[] samples, int channels, int sampleRate);
+}</code></pre>
+
+      <h3>FLAC — <code>EggEncoder.Codecs.Flac</code></h3>
+      <pre><code class="language-csharp">public static class FlacDecoder
+{
+    public static FlacStreamInfo Decode(string flacFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+}
+
+public static class FlacEncoder
+{
+    public const uint DefaultCompressionLevel = 5;
+    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel);
+}</code></pre>
+
+      <h3>MP3 — <code>EggEncoder.Codecs.Mp3</code></h3>
+      <pre><code class="language-csharp">public static class Mp3Decoder // backed by NLayer
+{
+    public static Mp3StreamInfo Decode(string mp3FilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+}
+
+public static class Mp3Encoder // backed by native libmp3lame
+{
+    public const int DefaultBitRateKbps = 320;
+    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
+}
+
+public static class Mp3Probe // manual frame-header parsing, no native call
+{
+    public static Mp3ProbeResult Probe(string mp3FilePath);
+}</code></pre>
+
+      <h3>WAV — <code>EggEncoder.Codecs.Wav</code></h3>
+      <pre><code class="language-csharp">public sealed class WavReader : IDisposable
+{
+    public static WavReader Open(string filePath);
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+}
+
+public sealed class WavWriter : IDisposable
+{
+    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+
+      <h3>WMA — <code>EggEncoder.Codecs.Wma</code></h3>
+      <pre><code class="language-csharp">public static class WmaDecoder
+{
+    public static WmaStreamInfo Decode(string wmaFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+}</code></pre>
+      <p>Decode-only — mono only (mid/side stereo coding, used by real-world WMAv2 encoders including ffmpeg's, is not supported and throws <code>NotSupportedException</code>).</p>
+
+      <h3>MOV/MP4 — <code>EggEncoder.Codecs.Mov</code></h3>
+      <pre><code class="language-csharp">public static class MovProbe
+{
+    public static MovProbeResult Probe(string filePath);
+}
+
+public class MovProbeResult
+{
+    public int DurationInSeconds { get; init; }
+    public int? Width { get; init; }
+    public int? Height { get; init; }
+    public string? CodecFourCc { get; init; }
+}</code></pre>
+
+      <h2>Decode Callback Signature</h2>
+      <p>Every codec's <code>Decode</code> method streams blocks through the same callback shape rather than returning the full signal in memory:</p>
+      <pre><code class="language-csharp">Action&lt;ReadOnlySpan&lt;int&gt; block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel&gt;</code></pre>
+      <p><code>block</code> is interleaved samples for whatever chunk the decoder just produced — accumulate it yourself (into a <code>List&lt;int&gt;</code>, a <code>WaveformCalculator</code>, an <code>IAudioSink</code>) as needed.</p>
+    </div>
+  </main>
+</div>
+<footer class="site-footer">
+  <span>EggEncoder &mdash; MIT licensed &copy; <a href="https://eggspot.app">Eggspot</a>. Audio encoding/decoding toolkit for .NET.</span>
+  <div class="footer-links">
+    <a href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+    <a href="https://github.com/eggspot/EggEncoder/issues" target="_blank" rel="noopener">Issues</a>
+  </div>
+</footer>
+<script src="assets/js/nav.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+</body>
+</html>

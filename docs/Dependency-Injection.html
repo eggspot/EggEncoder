@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dependency Injection — EggEncoder</title>
+  <meta name="description" content="How AddEggEncoder registers IMediaEncoder and its dependencies, and how to resolve them manually.">
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="assets/css/eggspot.css">
+  <link rel="stylesheet" href="assets/css/prism-eggspot.css">
+</head>
+<body>
+<header class="site-header">
+  <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+  </button>
+  <a class="header-logo" href="index.html">
+    <img src="assets/images/logo.png" alt="EggEncoder">
+    <span class="header-logo-text">Egg<span>Encoder</span></span>
+  </a>
+  <div class="header-spacer"></div>
+  <nav class="header-links">
+    <a class="header-link" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a class="header-link" href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+  </nav>
+</header>
+<div class="sidebar-overlay" id="overlay"></div>
+<div class="page-layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-section-label">EggEncoder</div>
+    <a class="nav-link" href="index.html">Home</a>
+    <div class="nav-divider"></div>
+    <div class="nav-section-label">Guide</div>
+    <a class="nav-link nav-link-sub" href="Getting-Started.html">Getting Started</a>
+    <a class="nav-link nav-link-sub" href="Configuration.html">Configuration</a>
+    <a class="nav-link nav-link-sub" href="Dependency-Injection.html">Dependency Injection</a>
+    <a class="nav-link nav-link-sub" href="Advanced-Features.html">Advanced Features</a>
+    <div class="nav-divider"></div>
+    <a class="nav-link" href="API-Reference.html">API Reference</a>
+  </nav>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <h1>Dependency Injection</h1>
+
+      <h2>What AddEggEncoder Registers</h2>
+      <p><code>services.AddEggEncoder(options =&gt; ...)</code> registers a different set of services depending on <code>EggEncoderOptions.UseNativeEncoder</code>:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>UseNativeEncoder</th><th>Registrations</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>true</code></td>
+              <td><code>IMediaEncoder</code> &rarr; <code>NativeEncoder</code> (scoped)</td>
+            </tr>
+            <tr>
+              <td><code>false</code></td>
+              <td>
+                <code>FfmpegEncoderConfiguration</code> (singleton)<br>
+                <code>IFfmpegEncoderBinFactory</code> &rarr; <code>FfmpegEncoderBinFactory</code> (singleton)<br>
+                <code>IMediaEncoder</code> &rarr; <code>FfmpegEncoder</code> (scoped)
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>IMediaEncoder</code> is always registered scoped — inject it into a controller, a scoped service, or resolve it from an <code>IServiceScope</code> in a background worker.</p>
+
+      <h2>Typical Registration</h2>
+      <pre><code class="language-csharp">// Program.cs
+builder.Services.AddEggEncoder(options =&gt;
+{
+    options.UseNativeEncoder = true;
+});</code></pre>
+
+      <h2>Consuming IMediaEncoder</h2>
+      <pre><code class="language-csharp">public class TrackController(IMediaEncoder mediaEncoder) : ControllerBase
+{
+    [HttpPost("probe")]
+    public async Task&lt;IActionResult&gt; Probe(string filePath)
+    {
+        var result = await mediaEncoder.Probe(filePath);
+        return Ok(result);
+    }
+}</code></pre>
+
+      <h2>Resolving From a Background Worker</h2>
+      <p>In a non-request context (a cron task, a queue consumer), create a scope explicitly:</p>
+      <pre><code class="language-csharp">public class TranscodeWorker(IServiceProvider serviceProvider)
+{
+    public async Task RunAsync(string sourcePath, string destPath)
+    {
+        await using var scope = serviceProvider.CreateAsyncScope();
+        var mediaEncoder = scope.ServiceProvider.GetRequiredService&lt;IMediaEncoder&gt;();
+
+        await mediaEncoder.ConvertFile(sourcePath, destPath);
+    }
+}</code></pre>
+
+      <h2>Without a DI Container</h2>
+      <p>Every implementation has a plain constructor and works standalone — see <a href="Getting-Started.html#without-di">Getting Started</a>.</p>
+    </div>
+  </main>
+</div>
+<footer class="site-footer">
+  <span>EggEncoder &mdash; MIT licensed &copy; <a href="https://eggspot.app">Eggspot</a>. Audio encoding/decoding toolkit for .NET.</span>
+  <div class="footer-links">
+    <a href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+    <a href="https://github.com/eggspot/EggEncoder/issues" target="_blank" rel="noopener">Issues</a>
+  </div>
+</footer>
+<script src="assets/js/nav.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+</body>
+</html>

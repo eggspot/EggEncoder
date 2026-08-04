@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>EggEncoder</AssemblyName>
+    <RootNamespace>EggEncoder</RootNamespace>
+    <PackageId>EggEncoder</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Eggspot</Authors>
+    <Company>Eggspot</Company>
+    <Product>EggEncoder</Product>
+    <Description>Audio encoding/decoding toolkit for .NET — native MP3 (LAME) and FLAC codec bindings, managed AAC and WMA decode/encode, ffmpeg wrapper fallback, waveform generation, and audio probing/cutting. Built for high-throughput music distribution pipelines.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/eggspot/EggEncoder</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/eggspot/EggEncoder</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;codec;ffmpeg;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright © Eggspot</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>1591</NoWarn>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EggEncoder.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.md')" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" Condition="Exists('..\..\THIRD-PARTY-NOTICES.md')" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="NLayer" Version="2.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Native\win-x64\libmp3lame.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libmp3lame.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

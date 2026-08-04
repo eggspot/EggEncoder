@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration — EggEncoder</title>
+  <meta name="description" content="EggEncoderOptions reference and configuration patterns for EggEncoder.">
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="assets/css/eggspot.css">
+  <link rel="stylesheet" href="assets/css/prism-eggspot.css">
+</head>
+<body>
+<header class="site-header">
+  <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+  </button>
+  <a class="header-logo" href="index.html">
+    <img src="assets/images/logo.png" alt="EggEncoder">
+    <span class="header-logo-text">Egg<span>Encoder</span></span>
+  </a>
+  <div class="header-spacer"></div>
+  <nav class="header-links">
+    <a class="header-link" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a class="header-link" href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+  </nav>
+</header>
+<div class="sidebar-overlay" id="overlay"></div>
+<div class="page-layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-section-label">EggEncoder</div>
+    <a class="nav-link" href="index.html">Home</a>
+    <div class="nav-divider"></div>
+    <div class="nav-section-label">Guide</div>
+    <a class="nav-link nav-link-sub" href="Getting-Started.html">Getting Started</a>
+    <a class="nav-link nav-link-sub" href="Configuration.html">Configuration</a>
+    <a class="nav-link nav-link-sub" href="Dependency-Injection.html">Dependency Injection</a>
+    <a class="nav-link nav-link-sub" href="Advanced-Features.html">Advanced Features</a>
+    <div class="nav-divider"></div>
+    <a class="nav-link" href="API-Reference.html">API Reference</a>
+  </nav>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <h1>Configuration</h1>
+
+      <h2>EggEncoderOptions</h2>
+      <p>The single configuration surface, set via the <code>AddEggEncoder(Action&lt;EggEncoderOptions&gt;)</code> delegate:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>UseNativeEncoder</code></td><td><code>bool</code></td><td><code>true</code> resolves <code>IMediaEncoder</code> as <code>NativeEncoder</code>; <code>false</code> resolves <code>FfmpegEncoder</code>. Default <code>false</code>.</td></tr>
+            <tr><td><code>FfmpegBinPath</code></td><td><code>string?</code></td><td>Directory containing <code>ffmpeg.exe</code> and <code>ffprobe.exe</code>. Required when <code>UseNativeEncoder</code> is <code>false</code>; ignored otherwise.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Native Engine</h2>
+      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
+{
+    options.UseNativeEncoder = true;
+});</code></pre>
+      <p>No further configuration needed — the native codec binaries ship inside the NuGet package and are resolved relative to <code>AppContext.BaseDirectory</code> at runtime by <code>NativeLibraryLoader</code>.</p>
+
+      <h2>Ffmpeg Engine</h2>
+      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
+{
+    options.UseNativeEncoder = false;
+    options.FfmpegBinPath = @"C:\tools\ffmpeg";
+});</code></pre>
+      <p>Binding from configuration works the same way as any other options pattern:</p>
+      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
+    builder.Configuration.GetSection("EggEncoder").Bind(options));</code></pre>
+      <pre><code class="language-json">{
+  "EggEncoder": {
+    "UseNativeEncoder": false,
+    "FfmpegBinPath": "C:\\tools\\ffmpeg"
+  }
+}</code></pre>
+
+      <h2>Startup Failure Behavior</h2>
+      <p>When <code>UseNativeEncoder</code> is <code>false</code>, <code>FfmpegEncoderBinFactory</code>'s constructor checks for <code>ffmpeg.exe</code> and <code>ffprobe.exe</code> at <code>FfmpegBinPath</code> and throws <code>FileNotFoundException</code> immediately if either is missing. EggEncoder does not attempt to download, copy, or otherwise provision ffmpeg — the binaries must already exist at the configured path before <code>IMediaEncoder</code> is first resolved.</p>
+    </div>
+  </main>
+</div>
+<footer class="site-footer">
+  <span>EggEncoder &mdash; MIT licensed &copy; <a href="https://eggspot.app">Eggspot</a>. Audio encoding/decoding toolkit for .NET.</span>
+  <div class="footer-links">
+    <a href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+    <a href="https://github.com/eggspot/EggEncoder/issues" target="_blank" rel="noopener">Issues</a>
+  </div>
+</footer>
+<script src="assets/js/nav.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+</body>
+</html>

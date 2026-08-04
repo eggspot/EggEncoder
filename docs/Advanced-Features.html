@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Advanced Features — EggEncoder</title>
+  <meta name="description" content="Waveform generation, sample-accurate cutting, MOV/MP4 probing, and native binary packaging details.">
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="assets/css/eggspot.css">
+  <link rel="stylesheet" href="assets/css/prism-eggspot.css">
+</head>
+<body>
+<header class="site-header">
+  <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+  </button>
+  <a class="header-logo" href="index.html">
+    <img src="assets/images/logo.png" alt="EggEncoder">
+    <span class="header-logo-text">Egg<span>Encoder</span></span>
+  </a>
+  <div class="header-spacer"></div>
+  <nav class="header-links">
+    <a class="header-link" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a class="header-link" href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+  </nav>
+</header>
+<div class="sidebar-overlay" id="overlay"></div>
+<div class="page-layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-section-label">EggEncoder</div>
+    <a class="nav-link" href="index.html">Home</a>
+    <div class="nav-divider"></div>
+    <div class="nav-section-label">Guide</div>
+    <a class="nav-link nav-link-sub" href="Getting-Started.html">Getting Started</a>
+    <a class="nav-link nav-link-sub" href="Configuration.html">Configuration</a>
+    <a class="nav-link nav-link-sub" href="Dependency-Injection.html">Dependency Injection</a>
+    <a class="nav-link nav-link-sub" href="Advanced-Features.html">Advanced Features</a>
+    <div class="nav-divider"></div>
+    <a class="nav-link" href="API-Reference.html">API Reference</a>
+  </nav>
+  <main class="main-content">
+    <div class="content-wrapper">
+      <h1>Advanced Features</h1>
+
+      <h2>Waveform Generation</h2>
+      <p>Every <code>Probe</code> call that decodes audio (WAV, FLAC, MP3, AAC, WMA — not MOV/MP4) populates <code>ProbeResult.WaveformResult</code> with a JSON array of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
+      <pre><code class="language-csharp">using EggEncoder.Waveform;
+
+var calculator = new WaveformCalculator(totalSamplesPerChannel, channels, bitsPerSample);
+
+int framesRead;
+while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) &gt; 0)
+{
+    calculator.AddBlock(new ReadOnlySpan&lt;int&gt;(buffer, 0, framesRead * channels));
+}
+
+List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 windows</code></pre>
+      <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once.</p>
+
+      <h2>Sample-Accurate Cutting</h2>
+      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) trims WAV, FLAC, MP3, and AAC files without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
+      <pre><code class="language-csharp">using EggEncoder.Codecs;
+
+bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90);
+// false means the requested range was entirely outside the source's duration — no file was written</code></pre>
+      <p><code>Cut</code> requires the source and destination extensions to match — it trims in place, it does not transcode. Use <code>AudioCutter.Convert</code> (or <code>NativeEncoder.ConvertFile</code>) for format conversion.</p>
+
+      <h2>MOV/MP4 Probing</h2>
+      <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency, no ffmpeg — to read duration, dimensions, and the video codec's four-character code:</p>
+      <pre><code class="language-csharp">using EggEncoder.Codecs.Mov;
+
+var result = MovProbe.Probe("clip.mp4");
+Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s, {result.CodecFourCc}");</code></pre>
+      <p>This is metadata-only — <code>MovProbe</code> does not decode audio or video frames. <code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files here automatically and leaves <code>ProbeResult.WaveformResult</code> null.</p>
+
+      <h2>Native Binary Packaging</h2>
+      <p><code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>
+      <p>These binaries are Windows x64 only. <code>NativeEncoder</code> and its MP3/FLAC codec bindings are not available on Linux/macOS runners or non-x64 architectures — use <code>FfmpegEncoder</code> there instead.</p>
+
+      <h2>Choosing Between Engines at Runtime</h2>
+      <p>Because both implementations share the exact same <code>ProbeResult</code> shape, you can register both and pick per-call rather than per-process:</p>
+      <pre><code class="language-csharp">public class MediaService(NativeEncoder nativeEncoder, FfmpegEncoder ffmpegEncoder)
+{
+    public Task&lt;ProbeResult&gt; Probe(string filePath)
+    {
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        IMediaEncoder encoder = extension is ".mov" or ".mp4" ? ffmpegEncoder : nativeEncoder;
+
+        return encoder.Probe(filePath);
+    }
+}</code></pre>
+      <p>Register both concrete types alongside (or instead of) the <code>AddEggEncoder</code> interface registration when you need this pattern.</p>
+    </div>
+  </main>
+</div>
+<footer class="site-footer">
+  <span>EggEncoder &mdash; MIT licensed &copy; <a href="https://eggspot.app">Eggspot</a>. Audio encoding/decoding toolkit for .NET.</span>
+  <div class="footer-links">
+    <a href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.nuget.org/packages/EggEncoder" target="_blank" rel="noopener">NuGet</a>
+    <a href="https://github.com/eggspot/EggEncoder/issues" target="_blank" rel="noopener">Issues</a>
+  </div>
+</footer>
+<script src="assets/js/nav.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+</body>
+</html>
