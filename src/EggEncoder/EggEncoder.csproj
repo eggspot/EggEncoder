@@ -8,12 +8,12 @@
     <Authors>Eggspot</Authors>
     <Company>Eggspot</Company>
     <Product>EggEncoder</Product>
-    <Description>Audio encoding/decoding toolkit for .NET — native MP3 (LAME) and FLAC codec bindings, managed AAC and WMA decode/encode, ffmpeg wrapper fallback, waveform generation, and audio probing/cutting. Built for high-throughput music distribution pipelines.</Description>
+    <Description>Audio encoding/decoding toolkit for .NET — native MP3 (LAME) and FLAC codec bindings, managed AAC and WMA decode/encode, waveform generation, and audio probing/cutting, fully in-process. Built for high-throughput music distribution pipelines.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/eggspot/EggEncoder</PackageProjectUrl>
     <RepositoryUrl>https://github.com/eggspot/EggEncoder</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;codec;ffmpeg;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
+    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;codec;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Copyright>Copyright © Eggspot</Copyright>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Configuration — EggEncoder</title>
-  <meta name="description" content="EggEncoderOptions reference and configuration patterns for EggEncoder.">
+  <meta name="description" content="EggEncoder has no configuration surface — AddEggEncoder() takes no options.">
   <link rel="icon" href="favicon.ico">
   <link rel="stylesheet" href="assets/css/eggspot.css">
   <link rel="stylesheet" href="assets/css/prism-eggspot.css">
@@ -42,43 +42,13 @@
     <div class="content-wrapper">
       <h1>Configuration</h1>
 
-      <h2>EggEncoderOptions</h2>
-      <p>The single configuration surface, set via the <code>AddEggEncoder(Action&lt;EggEncoderOptions&gt;)</code> delegate:</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
-          <tbody>
-            <tr><td><code>UseNativeEncoder</code></td><td><code>bool</code></td><td><code>true</code> resolves <code>IMediaEncoder</code> as <code>NativeEncoder</code>; <code>false</code> resolves <code>FfmpegEncoder</code>. Default <code>false</code>.</td></tr>
-            <tr><td><code>FfmpegBinPath</code></td><td><code>string?</code></td><td>Directory containing <code>ffmpeg.exe</code> and <code>ffprobe.exe</code>. Required when <code>UseNativeEncoder</code> is <code>false</code>; ignored otherwise.</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <h2>There Isn't Any</h2>
+      <p>EggEncoder is fully native and has no options to set. <code>AddEggEncoder()</code> takes no parameters:</p>
+      <pre><code class="language-csharp">builder.Services.AddEggEncoder();</code></pre>
+      <p>This registers <code>IMediaEncoder</code> &rarr; <code>NativeEncoder</code> (scoped). There's no engine to pick, no binary path to provide, and nothing that can fail to resolve at startup due to missing external tooling.</p>
 
-      <h2>Native Engine</h2>
-      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = true;
-});</code></pre>
-      <p>No further configuration needed — the native codec binaries ship inside the NuGet package and are resolved relative to <code>AppContext.BaseDirectory</code> at runtime by <code>NativeLibraryLoader</code>.</p>
-
-      <h2>Ffmpeg Engine</h2>
-      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = false;
-    options.FfmpegBinPath = @"C:\tools\ffmpeg";
-});</code></pre>
-      <p>Binding from configuration works the same way as any other options pattern:</p>
-      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
-    builder.Configuration.GetSection("EggEncoder").Bind(options));</code></pre>
-      <pre><code class="language-json">{
-  "EggEncoder": {
-    "UseNativeEncoder": false,
-    "FfmpegBinPath": "C:\\tools\\ffmpeg"
-  }
-}</code></pre>
-
-      <h2>Startup Failure Behavior</h2>
-      <p>When <code>UseNativeEncoder</code> is <code>false</code>, <code>FfmpegEncoderBinFactory</code>'s constructor checks for <code>ffmpeg.exe</code> and <code>ffprobe.exe</code> at <code>FfmpegBinPath</code> and throws <code>FileNotFoundException</code> immediately if either is missing. EggEncoder does not attempt to download, copy, or otherwise provision ffmpeg — the binaries must already exist at the configured path before <code>IMediaEncoder</code> is first resolved.</p>
+      <h2>Native Binary Resolution</h2>
+      <p>The bundled <code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are located automatically at runtime by <code>NativeLibraryLoader</code>, relative to <code>AppContext.BaseDirectory</code> — this is not configurable and requires no setup. See <a href="Advanced-Features.html#native-binary-packaging">Native Binary Packaging</a> for how the files get there.</p>
     </div>
   </main>
 </div>

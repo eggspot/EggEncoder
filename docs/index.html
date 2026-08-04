@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Home — EggEncoder</title>
-  <meta name="description" content="EggEncoder — audio encoding/decoding toolkit for .NET. Native MP3/FLAC codec bindings, managed AAC/WMA decode, waveform generation, and an ffmpeg fallback, behind one IMediaEncoder interface.">
+  <meta name="description" content="EggEncoder — audio encoding/decoding toolkit for .NET. Native MP3/FLAC codec bindings, managed AAC/WMA decode, and built-in waveform generation, behind one IMediaEncoder interface.">
   <link rel="icon" href="favicon.ico">
   <link rel="stylesheet" href="assets/css/eggspot.css">
   <link rel="stylesheet" href="assets/css/prism-eggspot.css">
@@ -45,7 +45,7 @@
     <section class="hero">
       <div class="hero-badge">Free &amp; MIT Licensed</div>
       <h1>Audio encode/decode <span class="accent">without the ceremony</span></h1>
-      <p class="hero-sub">One <code>IMediaEncoder</code> interface. Native MP3/FLAC codec bindings, managed AAC/WMA decode, built-in waveform generation, and an ffmpeg wrapper fallback for everything else.</p>
+      <p class="hero-sub">One <code>IMediaEncoder</code> interface, fully native and in-process. Direct P/Invoke bindings to LAME and libFLAC, managed AAC/WMA decode, and built-in waveform generation — no ffmpeg, no subprocess.</p>
       <div class="btn-group">
         <a class="btn btn-primary" href="Getting-Started.html">Get Started</a>
         <a class="btn btn-outline" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">View on GitHub</a>
@@ -53,7 +53,7 @@
     </section>
 
     <div class="stats-bar">
-      <div class="stat-item"><div class="stat-value">2</div><div class="stat-label">Interchangeable engines</div></div>
+      <div class="stat-item"><div class="stat-value">0</div><div class="stat-label">External processes</div></div>
       <div class="stat-item"><div class="stat-value">5</div><div class="stat-label">Codecs (AAC/FLAC/MP3/WAV/WMA)</div></div>
       <div class="stat-item"><div class="stat-value">MIT</div><div class="stat-label">Free forever</div></div>
       <div class="stat-item"><div class="stat-value">.NET 8–10</div><div class="stat-label">Supported targets</div></div>
@@ -67,15 +67,15 @@
       </div>
       <p>Supports <code>net8.0</code>, <code>net9.0</code>, <code>net10.0</code>. Native <code>libmp3lame.dll</code>/<code>libFLAC.dll</code> binaries for <code>win-x64</code> ship inside the package.</p>
 
-      <h2>One Interface, Two Engines</h2>
+      <h2>Fully Native</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th></th><th>NativeEncoder</th><th>FfmpegEncoder</th></tr></thead>
+          <thead><tr><th></th><th>EggEncoder</th></tr></thead>
           <tbody>
-            <tr><td><strong>External process</strong></td><td class="yes">None</td><td class="no">Shells out to ffmpeg/ffprobe</td></tr>
-            <tr><td><strong>Setup</strong></td><td class="yes">Nothing — DLLs ship in the package</td><td class="no">You provide an ffmpeg install</td></tr>
-            <tr><td><strong>Format coverage</strong></td><td>AAC, FLAC, MP3, WAV, WMA; MOV/MP4 metadata</td><td class="yes">Whatever your ffmpeg build supports</td></tr>
-            <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">WAV, FLAC, MP3, AAC — no re-encode of the untouched region</td><td>Re-encodes via ffmpeg's own cut</td></tr>
+            <tr><td><strong>External process</strong></td><td class="yes">None</td></tr>
+            <tr><td><strong>Setup</strong></td><td class="yes">Nothing — DLLs ship in the package</td></tr>
+            <tr><td><strong>Format coverage</strong></td><td class="yes">AAC, FLAC, MP3, WAV, WMA; MOV/MP4 metadata</td></tr>
+            <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">WAV, FLAC, MP3, AAC — no re-encode of the untouched region</td></tr>
           </tbody>
         </table>
       </div>
@@ -83,10 +83,7 @@
       <h2>30-Second Quick Start</h2>
       <pre><code class="language-csharp">using EggEncoder;
 
-builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = true;
-});
+builder.Services.AddEggEncoder();
 
 // anywhere in the app
 public class MediaService(IMediaEncoder mediaEncoder)
@@ -99,8 +96,8 @@ public class MediaService(IMediaEncoder mediaEncoder)
       <div class="feature-grid">
         <div class="feature-card">
           <div class="feature-icon">&#127925;</div>
-          <div class="feature-title">One Interface, Two Engines</div>
-          <p class="feature-desc">Swap <code>NativeEncoder</code> ⇄ <code>FfmpegEncoder</code> via a single config flag — call sites never change.</p>
+          <div class="feature-title">Zero External Dependencies</div>
+          <p class="feature-desc">No ffmpeg install, no subprocess — everything runs in-process behind one <code>IMediaEncoder</code> interface.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#9889;</div>
@@ -115,7 +112,7 @@ public class MediaService(IMediaEncoder mediaEncoder)
         <div class="feature-card">
           <div class="feature-icon">&#9986;</div>
           <div class="feature-title">Sample-Accurate Cutting</div>
-          <p class="feature-desc">Trim WAV/FLAC/MP3/AAC without a full decode&rarr;encode round trip through ffmpeg.</p>
+          <p class="feature-desc">Trim WAV/FLAC/MP3/AAC without a full decode&rarr;encode round trip.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128269;</div>
@@ -125,7 +122,7 @@ public class MediaService(IMediaEncoder mediaEncoder)
         <div class="feature-card">
           <div class="feature-icon">&#128268;</div>
           <div class="feature-title">One-Line DI</div>
-          <p class="feature-desc"><code>services.AddEggEncoder(options =&gt; ...)</code> registers <code>IMediaEncoder</code> and its dependencies.</p>
+          <p class="feature-desc"><code>services.AddEggEncoder()</code> registers <code>IMediaEncoder</code> — no options, no config required.</p>
         </div>
       </div>
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is EggEncoder
 
-EggEncoder is a .NET audio encoding/decoding toolkit built around a single `IMediaEncoder` abstraction (`Probe`, `ConvertFile`, `CutFile`) with two interchangeable implementations: `NativeEncoder` (pure .NET + P/Invoke codec bindings, no external process) and `FfmpegEncoder` (shells out to an ffmpeg/ffprobe binary). Originally extracted from the DSP music distribution platform's `Dsp.Core.Encoder` project.
+EggEncoder is a .NET audio encoding/decoding toolkit built around a single `IMediaEncoder` abstraction (`Probe`, `ConvertFile`, `CutFile`) implemented entirely in-process by `NativeEncoder` — pure .NET + P/Invoke codec bindings, no external process, no ffmpeg dependency. Originally extracted from the DSP music distribution platform's `Dsp.Core.Encoder` project (which also had an ffmpeg-shell-out engine; that engine was dropped when EggEncoder became native-only).
 
 ## Commands
 
@@ -21,10 +21,9 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 ## Architecture
 
-### `IMediaEncoder` implementations
+### `IMediaEncoder` implementation
 
-- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — dispatches by file extension to the codec classes under `Codecs/`. No subprocess.
-- **`FfmpegEncoder`** (`src/EggEncoder/FfmpegEncoder.cs`) — shells out to `ffprobe`/`ffmpeg` via `IFfmpegEncoderBinFactory` (`FfmpegEncoderBinFactory.cs`), which resolves and validates the configured `FfmpegBinPath` at construction time (throws `FileNotFoundException` if `ffmpeg.exe`/`ffprobe.exe` are missing — this library does not provision ffmpeg itself).
+- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no external binary dependency beyond the bundled `libmp3lame`/`libFLAC` DLLs.
 
 ### Codecs (`src/EggEncoder/Codecs/`)
 
@@ -43,8 +42,8 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - **`Transform/`** — `BitReader`, `BitWriter`, `HuffmanTable`, `Mdct` — low-level bitstream and DSP primitives shared by the AAC/WMA codecs
 - **`Native/`** — `FlacNative.cs`/`Mp3Native.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.WaveformResult`
-- **`Results/`** — `ProbeResult` (public) plus `Ffmpeg*Result` DTOs (internal, ffmpeg JSON deserialization targets)
-- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(Action<EggEncoderOptions>)` DI registration; `EggEncoderOptions.UseNativeEncoder` picks `NativeEncoder` vs `FfmpegEncoder`
+- **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
+- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder()` DI registration; no options, registers `IMediaEncoder` → `NativeEncoder` (scoped)
 
 ### Native binary packaging
 
@@ -57,7 +56,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - Naming: `Feature_Condition_ExpectedBehavior` (e.g., `Probe_WavFile_Should_Return_Correct_Metadata_And_Waveform`)
 - Tests live in `src/EggEncoder.UnitTests/`, mirroring the `src/EggEncoder/` folder structure
 - Fixture audio files (`.wav`/`.flac`/`.mp3`/`.mov`/`.mp4`) live alongside their tests and are copied to the test output directory — see `<None ... CopyToOutputDirectory>` entries in `EggEncoder.UnitTests.csproj`
-- Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference files — these require no external ffmpeg at test time, only the checked-in reference fixtures
+- Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference fixtures checked into the repo — no external ffmpeg install is needed to run the tests, only the fixture files themselves
 
 ## Release Process
 

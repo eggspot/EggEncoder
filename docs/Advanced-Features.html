@@ -66,30 +66,16 @@ bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInS
       <p><code>Cut</code> requires the source and destination extensions to match — it trims in place, it does not transcode. Use <code>AudioCutter.Convert</code> (or <code>NativeEncoder.ConvertFile</code>) for format conversion.</p>
 
       <h2>MOV/MP4 Probing</h2>
-      <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency, no ffmpeg — to read duration, dimensions, and the video codec's four-character code:</p>
+      <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs.Mov;
 
 var result = MovProbe.Probe("clip.mp4");
 Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s, {result.CodecFourCc}");</code></pre>
       <p>This is metadata-only — <code>MovProbe</code> does not decode audio or video frames. <code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files here automatically and leaves <code>ProbeResult.WaveformResult</code> null.</p>
 
-      <h2>Native Binary Packaging</h2>
+      <h2 id="native-binary-packaging">Native Binary Packaging</h2>
       <p><code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>
-      <p>These binaries are Windows x64 only. <code>NativeEncoder</code> and its MP3/FLAC codec bindings are not available on Linux/macOS runners or non-x64 architectures — use <code>FfmpegEncoder</code> there instead.</p>
-
-      <h2>Choosing Between Engines at Runtime</h2>
-      <p>Because both implementations share the exact same <code>ProbeResult</code> shape, you can register both and pick per-call rather than per-process:</p>
-      <pre><code class="language-csharp">public class MediaService(NativeEncoder nativeEncoder, FfmpegEncoder ffmpegEncoder)
-{
-    public Task&lt;ProbeResult&gt; Probe(string filePath)
-    {
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        IMediaEncoder encoder = extension is ".mov" or ".mp4" ? ffmpegEncoder : nativeEncoder;
-
-        return encoder.Probe(filePath);
-    }
-}</code></pre>
-      <p>Register both concrete types alongside (or instead of) the <code>AddEggEncoder</code> interface registration when you need this pattern.</p>
+      <p>These binaries are Windows x64 only. EggEncoder does not run on Linux/macOS or non-x64 architectures — there is no cross-platform fallback engine.</p>
     </div>
   </main>
 </div>

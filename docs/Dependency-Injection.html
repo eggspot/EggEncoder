@@ -43,34 +43,11 @@
       <h1>Dependency Injection</h1>
 
       <h2>What AddEggEncoder Registers</h2>
-      <p><code>services.AddEggEncoder(options =&gt; ...)</code> registers a different set of services depending on <code>EggEncoderOptions.UseNativeEncoder</code>:</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>UseNativeEncoder</th><th>Registrations</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><code>true</code></td>
-              <td><code>IMediaEncoder</code> &rarr; <code>NativeEncoder</code> (scoped)</td>
-            </tr>
-            <tr>
-              <td><code>false</code></td>
-              <td>
-                <code>FfmpegEncoderConfiguration</code> (singleton)<br>
-                <code>IFfmpegEncoderBinFactory</code> &rarr; <code>FfmpegEncoderBinFactory</code> (singleton)<br>
-                <code>IMediaEncoder</code> &rarr; <code>FfmpegEncoder</code> (scoped)
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p><code>IMediaEncoder</code> is always registered scoped — inject it into a controller, a scoped service, or resolve it from an <code>IServiceScope</code> in a background worker.</p>
+      <p><code>services.AddEggEncoder()</code> registers exactly one service: <code>IMediaEncoder</code> &rarr; <code>NativeEncoder</code> (scoped). Inject it into a controller, a scoped service, or resolve it from an <code>IServiceScope</code> in a background worker.</p>
 
       <h2>Typical Registration</h2>
       <pre><code class="language-csharp">// Program.cs
-builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = true;
-});</code></pre>
+builder.Services.AddEggEncoder();</code></pre>
 
       <h2>Consuming IMediaEncoder</h2>
       <pre><code class="language-csharp">public class TrackController(IMediaEncoder mediaEncoder) : ControllerBase

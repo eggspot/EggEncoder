@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>API Reference — EggEncoder</title>
-  <meta name="description" content="Full type reference for EggEncoder: IMediaEncoder, NativeEncoder, FfmpegEncoder, codecs, and supporting types.">
+  <meta name="description" content="Full type reference for EggEncoder: IMediaEncoder, NativeEncoder, codecs, and supporting types.">
   <link rel="icon" href="favicon.ico">
   <link rel="stylesheet" href="assets/css/eggspot.css">
   <link rel="stylesheet" href="assets/css/prism-eggspot.css">
@@ -43,7 +43,7 @@
       <h1>API Reference</h1>
 
       <h2>IMediaEncoder</h2>
-      <p>The core abstraction. Implemented by <code>NativeEncoder</code> and <code>FfmpegEncoder</code>.</p>
+      <p>The core abstraction, implemented by <code>NativeEncoder</code>.</p>
       <pre><code class="language-csharp">public interface IMediaEncoder
 {
     Task&lt;ProbeResult&gt; Probe(string filePath);
@@ -72,34 +72,11 @@
 }</code></pre>
       <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
 
-      <h2>FfmpegEncoder</h2>
-      <p>Namespace: <code>EggEncoder</code>. Shells out to <code>ffmpeg</code>/<code>ffprobe</code>.</p>
-      <pre><code class="language-csharp">public class FfmpegEncoder : IMediaEncoder
-{
-    public FfmpegEncoder(IFfmpegEncoderBinFactory ffmpegEncoderBinFactory, ILogger&lt;FfmpegEncoder&gt; logger);
-}
-
-public interface IFfmpegEncoderBinFactory
-{
-    string FfmpegPath { get; }
-    string FfprobePath { get; }
-}
-
-public class FfmpegEncoderConfiguration
-{
-    public required string FfmpegBinPath { get; set; }
-}</code></pre>
-
       <h2>ServiceCollectionExtensions</h2>
       <pre><code class="language-csharp">public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddEggEncoder(this IServiceCollection services, Action&lt;EggEncoderOptions&gt; configure);
-}
-
-public class EggEncoderOptions
-{
-    public bool UseNativeEncoder { get; set; }
-    public string? FfmpegBinPath { get; set; }
+    public static IServiceCollection AddEggEncoder(this IServiceCollection services);
+    // registers IMediaEncoder -> NativeEncoder (scoped). No options.
 }</code></pre>
 
       <h2>AudioCutter</h2>
@@ -126,7 +103,7 @@ public class EggEncoderOptions
       <h3>AAC — <code>EggEncoder.Codecs.Aac</code></h3>
       <pre><code class="language-csharp">public static class AacDecoder
 {
-    public static AacStreamInfo Decode(string aacFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+    public static AacStreamInfo Decode(string aacFilePath, AudioBlockDecodedCallback onBlockDecoded);
 }
 
 public static class AacEncoder
@@ -137,7 +114,7 @@ public static class AacEncoder
       <h3>FLAC — <code>EggEncoder.Codecs.Flac</code></h3>
       <pre><code class="language-csharp">public static class FlacDecoder
 {
-    public static FlacStreamInfo Decode(string flacFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+    public static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded);
 }
 
 public static class FlacEncoder
@@ -149,7 +126,7 @@ public static class FlacEncoder
       <h3>MP3 — <code>EggEncoder.Codecs.Mp3</code></h3>
       <pre><code class="language-csharp">public static class Mp3Decoder // backed by NLayer
 {
-    public static Mp3StreamInfo Decode(string mp3FilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+    public static Mp3StreamInfo Decode(string mp3FilePath, AudioBlockDecodedCallback onBlockDecoded);
 }
 
 public static class Mp3Encoder // backed by native libmp3lame
@@ -183,7 +160,7 @@ public sealed class WavWriter : IDisposable
       <h3>WMA — <code>EggEncoder.Codecs.Wma</code></h3>
       <pre><code class="language-csharp">public static class WmaDecoder
 {
-    public static WmaStreamInfo Decode(string wmaFilePath, Action&lt;ReadOnlySpan&lt;int&gt;, int, int, int, long&gt; onBlockDecoded);
+    public static WmaStreamInfo Decode(string wmaFilePath, AudioBlockDecodedCallback onBlockDecoded);
 }</code></pre>
       <p>Decode-only — mono only (mid/side stereo coding, used by real-world WMAv2 encoders including ffmpeg's, is not supported and throws <code>NotSupportedException</code>).</p>
 
@@ -202,8 +179,10 @@ public class MovProbeResult
 }</code></pre>
 
       <h2>Decode Callback Signature</h2>
-      <p>Every codec's <code>Decode</code> method streams blocks through the same callback shape rather than returning the full signal in memory:</p>
-      <pre><code class="language-csharp">Action&lt;ReadOnlySpan&lt;int&gt; block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel&gt;</code></pre>
+      <p>Every codec's <code>Decode</code> method streams blocks through the same callback shape rather than returning the full signal in memory. It's a plain delegate rather than a generic <code>Action&lt;&gt;</code> because <code>ReadOnlySpan&lt;int&gt;</code> can't be used as a generic type argument on <code>net8.0</code>:</p>
+      <pre><code class="language-csharp">namespace EggEncoder.Codecs;
+
+public delegate void AudioBlockDecodedCallback(ReadOnlySpan&lt;int&gt; block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel);</code></pre>
       <p><code>block</code> is interleaved samples for whatever chunk the decoder just produced — accumulate it yourself (into a <code>List&lt;int&gt;</code>, a <code>WaveformCalculator</code>, an <code>IAudioSink</code>) as needed.</p>
     </div>
   </main>

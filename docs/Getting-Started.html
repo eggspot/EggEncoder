@@ -49,28 +49,15 @@
       </div>
       <p>Targets <code>net8.0</code>, <code>net9.0</code>, and <code>net10.0</code>. The native codec binaries (<code>libmp3lame.dll</code>, <code>libFLAC.dll</code>) for <code>win-x64</code> are bundled inside the package and copied to your output directory automatically — no separate install step.</p>
 
-      <h2>Pick an Engine</h2>
-      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, with two implementations:</p>
-      <ul>
-        <li><strong><code>NativeEncoder</code></strong> — pure .NET codecs plus P/Invoke bindings to LAME and libFLAC. No external process. Use this unless you need a format the native codecs don't cover.</li>
-        <li><strong><code>FfmpegEncoder</code></strong> — shells out to an <code>ffmpeg</code>/<code>ffprobe</code> binary you provide. Broader format support, including video container metadata.</li>
-      </ul>
+      <h2>One Interface, Fully Native</h2>
+      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, implemented by <code>NativeEncoder</code> — pure .NET codecs plus P/Invoke bindings to LAME and libFLAC. No external process, no ffmpeg install.</p>
 
       <h2>Register with DI</h2>
       <pre><code class="language-csharp">using EggEncoder;
 
 // Program.cs
-builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = true;
-});</code></pre>
-      <p>To use the ffmpeg engine instead:</p>
-      <pre><code class="language-csharp">builder.Services.AddEggEncoder(options =&gt;
-{
-    options.UseNativeEncoder = false;
-    options.FfmpegBinPath = @"C:\tools\ffmpeg"; // directory containing ffmpeg.exe and ffprobe.exe
-});</code></pre>
-      <p><code>FfmpegEncoderBinFactory</code> validates both binaries exist at construction time and throws <code>FileNotFoundException</code> immediately if either is missing — EggEncoder does not download or provision ffmpeg itself.</p>
+builder.Services.AddEggEncoder();</code></pre>
+      <p>No options, no configuration — the native codec binaries ship inside the package and are resolved automatically at runtime.</p>
 
       <h2>Inject and Use</h2>
       <pre><code class="language-csharp">public class MediaService(IMediaEncoder mediaEncoder)
@@ -96,7 +83,7 @@ var probeResult = await encoder.Probe("track.flac");
 Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationInSeconds}s");</code></pre>
 
       <h2>Reading a ProbeResult</h2>
-      <p><code>Probe</code> returns the same <code>ProbeResult</code> shape regardless of which engine produced it:</p>
+      <p><code>Probe</code> always returns the same <code>ProbeResult</code> shape:</p>
       <pre><code class="language-csharp">public class ProbeResult
 {
     public int DurationInSeconds { get; set; }
