@@ -127,7 +127,7 @@ namespace EggEncoder
                 BitRate = wavReader.SampleRate * wavReader.BitsPerSample * wavReader.Channels,
                 DurationInSamples = wavReader.TotalSamples,
                 TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null,
-                WaveformResult = JsonSerializer.Serialize(waveformCalculator.GetNormalizedWindows())
+                Waveform = waveformCalculator.GetNormalizedWindows()
             };
         }
 
@@ -159,7 +159,7 @@ namespace EggEncoder
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
                 DurationInSamples = streamInfo.TotalSamples,
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
-                WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
             };
         }
 
@@ -190,7 +190,7 @@ namespace EggEncoder
                 BitRate = mp3ProbeResult.BitRate,
                 IsVariableBitRate = mp3ProbeResult.IsVariableBitRate,
                 TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null,
-                WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
             };
         }
 
@@ -222,7 +222,7 @@ namespace EggEncoder
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
                 DurationInSamples = streamInfo.TotalSamples,
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
-                WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
             };
         }
 
@@ -254,7 +254,7 @@ namespace EggEncoder
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
                 DurationInSamples = streamInfo.TotalSamples,
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
-                WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
             };
         }
 
@@ -279,7 +279,7 @@ namespace EggEncoder
                 CodecName = movProbeResult.CodecFourCc,
                 Width = movProbeResult.Width,
                 Height = movProbeResult.Height,
-                WaveformResult = null
+                Waveform = null
             };
         }
 

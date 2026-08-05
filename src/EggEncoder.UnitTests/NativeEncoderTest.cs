@@ -3,7 +3,6 @@ using EggEncoder.Codecs.Mp3;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System.Text.Json;
 
 namespace EggEncoder.UnitTests
 {
@@ -29,7 +28,7 @@ namespace EggEncoder.UnitTests
         {
             var probeResult = await _nativeEncoder.Probe(_wavFixturePath);
 
-            AssertNonEmptyWaveform(probeResult.WaveformResult);
+            AssertNonEmptyWaveform(probeResult.Waveform);
 
             probeResult.FormatName.Should().Be("wav");
             probeResult.SizeBytes.Should().Be(new FileInfo(_wavFixturePath).Length);
@@ -56,7 +55,7 @@ namespace EggEncoder.UnitTests
 
                 var probeResult = await _nativeEncoder.Probe(flacPath);
 
-                AssertNonEmptyWaveform(probeResult.WaveformResult);
+                AssertNonEmptyWaveform(probeResult.Waveform);
 
                 probeResult.FormatName.Should().Be("flac");
                 probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
@@ -83,7 +82,7 @@ namespace EggEncoder.UnitTests
 
                 var probeResult = await _nativeEncoder.Probe(mp3Path);
 
-                AssertNonEmptyWaveform(probeResult.WaveformResult);
+                AssertNonEmptyWaveform(probeResult.Waveform);
 
                 probeResult.FormatName.Should().Be("mp3");
                 probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
@@ -126,7 +125,7 @@ namespace EggEncoder.UnitTests
         {
             var probeResult = await _nativeEncoder.Probe(_movFixturePath);
 
-            probeResult.WaveformResult.Should().BeNull();
+            probeResult.Waveform.Should().BeNull();
 
             probeResult.FormatName.Should().Be("mov");
             probeResult.DurationSeconds.Should().BeApproximately(5, 0.1);
@@ -140,7 +139,7 @@ namespace EggEncoder.UnitTests
         {
             var probeResult = await _nativeEncoder.Probe(_mp4FixturePath);
 
-            probeResult.WaveformResult.Should().BeNull();
+            probeResult.Waveform.Should().BeNull();
             probeResult.Width.Should().Be(640);
             probeResult.Height.Should().Be(360);
 
@@ -193,12 +192,10 @@ namespace EggEncoder.UnitTests
             }
         }
 
-        private static void AssertNonEmptyWaveform(string? waveformResult)
+        private static void AssertNonEmptyWaveform(IReadOnlyList<double>? waveform)
         {
-            waveformResult.Should().NotBeNull();
-
-            var windows = JsonSerializer.Deserialize<List<double>>(waveformResult!);
-            windows.Should().NotBeEmpty();
+            waveform.Should().NotBeNull();
+            waveform.Should().NotBeEmpty();
         }
 
         private static string CreateTempDirectory()
