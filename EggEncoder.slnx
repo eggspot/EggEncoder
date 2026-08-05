@@ -2,5 +2,6 @@
   <Folder Name="/src/">
     <Project Path="src/EggEncoder/EggEncoder.csproj" />
     <Project Path="src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj" />
+    <Project Path="src/EggEncoder.Benchmarks/EggEncoder.Benchmarks.csproj" />
   </Folder>
 </Solution>
