@@ -103,7 +103,7 @@ Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationSeconds}s")
     public string? TimeBase { get; init; }          // e.g. "1/44100"
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
-    public string? WaveformResult { get; set; }     // JSON array of normalized peak windows, or null
+    public IReadOnlyList&lt;double&gt;? Waveform { get; init; }  // normalized peak windows, or null
 }</code></pre>
       <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation and sample-accurate cutting details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
     </div>

@@ -36,6 +36,6 @@ namespace EggEncoder.Results
 
         public int? Height { get; init; }
 
-        public string? WaveformResult { get; set; }
+        public IReadOnlyList<double>? Waveform { get; init; }
     }
 }

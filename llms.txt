@@ -55,7 +55,7 @@ var probeResult = await encoder.Probe("track.flac");
 
 - `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`)
 - `NativeEncoder` — the sole implementation, Windows x64 only (P/Invoke to libmp3lame/libFLAC)
-- `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), waveform JSON
+- `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), normalized waveform peak windows
 - `AudioCutter` — format-dispatching convert/cut, used internally by `NativeEncoder`
 - `WaveformCalculator` — streams decoded blocks into normalized peak windows
 

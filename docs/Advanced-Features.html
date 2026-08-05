@@ -43,7 +43,7 @@
       <h1>Advanced Features</h1>
 
       <h2>Waveform Generation</h2>
-      <p>Every <code>Probe</code> call that decodes audio (WAV, FLAC, MP3, AAC, WMA — not MOV/MP4) populates <code>ProbeResult.WaveformResult</code> with a JSON array of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
+      <p>Every <code>Probe</code> call that decodes audio (WAV, FLAC, MP3, AAC, WMA — not MOV/MP4) populates <code>ProbeResult.Waveform</code> with a list of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
       <pre><code class="language-csharp">using EggEncoder.Waveform;
 
 var calculator = new WaveformCalculator(totalSamplesPerChannel, channels, bitsPerSample);
@@ -71,7 +71,7 @@ bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInS
 
 var result = MovProbe.Probe("clip.mp4");
 Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s, {result.CodecFourCc}");</code></pre>
-      <p>This is metadata-only — <code>MovProbe</code> does not decode audio or video frames. <code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files here automatically and leaves <code>ProbeResult.WaveformResult</code> null.</p>
+      <p>This is metadata-only — <code>MovProbe</code> does not decode audio or video frames. <code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files here automatically and leaves <code>ProbeResult.Waveform</code> null.</p>
 
       <h2 id="native-binary-packaging">Native Binary Packaging</h2>
       <p><code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>

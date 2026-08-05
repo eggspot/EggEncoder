@@ -72,7 +72,7 @@
     public string? TimeBase { get; init; }          // e.g. "1/44100"
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
-    public string? WaveformResult { get; set; }
+    public IReadOnlyList&lt;double&gt;? Waveform { get; init; }  // normalized peak windows in [0,1], or null
 }</code></pre>
 
       <h2>NativeEncoder</h2>
