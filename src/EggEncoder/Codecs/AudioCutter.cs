@@ -1,5 +1,6 @@
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Flac;
+using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
@@ -117,6 +118,10 @@ namespace EggEncoder.Codecs
                     break;
                 case ".wma":
                     WmaDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
+                case ".mov":
+                case ".mp4":
+                    MovDecoder.Decode(sourceFilePath, onBlockDecoded);
                     break;
                 default:
                     throw new NotSupportedException($"Decoding '{sourceExtension}' files is not supported by the native audio encoder");

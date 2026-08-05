@@ -65,13 +65,18 @@ bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInS
 // false means the requested range was entirely outside the source's duration — no file was written</code></pre>
       <p>Source and destination extensions no longer need to match — <code>Cut</code> can transcode while it trims (e.g. cut a WAV directly to MP3). Use <code>AudioCutter.Convert</code> (or <code>NativeEncoder.ConvertFile</code>) when you just need format conversion with no trimming.</p>
 
-      <h2>MOV/MP4 Probing</h2>
-      <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code:</p>
+      <h2>MOV/MP4 Probing and Audio Decode</h2>
+      <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code. It's metadata-only and never decodes audio or video frames:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs.Mov;
 
 var result = MovProbe.Probe("clip.mp4");
 Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s, {result.CodecFourCc}");</code></pre>
-      <p>This is metadata-only — <code>MovProbe</code> does not decode audio or video frames. <code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files here automatically and leaves <code>ProbeResult.Waveform</code> null.</p>
+      <p><code>MovDecoder</code> decodes an actual audio track when the file has one — a mono AAC-LC 'soun' track, specifically; it reads the MP4 sample table directly (no ADTS framing the way standalone <code>.aac</code> files have) and throws if the track is stereo or a different codec:</p>
+      <pre><code class="language-csharp">var streamInfo = MovDecoder.Decode("clip.mp4", (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+{
+    // interleaved PCM samples for this chunk
+});</code></pre>
+      <p><code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files through both: <code>ProbeResult.Width</code>/<code>Height</code>/duration always come from <code>MovProbe</code>, and if <code>MovDecoder</code> successfully finds a decodable audio track, <code>SampleRate</code>/<code>Channels</code>/<code>BitsPerSample</code>/<code>Waveform</code> get populated too. If there's no audio track, or it's not mono AAC-LC, those fields stay null and the video metadata is still returned — audio decode failure never fails the whole probe. <code>AudioCutter.Convert</code>/<code>Cut</code> can also use a <code>.mov</code>/<code>.mp4</code> file with a decodable audio track as a source, the same as any other format.</p>
 
       <h2 id="native-binary-packaging">Native Binary Packaging</h2>
       <p><code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>

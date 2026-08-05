@@ -17,7 +17,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 ### Why EggEncoder?
 
 - 🚀 **Fully native, in-process** — direct P/Invoke to LAME (MP3) and libFLAC, no subprocess/shell-out overhead
-- 🎼 **Broad format coverage** — AAC, FLAC, MP3, WAV, WMA decode/encode; MOV/MP4 metadata probing
+- 🎼 **Broad format coverage** — AAC, FLAC, MP3, WAV, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
@@ -73,9 +73,11 @@ var probeResult = await encoder.Probe("track.flac");
 | MP3    | ✅ | ✅ | ✅ |
 | AAC    | ✅ | ✅ | ✅ |
 | WMA    | ✅ | ✅ | ✅ |
-| MOV/MP4 (metadata only) | ✅ | ❌ | ❌ |
+| MOV/MP4 | ✅ | ✅¹ | ❌ |
 
-`IMediaEncoder.CutFile` decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
+¹ MOV/MP4 decode is audio-only, mono AAC-LC tracks — video frames are never decoded. Files without a matching audio track still probe fine (metadata only).
+
+`IMediaEncoder.CutFile` decodes any supported source (WAV, FLAC, MP3, AAC, WMA, and MOV/MP4 files with a mono AAC-LC audio track) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
 
 ## License
 

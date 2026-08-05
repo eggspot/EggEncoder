@@ -107,9 +107,11 @@ public class TranscodeWorker(IServiceProvider serviceProvider)
 | MP3    | yes | yes | yes |
 | AAC    | yes | yes | yes |
 | WMA    | yes | yes | yes |
-| MOV/MP4 (metadata only) | yes | no | no |
+| MOV/MP4 | yes | yes¹ | no |
 
-`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA) and writes to any supported destination format, including WAV, FLAC, MP3, AAC, or WMA — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` supports mono and independently-coded stereo; real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`. `WmaEncoder` always writes independently-coded channels, so its own output is always decodable by `WmaDecoder`.
+¹ MOV/MP4 decode is audio-only (mono AAC-LC tracks); video frames are never decoded. Files without a matching audio track still probe fine (metadata only) -- `NativeEncoder.Probe` falls back gracefully rather than failing the whole probe.
+
+`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA, MOV/MP4 with a mono AAC-LC track) and writes to any supported destination format, including WAV, FLAC, MP3, AAC, or WMA — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` supports mono and independently-coded stereo; real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`. `WmaEncoder` always writes independently-coded channels, so its own output is always decodable by `WmaDecoder`.
 
 ## Codec Reference
 
@@ -227,13 +229,24 @@ public static class MovProbe
 public class MovProbeResult
 {
     public int DurationInSeconds { get; init; }
+    public double DurationSeconds { get; init; }
     public int? Width { get; init; }
     public int? Height { get; init; }
     public string? CodecFourCc { get; init; }
 }
+
+public static class MovDecoder
+{
+    public static MovStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    // finds the 'soun' track, reads its esds AudioSpecificConfig + sample table (stsd/stsc/stsz/
+    // stco/co64), and decodes each sample through the same AacFrameDecoder engine AacDecoder uses --
+    // MP4 stores raw AAC access units with no ADTS framing, so there's no header to parse per sample.
+    // Mono AAC-LC only; throws InvalidDataException if there's no audio track, NotSupportedException
+    // for a non-AAC codec, stereo, or any other MPEG-4 audio object type.
+}
 ```
 
-Metadata-only — no native dependency, no audio/video decode.
+`MovProbe` is metadata-only (no native dependency, no decode). `MovDecoder` decodes a mono AAC-LC audio track when present; video frames are never decoded.
 
 ## AudioCutter — `EggEncoder.Codecs`
 
