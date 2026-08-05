@@ -30,16 +30,28 @@ public interface IMediaEncoder
 ```csharp
 public class ProbeResult
 {
-    public int DurationInSeconds { get; set; }
-    public int? BitsPerSample { get; set; }
-    public int? BitRate { get; set; }
-    public int? SampleRate { get; set; }
-    public int? Height { get; set; }             // set for video containers (MOV/MP4), null for audio
-    public int? Width { get; set; }
-    public string? Result { get; set; }           // raw JSON detail from the probing engine
-    public string? WaveformResult { get; set; }   // JSON array of normalized peak windows in [0,1], or null
+    public string FormatName { get; init; }        // e.g. "wav", "flac", "mp3", "aac", "asf", "mov", "mp4"
+    public string FormatLongName { get; init; }     // e.g. "WAV / WAVE (Waveform Audio)"
+    public long SizeBytes { get; init; }
+    public double DurationSeconds { get; init; }
+    public string CodecType { get; init; }          // "audio" or "video"
+    public string? CodecName { get; init; }         // e.g. "pcm_s16le", "flac", "mp3", "aac", "wmav2"
+    public string? CodecLongName { get; init; }
+    public int? SampleRate { get; init; }
+    public int? Channels { get; init; }
+    public string? ChannelLayout { get; init; }     // "mono", "stereo", or "{n} channels"
+    public int? BitsPerSample { get; init; }
+    public int? BitRate { get; init; }
+    public bool? IsVariableBitRate { get; init; }   // MP3 only
+    public long? DurationInSamples { get; init; }
+    public string? TimeBase { get; init; }          // e.g. "1/44100"
+    public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
+    public int? Height { get; init; }
+    public string? WaveformResult { get; set; }     // JSON array of normalized peak windows in [0,1], or null
 }
 ```
+
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags).
 
 ## Dependency Injection
 
@@ -96,7 +108,7 @@ public class TranscodeWorker(IServiceProvider serviceProvider)
 | WMA    | yes | yes | no  |
 | MOV/MP4 (metadata only) | yes | no | no |
 
-`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) supports WAV, FLAC, MP3, and AAC — sample-accurate, no re-encode of the untouched region. `WmaDecoder` is decode-only and mono-only: real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`.
+`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA) and writes to any supported destination format, including WAV, FLAC, MP3, or AAC — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` is decode-only and mono-only: real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`.
 
 ## Codec Reference
 
@@ -169,14 +181,17 @@ public sealed class WavReader : IDisposable
     public int SampleRate { get; }
     public int BitsPerSample { get; }
     public long TotalSamples { get; }
+    public bool IsFloatFormat { get; }
     public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
-    // throws NotSupportedException for unsupported bit depths
+    // 8-bit unsigned, 16/24/32-bit signed, and 32-bit IEEE float PCM are supported;
+    // throws NotSupportedException for anything else
 }
 
 public sealed class WavWriter : IAudioSink, IDisposable
 {
     public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
+    // writes 8-bit unsigned or 16/24/32-bit signed integer PCM
 }
 ```
 
@@ -224,9 +239,10 @@ public static class AudioCutter
     // dispatches by extension: .wav/.flac/.mp3/.aac/.wma source -> any supported dest extension
 
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
-    // requires source and dest extensions to match (trims, does not transcode)
+    // decodes any supported source (.wav/.flac/.mp3/.aac/.wma) and writes any supported dest
+    // extension (.wav/.flac/.mp3/.aac) -- source and dest extensions no longer need to match,
+    // so Cut can transcode while it trims
     // returns false (and writes no file) if the requested range is entirely outside the source duration
-    // supports .wav, .flac, .mp3, .aac
 }
 ```
 
@@ -267,7 +283,7 @@ Every codec's `Decode` method streams blocks through the same `AudioBlockDecoded
 
 - **Windows x64 only.** `NativeEncoder` and its codec bindings P/Invoke into bundled `win-x64` binaries. There is no cross-platform build or fallback engine — this library does not run on Linux/macOS/ARM.
 - **WMA is decode-only and mono-only.** Genuine stereo WMA files (mid/side coded, the real-world default) throw `NotSupportedException` by design rather than decoding incorrectly.
-- **`AudioCutter.Cut` requires matching extensions.** It trims, it does not transcode; mismatched source/dest extensions throw `NotSupportedException`. Use `Convert` (or `ConvertFile`) to change format.
+- **`AudioCutter.Cut` can transcode while it trims.** Source and destination extensions no longer need to match -- it decodes any supported source and writes any supported destination format.
 - **AAC encoding is mono-only** and restricted to a fixed set of MPEG-4 sample rates (see `AacTables.SampleRates`); other combinations throw `NotSupportedException`.
 
 ## License

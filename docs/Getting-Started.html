@@ -80,20 +80,30 @@ using Microsoft.Extensions.Logging.Abstractions;
 IMediaEncoder encoder = new NativeEncoder(NullLogger&lt;NativeEncoder&gt;.Instance);
 var probeResult = await encoder.Probe("track.flac");
 
-Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationInSeconds}s");</code></pre>
+Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationSeconds}s");</code></pre>
 
       <h2>Reading a ProbeResult</h2>
-      <p><code>Probe</code> always returns the same <code>ProbeResult</code> shape:</p>
+      <p><code>Probe</code> always returns the same <code>ProbeResult</code> shape. Only fields this library can genuinely compute are populated:</p>
       <pre><code class="language-csharp">public class ProbeResult
 {
-    public int DurationInSeconds { get; set; }
-    public int? BitsPerSample { get; set; }
-    public int? BitRate { get; set; }
-    public int? SampleRate { get; set; }
-    public int? Height { get; set; }   // set for video containers (MOV/MP4), null for audio
-    public int? Width { get; set; }
-    public string? Result { get; set; }          // raw JSON detail from the probing engine
-    public string? WaveformResult { get; set; }   // JSON array of normalized peak windows, or null
+    public string FormatName { get; init; }        // e.g. "wav", "flac", "mp3", "aac", "asf", "mov", "mp4"
+    public string FormatLongName { get; init; }     // e.g. "WAV / WAVE (Waveform Audio)"
+    public long SizeBytes { get; init; }
+    public double DurationSeconds { get; init; }
+    public string CodecType { get; init; }          // "audio" or "video"
+    public string? CodecName { get; init; }         // e.g. "pcm_s16le", "flac", "mp3", "aac", "wmav2"
+    public string? CodecLongName { get; init; }
+    public int? SampleRate { get; init; }
+    public int? Channels { get; init; }
+    public string? ChannelLayout { get; init; }     // "mono", "stereo", or "{n} channels"
+    public int? BitsPerSample { get; init; }
+    public int? BitRate { get; init; }
+    public bool? IsVariableBitRate { get; init; }   // MP3 only
+    public long? DurationInSamples { get; init; }
+    public string? TimeBase { get; init; }          // e.g. "1/44100"
+    public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
+    public int? Height { get; init; }
+    public string? WaveformResult { get; set; }     // JSON array of normalized peak windows, or null
 }</code></pre>
       <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation and sample-accurate cutting details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
     </div>
