@@ -10,6 +10,7 @@ namespace EggEncoder.Codecs.Wav
         private readonly int _bitsPerSample;
         private readonly bool _needsPadByte;
 
+        private byte[] _rawBytes = [];
         private bool _disposed;
 
         private WavWriter(FileStream stream, int channels, int bitsPerSample, bool needsPadByte)
@@ -22,9 +23,9 @@ namespace EggEncoder.Codecs.Wav
 
         public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames)
         {
-            if (bitsPerSample is not 16 and not 24)
+            if (bitsPerSample is not 8 and not 16 and not 24 and not 32)
             {
-                throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; only 16-bit and 24-bit PCM are supported");
+                throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
             }
 
             var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
@@ -69,7 +70,12 @@ namespace EggEncoder.Codecs.Wav
 
             var bytesPerSample = _bitsPerSample / 8;
             var sampleCount = frameCount * _channels;
-            var rawBytes = new byte[sampleCount * bytesPerSample];
+            var byteCount = sampleCount * bytesPerSample;
+
+            if (_rawBytes.Length < byteCount)
+            {
+                _rawBytes = new byte[byteCount];
+            }
 
             for (var i = 0; i < sampleCount; i++)
             {
@@ -78,21 +84,30 @@ namespace EggEncoder.Codecs.Wav
 
                 switch (bytesPerSample)
                 {
+                    case 1:
+                        _rawBytes[byteOffset] = (byte)(sample + 128);
+                        break;
                     case 2:
-                        rawBytes[byteOffset] = (byte)sample;
-                        rawBytes[byteOffset + 1] = (byte)(sample >> 8);
+                        _rawBytes[byteOffset] = (byte)sample;
+                        _rawBytes[byteOffset + 1] = (byte)(sample >> 8);
                         break;
                     case 3:
-                        rawBytes[byteOffset] = (byte)sample;
-                        rawBytes[byteOffset + 1] = (byte)(sample >> 8);
-                        rawBytes[byteOffset + 2] = (byte)(sample >> 16);
+                        _rawBytes[byteOffset] = (byte)sample;
+                        _rawBytes[byteOffset + 1] = (byte)(sample >> 8);
+                        _rawBytes[byteOffset + 2] = (byte)(sample >> 16);
+                        break;
+                    case 4:
+                        _rawBytes[byteOffset] = (byte)sample;
+                        _rawBytes[byteOffset + 1] = (byte)(sample >> 8);
+                        _rawBytes[byteOffset + 2] = (byte)(sample >> 16);
+                        _rawBytes[byteOffset + 3] = (byte)(sample >> 24);
                         break;
                     default:
                         throw new NotSupportedException($"Unsupported bytes per sample: {bytesPerSample}");
                 }
             }
 
-            _stream.Write(rawBytes, 0, rawBytes.Length);
+            _stream.Write(_rawBytes, 0, byteCount);
         }
 
         public void Finish()

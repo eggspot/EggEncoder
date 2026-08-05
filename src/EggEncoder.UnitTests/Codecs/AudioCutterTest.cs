@@ -193,10 +193,29 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
-        public void Cut_MismatchedExtensions_Should_Throw()
+        public void Cut_WavToMp3_CrossFormat_Should_Produce_Trimmed_NonSilent_Output()
         {
-            var act = () => AudioCutter.Cut("source.wav", "dest.mp3", 0, 10);
-            act.Should().ThrowExactly<NotSupportedException>();
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destMp3Path = Path.Combine(tempDirectory, "cut.mp3");
+
+                AudioCutter.Cut(_wavFixturePath, destMp3Path, startInSeconds: 0, endInSeconds: 1).Should().BeTrue();
+
+                var probeResult = Mp3Probe.Probe(destMp3Path);
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(2);
+                probeResult.DurationInSeconds.Should().Be(1);
+
+                var (_, samples) = Mp3TestDecoder.DecodeAll(destMp3Path);
+                var rootMeanSquare = Math.Sqrt(samples.Average(sample => (double)sample * sample));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
 
         [Fact]

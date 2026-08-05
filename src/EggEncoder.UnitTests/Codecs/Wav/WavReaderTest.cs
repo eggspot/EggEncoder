@@ -58,6 +58,58 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_8Bit_Mono_Should_Convert_Unsigned_Bytes_To_Signed_Samples()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var unsignedBytes = new[] { 128, 255, 0, 64 };
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, unsignedBytes);
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.BitsPerSample.Should().Be(8);
+
+                var buffer = new int[unsignedBytes.Length];
+                var framesRead = wavReader.ReadInterleavedSamples(buffer, maxSamplesPerChannel: unsignedBytes.Length);
+
+                framesRead.Should().Be(unsignedBytes.Length);
+                buffer.Should().Equal(0, 127, -128, -64);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_32BitFloat_Stereo_Should_Scale_To_Full_Int32_Range()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var floatSamples = new[] { 0f, 1f, -1f, 0.5f };
+                WavFileBuilder.CreateFloat32(filePath, channels: 2, sampleRate: 44100, floatSamples);
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.BitsPerSample.Should().Be(32);
+                wavReader.Channels.Should().Be(2);
+
+                var buffer = new int[floatSamples.Length];
+                var framesRead = wavReader.ReadInterleavedSamples(buffer, maxSamplesPerChannel: 2);
+
+                framesRead.Should().Be(2);
+                buffer[0].Should().Be(0);
+                buffer[1].Should().Be(int.MaxValue);
+                buffer[2].Should().Be(-int.MaxValue);
+                buffer[3].Should().Be(int.MaxValue / 2);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void ReadInterleavedSamples_Should_Return_Zero_At_End_Of_Stream()
         {
             var filePath = Path.GetTempFileName();
@@ -85,7 +137,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             var filePath = Path.GetTempFileName();
             try
             {
-                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 8, [0, 1]);
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 12, [0, 1]);
 
                 var act = () => WavReader.Open(filePath).Dispose();
                 act.Should().ThrowExactly<NotSupportedException>();
