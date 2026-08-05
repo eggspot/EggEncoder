@@ -43,7 +43,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - **`Native/`** — `FlacNative.cs`/`Mp3Native.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
-- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder()` DI registration; no options, registers `IMediaEncoder` → `NativeEncoder` (scoped)
+- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `IMediaEncoder` → `NativeEncoder` (scoped). `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
 
 ### Native binary packaging
 

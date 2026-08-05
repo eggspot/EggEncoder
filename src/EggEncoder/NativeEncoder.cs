@@ -15,17 +15,19 @@ namespace EggEncoder
         private const int FramesPerBlock = 4096;
 
         private readonly ILogger _logger;
+        private readonly bool _loggingEnabled;
 
-        public NativeEncoder(ILogger<NativeEncoder> logger)
+        public NativeEncoder(ILogger<NativeEncoder> logger, bool enableLogging = true)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _loggingEnabled = enableLogging;
         }
 
         public Task<ProbeResult> Probe(string filePath)
         {
             try
             {
-                _logger.LogInformation($"Start native probe '{filePath}'");
+                LogInformation($"Start native probe '{filePath}'");
 
                 var extension = Path.GetExtension(filePath).ToLowerInvariant();
                 var result = extension switch
@@ -39,13 +41,13 @@ namespace EggEncoder
                     _ => throw new NotSupportedException($"Probing '{extension}' files is not supported by the native audio encoder")
                 };
 
-                _logger.LogInformation($"Probe '{filePath}', format: '{result.FormatName}', codec: '{result.CodecName}', duration: {result.DurationSeconds}s");
+                LogInformation($"Completed native probe '{filePath}': format '{result.FormatName}', codec '{result.CodecName}', duration {result.DurationSeconds}s");
 
                 return Task.FromResult(result);
             }
             catch (Exception e)
             {
-                _logger.LogError(e, $"Failed to probe '{filePath}' {e.Message}");
+                LogError(e, $"Failed to probe '{filePath}' {e.Message}");
                 throw;
             }
         }
@@ -54,16 +56,18 @@ namespace EggEncoder
         {
             try
             {
-                _logger.LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
+                LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
 
                 EnsureDestinationDirectory(destFilePath);
                 AudioCutter.Convert(sourceFilePath, destFilePath);
+
+                LogInformation($"Completed native convert '{sourceFilePath}' to '{destFilePath}'");
 
                 return Task.CompletedTask;
             }
             catch (Exception e)
             {
-                _logger.LogError(e, $"Failed to convert from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
+                LogError(e, $"Failed to convert from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
                 throw;
             }
         }
@@ -72,17 +76,37 @@ namespace EggEncoder
         {
             try
             {
-                _logger.LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
+                LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
 
                 EnsureDestinationDirectory(destFilePath);
-                AudioCutter.Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds);
+                var produced = AudioCutter.Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds);
+
+                LogInformation(produced
+                    ? $"Completed native cut '{sourceFilePath}' to '{destFilePath}'"
+                    : $"Completed native cut '{sourceFilePath}' to '{destFilePath}': requested range was outside the source duration, no file written");
 
                 return Task.CompletedTask;
             }
             catch (Exception e)
             {
-                _logger.LogError(e, $"Failed to cut from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
+                LogError(e, $"Failed to cut from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
                 throw;
+            }
+        }
+
+        private void LogInformation(string message)
+        {
+            if (_loggingEnabled)
+            {
+                _logger.LogInformation(message);
+            }
+        }
+
+        private void LogError(Exception exception, string message)
+        {
+            if (_loggingEnabled)
+            {
+                _logger.LogError(exception, message);
             }
         }
 
