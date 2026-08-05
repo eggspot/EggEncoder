@@ -39,7 +39,7 @@ namespace EggEncoder
                     _ => throw new NotSupportedException($"Probing '{extension}' files is not supported by the native audio encoder")
                 };
 
-                _logger.LogInformation($"Probe '{filePath}', result: '{result.Result}'");
+                _logger.LogInformation($"Probe '{filePath}', format: '{result.FormatName}', codec: '{result.CodecName}', duration: {result.DurationSeconds}s");
 
                 return Task.FromResult(result);
             }
@@ -108,17 +108,25 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * wavReader.Channels));
             }
 
-            var durationInSeconds = wavReader.SampleRate > 0 ? (int)(wavReader.TotalSamples / wavReader.SampleRate) : 0;
+            var durationSeconds = wavReader.SampleRate > 0 ? (double)wavReader.TotalSamples / wavReader.SampleRate : 0;
+            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat);
 
             return new ProbeResult
             {
-                DurationInSeconds = durationInSeconds,
+                FormatName = "wav",
+                FormatLongName = "WAV / WAVE (Waveform Audio)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = wavReader.SampleRate,
+                Channels = wavReader.Channels,
+                ChannelLayout = DescribeChannelLayout(wavReader.Channels),
                 BitsPerSample = wavReader.BitsPerSample,
                 BitRate = wavReader.SampleRate * wavReader.BitsPerSample * wavReader.Channels,
-                SampleRate = wavReader.SampleRate,
-                Height = null,
-                Width = null,
-                Result = JsonSerializer.Serialize(new { wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample }),
+                DurationInSamples = wavReader.TotalSamples,
+                TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator.GetNormalizedWindows())
             };
         }
@@ -133,17 +141,24 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
-            var durationInSeconds = streamInfo.SampleRate > 0 ? (int)(streamInfo.TotalSamples / streamInfo.SampleRate) : 0;
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
 
             return new ProbeResult
             {
-                DurationInSeconds = durationInSeconds,
+                FormatName = "flac",
+                FormatLongName = "FLAC (Free Lossless Audio Codec)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "flac",
+                CodecLongName = "FLAC (Free Lossless Audio Codec)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
                 BitsPerSample = streamInfo.BitsPerSample,
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
-                SampleRate = streamInfo.SampleRate,
-                Height = null,
-                Width = null,
-                Result = JsonSerializer.Serialize(new { streamInfo.Channels, streamInfo.SampleRate, streamInfo.BitsPerSample }),
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -161,13 +176,20 @@ namespace EggEncoder
 
             return new ProbeResult
             {
-                DurationInSeconds = mp3ProbeResult.DurationInSeconds,
+                FormatName = "mp3",
+                FormatLongName = "MP3 (MPEG audio layer 3)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = mp3ProbeResult.DurationSeconds,
+                CodecType = "audio",
+                CodecName = "mp3",
+                CodecLongName = "MP3 (MPEG audio layer 3)",
+                SampleRate = mp3ProbeResult.SampleRate,
+                Channels = mp3ProbeResult.Channels,
+                ChannelLayout = DescribeChannelLayout(mp3ProbeResult.Channels),
                 BitsPerSample = 16,
                 BitRate = mp3ProbeResult.BitRate,
-                SampleRate = mp3ProbeResult.SampleRate,
-                Height = null,
-                Width = null,
-                Result = JsonSerializer.Serialize(mp3ProbeResult),
+                IsVariableBitRate = mp3ProbeResult.IsVariableBitRate,
+                TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -182,17 +204,24 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
-            var durationInSeconds = streamInfo.SampleRate > 0 ? (int)(streamInfo.TotalSamples / streamInfo.SampleRate) : 0;
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
 
             return new ProbeResult
             {
-                DurationInSeconds = durationInSeconds,
+                FormatName = "aac",
+                FormatLongName = "ADTS AAC (Advanced Audio Coding)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "aac",
+                CodecLongName = "AAC-LC (Advanced Audio Coding, Low Complexity profile)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
                 BitsPerSample = streamInfo.BitsPerSample,
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
-                SampleRate = streamInfo.SampleRate,
-                Height = null,
-                Width = null,
-                Result = JsonSerializer.Serialize(new { streamInfo.Channels, streamInfo.SampleRate, streamInfo.BitsPerSample }),
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -207,17 +236,24 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
-            var durationInSeconds = streamInfo.SampleRate > 0 ? (int)(streamInfo.TotalSamples / streamInfo.SampleRate) : 0;
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
 
             return new ProbeResult
             {
-                DurationInSeconds = durationInSeconds,
+                FormatName = "asf",
+                FormatLongName = "ASF (Advanced / Active Streaming Format)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "wmav2",
+                CodecLongName = "Windows Media Audio 2",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
                 BitsPerSample = streamInfo.BitsPerSample,
                 BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
-                SampleRate = streamInfo.SampleRate,
-                Height = null,
-                Width = null,
-                Result = JsonSerializer.Serialize(new { streamInfo.Channels, streamInfo.SampleRate, streamInfo.BitsPerSample }),
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -225,18 +261,58 @@ namespace EggEncoder
         private static ProbeResult ProbeVideo(string filePath)
         {
             var movProbeResult = MovProbe.Probe(filePath);
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+            var (formatName, formatLongName) = extension switch
+            {
+                ".mp4" => ("mp4", "MP4 (MPEG-4 Part 14)"),
+                _ => ("mov", "QuickTime / MOV")
+            };
 
             return new ProbeResult
             {
-                DurationInSeconds = movProbeResult.DurationInSeconds,
-                BitsPerSample = null,
-                BitRate = null,
-                SampleRate = null,
-                Height = movProbeResult.Height,
+                FormatName = formatName,
+                FormatLongName = formatLongName,
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = movProbeResult.DurationSeconds,
+                CodecType = "video",
+                CodecName = movProbeResult.CodecFourCc,
                 Width = movProbeResult.Width,
-                Result = JsonSerializer.Serialize(movProbeResult),
+                Height = movProbeResult.Height,
                 WaveformResult = null
             };
+        }
+
+        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat)
+        {
+            if (isFloatFormat)
+            {
+                return ("pcm_f32le", "PCM 32-bit floating-point little-endian");
+            }
+
+            return bitsPerSample switch
+            {
+                8 => ("pcm_u8", "PCM unsigned 8-bit"),
+                16 => ("pcm_s16le", "PCM signed 16-bit little-endian"),
+                24 => ("pcm_s24le", "PCM signed 24-bit little-endian"),
+                32 => ("pcm_s32le", "PCM signed 32-bit little-endian"),
+                _ => ($"pcm_s{bitsPerSample}le", $"PCM signed {bitsPerSample}-bit little-endian")
+            };
+        }
+
+        private static string DescribeChannelLayout(int channels)
+        {
+            return channels switch
+            {
+                1 => "mono",
+                2 => "stereo",
+                _ => $"{channels} channels"
+            };
+        }
+
+        private static long GetFileSize(string filePath)
+        {
+            return new FileInfo(filePath).Length;
         }
     }
 }

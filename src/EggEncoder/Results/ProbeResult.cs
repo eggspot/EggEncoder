@@ -2,19 +2,39 @@ namespace EggEncoder.Results
 {
     public class ProbeResult
     {
-        public required int DurationInSeconds { get; set; }
+        public required string FormatName { get; init; }
 
-        public required int? BitsPerSample { get; set; }
+        public required string FormatLongName { get; init; }
 
-        public required int? BitRate { get; set; }
+        public required long SizeBytes { get; init; }
 
-        public required int? SampleRate { get; set; }
+        public required double DurationSeconds { get; init; }
 
-        public required int? Height { get; set; }
+        public required string CodecType { get; init; }
 
-        public required int? Width { get; set; }
+        public string? CodecName { get; init; }
 
-        public required string? Result { get; set; }
+        public string? CodecLongName { get; init; }
+
+        public int? SampleRate { get; init; }
+
+        public int? Channels { get; init; }
+
+        public string? ChannelLayout { get; init; }
+
+        public int? BitsPerSample { get; init; }
+
+        public int? BitRate { get; init; }
+
+        public bool? IsVariableBitRate { get; init; }
+
+        public long? DurationInSamples { get; init; }
+
+        public string? TimeBase { get; init; }
+
+        public int? Width { get; init; }
+
+        public int? Height { get; init; }
 
         public string? WaveformResult { get; set; }
     }

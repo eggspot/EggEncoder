@@ -37,6 +37,8 @@ namespace EggEncoder.Codecs.Wav
 
         public long TotalSamples { get; }
 
+        public bool IsFloatFormat => _isFloatFormat;
+
         public static WavReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);

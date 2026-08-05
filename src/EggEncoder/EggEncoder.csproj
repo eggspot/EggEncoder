@@ -39,10 +39,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="Native\win-x64\libmp3lame.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libmp3lame.dll">
+    <!--
+      PackageCopyToOutput is what actually makes NuGet copy these into a consuming project's
+      output directory on restore (emits copyToOutput="true" in the packed .nuspec's contentFiles
+      element). Without it, the DLLs land in the package but only ever get copied via MSBuild's own
+      CopyToOutputDirectory item propagation, which only fires for in-repo ProjectReference
+      consumers (e.g. EggEncoder.UnitTests), not for real PackageReference consumers, who would get
+      a DllNotFoundException at P/Invoke time instead.
+    -->
+    <None Include="Native\win-x64\libmp3lame.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libmp3lame.dll" PackageCopyToOutput="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll">
+    <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll" PackageCopyToOutput="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

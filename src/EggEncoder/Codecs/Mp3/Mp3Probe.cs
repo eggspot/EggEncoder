@@ -26,7 +26,7 @@ namespace EggEncoder.Codecs.Mp3
             var trailingTagSize = HasId3V1Tag(stream) ? 128 : 0;
             var audioDataLength = stream.Length - frame.Offset - trailingTagSize;
 
-            int durationInSeconds;
+            double durationSeconds;
             int bitRateKbps;
             bool isVariableBitRate;
 
@@ -34,22 +34,23 @@ namespace EggEncoder.Codecs.Mp3
             {
                 var samplesPerFrame = frame.Header.IsMpeg1 ? 1152 : 576;
                 var totalSamples = (long)knownVbrInfo.FrameCount * samplesPerFrame;
-                durationInSeconds = (int)(totalSamples / frame.Header.SampleRate);
-                bitRateKbps = durationInSeconds > 0 && knownVbrInfo.ByteCount > 0
-                    ? (int)(knownVbrInfo.ByteCount * 8 / 1000 / durationInSeconds)
+                durationSeconds = (double)totalSamples / frame.Header.SampleRate;
+                bitRateKbps = durationSeconds > 0 && knownVbrInfo.ByteCount > 0
+                    ? (int)(knownVbrInfo.ByteCount * 8 / 1000 / durationSeconds)
                     : frame.Header.BitRateKbps;
                 isVariableBitRate = knownVbrInfo.IsVbr;
             }
             else
             {
-                durationInSeconds = (int)(audioDataLength * 8 / 1000 / frame.Header.BitRateKbps);
+                durationSeconds = (double)audioDataLength * 8 / (frame.Header.BitRateKbps * 1000.0);
                 bitRateKbps = frame.Header.BitRateKbps;
                 isVariableBitRate = false;
             }
 
             return new Mp3ProbeResult
             {
-                DurationInSeconds = durationInSeconds,
+                DurationInSeconds = (int)durationSeconds,
+                DurationSeconds = durationSeconds,
                 SampleRate = frame.Header.SampleRate,
                 Channels = frame.Header.Channels,
                 BitRate = bitRateKbps * 1000,
@@ -202,6 +203,8 @@ namespace EggEncoder.Codecs.Mp3
     public class Mp3ProbeResult
     {
         public required int DurationInSeconds { get; init; }
+
+        public required double DurationSeconds { get; init; }
 
         public required int SampleRate { get; init; }
 
