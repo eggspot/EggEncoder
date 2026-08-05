@@ -39,7 +39,7 @@ namespace EggEncoder
                     _ => throw new NotSupportedException($"Probing '{extension}' files is not supported by the native audio encoder")
                 };
 
-                _logger.LogInformation($"Probe '{filePath}', format: '{result.Format.FormatName}', codec: '{result.Stream.CodecName}', duration: {result.Format.DurationSeconds}s");
+                _logger.LogInformation($"Probe '{filePath}', format: '{result.FormatName}', codec: '{result.CodecName}', duration: {result.DurationSeconds}s");
 
                 return Task.FromResult(result);
             }
@@ -109,32 +109,24 @@ namespace EggEncoder
             }
 
             var durationSeconds = wavReader.SampleRate > 0 ? (double)wavReader.TotalSamples / wavReader.SampleRate : 0;
-            var bitRate = wavReader.SampleRate * wavReader.BitsPerSample * wavReader.Channels;
             var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat);
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = "wav",
-                    FormatLongName = "WAV / WAVE (Waveform Audio)",
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = durationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "audio",
-                    CodecName = codecName,
-                    CodecLongName = codecLongName,
-                    SampleRate = wavReader.SampleRate,
-                    Channels = wavReader.Channels,
-                    ChannelLayout = DescribeChannelLayout(wavReader.Channels),
-                    BitsPerSample = wavReader.BitsPerSample,
-                    BitRate = bitRate,
-                    DurationInSamples = wavReader.TotalSamples,
-                    TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null
-                },
+                FormatName = "wav",
+                FormatLongName = "WAV / WAVE (Waveform Audio)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = wavReader.SampleRate,
+                Channels = wavReader.Channels,
+                ChannelLayout = DescribeChannelLayout(wavReader.Channels),
+                BitsPerSample = wavReader.BitsPerSample,
+                BitRate = wavReader.SampleRate * wavReader.BitsPerSample * wavReader.Channels,
+                DurationInSamples = wavReader.TotalSamples,
+                TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator.GetNormalizedWindows())
             };
         }
@@ -150,31 +142,23 @@ namespace EggEncoder
             });
 
             var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
-            var bitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels;
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = "flac",
-                    FormatLongName = "FLAC (Free Lossless Audio Codec)",
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = durationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "audio",
-                    CodecName = "flac",
-                    CodecLongName = "FLAC (Free Lossless Audio Codec)",
-                    SampleRate = streamInfo.SampleRate,
-                    Channels = streamInfo.Channels,
-                    ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
-                    BitsPerSample = streamInfo.BitsPerSample,
-                    BitRate = bitRate,
-                    DurationInSamples = streamInfo.TotalSamples,
-                    TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null
-                },
+                FormatName = "flac",
+                FormatLongName = "FLAC (Free Lossless Audio Codec)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "flac",
+                CodecLongName = "FLAC (Free Lossless Audio Codec)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -192,27 +176,20 @@ namespace EggEncoder
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = "mp3",
-                    FormatLongName = "MP3 (MPEG audio layer 3)",
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = mp3ProbeResult.DurationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "audio",
-                    CodecName = "mp3",
-                    CodecLongName = "MP3 (MPEG audio layer 3)",
-                    SampleRate = mp3ProbeResult.SampleRate,
-                    Channels = mp3ProbeResult.Channels,
-                    ChannelLayout = DescribeChannelLayout(mp3ProbeResult.Channels),
-                    BitsPerSample = 16,
-                    BitRate = mp3ProbeResult.BitRate,
-                    IsVariableBitRate = mp3ProbeResult.IsVariableBitRate,
-                    TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null
-                },
+                FormatName = "mp3",
+                FormatLongName = "MP3 (MPEG audio layer 3)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = mp3ProbeResult.DurationSeconds,
+                CodecType = "audio",
+                CodecName = "mp3",
+                CodecLongName = "MP3 (MPEG audio layer 3)",
+                SampleRate = mp3ProbeResult.SampleRate,
+                Channels = mp3ProbeResult.Channels,
+                ChannelLayout = DescribeChannelLayout(mp3ProbeResult.Channels),
+                BitsPerSample = 16,
+                BitRate = mp3ProbeResult.BitRate,
+                IsVariableBitRate = mp3ProbeResult.IsVariableBitRate,
+                TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -228,31 +205,23 @@ namespace EggEncoder
             });
 
             var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
-            var bitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels;
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = "aac",
-                    FormatLongName = "ADTS AAC (Advanced Audio Coding)",
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = durationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "audio",
-                    CodecName = "aac",
-                    CodecLongName = "AAC-LC (Advanced Audio Coding, Low Complexity profile)",
-                    SampleRate = streamInfo.SampleRate,
-                    Channels = streamInfo.Channels,
-                    ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
-                    BitsPerSample = streamInfo.BitsPerSample,
-                    BitRate = bitRate,
-                    DurationInSamples = streamInfo.TotalSamples,
-                    TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null
-                },
+                FormatName = "aac",
+                FormatLongName = "ADTS AAC (Advanced Audio Coding)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "aac",
+                CodecLongName = "AAC-LC (Advanced Audio Coding, Low Complexity profile)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -268,31 +237,23 @@ namespace EggEncoder
             });
 
             var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
-            var bitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels;
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = "asf",
-                    FormatLongName = "ASF (Advanced / Active Streaming Format)",
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = durationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "audio",
-                    CodecName = "wmav2",
-                    CodecLongName = "Windows Media Audio 2",
-                    SampleRate = streamInfo.SampleRate,
-                    Channels = streamInfo.Channels,
-                    ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
-                    BitsPerSample = streamInfo.BitsPerSample,
-                    BitRate = bitRate,
-                    DurationInSamples = streamInfo.TotalSamples,
-                    TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null
-                },
+                FormatName = "asf",
+                FormatLongName = "ASF (Advanced / Active Streaming Format)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "wmav2",
+                CodecLongName = "Windows Media Audio 2",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 WaveformResult = JsonSerializer.Serialize(waveformCalculator?.GetNormalizedWindows() ?? [])
             };
         }
@@ -310,21 +271,14 @@ namespace EggEncoder
 
             return new ProbeResult
             {
-                Format = new ProbeFormatInfo
-                {
-                    FormatName = formatName,
-                    FormatLongName = formatLongName,
-                    SizeBytes = GetFileSize(filePath),
-                    DurationSeconds = movProbeResult.DurationSeconds,
-                    StreamCount = 1
-                },
-                Stream = new ProbeStreamInfo
-                {
-                    CodecType = "video",
-                    CodecName = movProbeResult.CodecFourCc,
-                    Width = movProbeResult.Width,
-                    Height = movProbeResult.Height
-                },
+                FormatName = formatName,
+                FormatLongName = formatLongName,
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = movProbeResult.DurationSeconds,
+                CodecType = "video",
+                CodecName = movProbeResult.CodecFourCc,
+                Width = movProbeResult.Width,
+                Height = movProbeResult.Height,
                 WaveformResult = null
             };
         }
