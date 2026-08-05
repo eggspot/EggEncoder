@@ -55,7 +55,7 @@ var probeResult = await encoder.Probe("track.flac");
 
 - `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`)
 - `NativeEncoder` — the sole implementation, Windows x64 only (P/Invoke to libmp3lame/libFLAC)
-- `ProbeResult` — duration, sample rate, bit depth, bitrate, dimensions (for video), waveform JSON
+- `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), waveform JSON
 - `AudioCutter` — format-dispatching convert/cut, used internally by `NativeEncoder`
 - `WaveformCalculator` — streams decoded blocks into normalized peak windows
 
@@ -67,7 +67,7 @@ WAV, FLAC, MP3, AAC, WMA (decode-only, mono-only); MOV/MP4 metadata probing via 
 
 - Native codec binaries are Windows x64 only — there is no cross-platform fallback
 - `WmaDecoder` does not support mid/side stereo coding (the default for most real-world WMAv2 encoders) — throws `NotSupportedException` for genuine stereo files
-- `AudioCutter.Cut` requires matching source/destination extensions (trims, does not transcode) — use `Convert` for format changes
+- `AudioCutter.Cut` decodes any supported source and can write any supported destination format — it can transcode while trimming, source and destination extensions no longer need to match
 
 ## Links
 

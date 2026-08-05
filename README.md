@@ -75,7 +75,7 @@ var probeResult = await encoder.Probe("track.flac");
 | WMA    | ✅ | ✅ | ❌ |
 | MOV/MP4 (metadata only) | ✅ | ❌ | ❌ |
 
-`IMediaEncoder.CutFile` supports WAV, FLAC, MP3, and AAC — sample-accurate, no re-encode of the untouched region.
+`IMediaEncoder.CutFile` decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
 
 ## License
 

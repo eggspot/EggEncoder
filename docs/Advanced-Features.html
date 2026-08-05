@@ -58,12 +58,12 @@ List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 w
       <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once.</p>
 
       <h2>Sample-Accurate Cutting</h2>
-      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) trims WAV, FLAC, MP3, and AAC files without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
+      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and writes any supported destination format (WAV, FLAC, MP3, AAC) without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;
 
 bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90);
 // false means the requested range was entirely outside the source's duration — no file was written</code></pre>
-      <p><code>Cut</code> requires the source and destination extensions to match — it trims in place, it does not transcode. Use <code>AudioCutter.Convert</code> (or <code>NativeEncoder.ConvertFile</code>) for format conversion.</p>
+      <p>Source and destination extensions no longer need to match — <code>Cut</code> can transcode while it trims (e.g. cut a WAV directly to MP3). Use <code>AudioCutter.Convert</code> (or <code>NativeEncoder.ConvertFile</code>) when you just need format conversion with no trimming.</p>
 
       <h2>MOV/MP4 Probing</h2>
       <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code:</p>

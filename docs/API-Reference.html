@@ -52,15 +52,26 @@
 }</code></pre>
 
       <h2>ProbeResult</h2>
+      <p>Only fields this library can genuinely compute are populated — no ffprobe-style placeholders (e.g. no <code>probe_score</code>, no disposition flags).</p>
       <pre><code class="language-csharp">public class ProbeResult
 {
-    public int DurationInSeconds { get; set; }
-    public int? BitsPerSample { get; set; }
-    public int? BitRate { get; set; }
-    public int? SampleRate { get; set; }
-    public int? Height { get; set; }
-    public int? Width { get; set; }
-    public string? Result { get; set; }
+    public string FormatName { get; init; }        // e.g. "wav", "flac", "mp3", "aac", "asf", "mov", "mp4"
+    public string FormatLongName { get; init; }     // e.g. "WAV / WAVE (Waveform Audio)"
+    public long SizeBytes { get; init; }
+    public double DurationSeconds { get; init; }
+    public string CodecType { get; init; }          // "audio" or "video"
+    public string? CodecName { get; init; }         // e.g. "pcm_s16le", "flac", "mp3", "aac", "wmav2"
+    public string? CodecLongName { get; init; }
+    public int? SampleRate { get; init; }
+    public int? Channels { get; init; }
+    public string? ChannelLayout { get; init; }     // "mono", "stereo", or "{n} channels"
+    public int? BitsPerSample { get; init; }
+    public int? BitRate { get; init; }
+    public bool? IsVariableBitRate { get; init; }   // MP3 only
+    public long? DurationInSamples { get; init; }
+    public string? TimeBase { get; init; }          // e.g. "1/44100"
+    public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
+    public int? Height { get; init; }
     public string? WaveformResult { get; set; }
 }</code></pre>
 
@@ -86,6 +97,7 @@
     public static void Convert(string sourceFilePath, string destFilePath);
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }</code></pre>
+      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
 
       <h2>WaveformCalculator</h2>
       <p>Namespace: <code>EggEncoder.Waveform</code>.</p>
@@ -148,6 +160,7 @@ public static class Mp3Probe // manual frame-header parsing, no native call
     public int SampleRate { get; }
     public int BitsPerSample { get; }
     public long TotalSamples { get; }
+    public bool IsFloatFormat { get; }
     public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
 }
 
@@ -156,6 +169,7 @@ public sealed class WavWriter : IDisposable
     public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
+      <p>Supports 8-bit unsigned, 16/24/32-bit signed integer, and (read-only) 32-bit IEEE float PCM.</p>
 
       <h3>WMA — <code>EggEncoder.Codecs.Wma</code></h3>
       <pre><code class="language-csharp">public static class WmaDecoder

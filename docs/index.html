@@ -75,7 +75,7 @@
             <tr><td><strong>External process</strong></td><td class="yes">None</td></tr>
             <tr><td><strong>Setup</strong></td><td class="yes">Nothing — DLLs ship in the package</td></tr>
             <tr><td><strong>Format coverage</strong></td><td class="yes">AAC, FLAC, MP3, WAV, WMA; MOV/MP4 metadata</td></tr>
-            <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">WAV, FLAC, MP3, AAC — no re-encode of the untouched region</td></tr>
+            <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">Any source (incl. WMA) to any dest format — no re-encode of the untouched region</td></tr>
           </tbody>
         </table>
       </div>
@@ -112,7 +112,7 @@ public class MediaService(IMediaEncoder mediaEncoder)
         <div class="feature-card">
           <div class="feature-icon">&#9986;</div>
           <div class="feature-title">Sample-Accurate Cutting</div>
-          <p class="feature-desc">Trim WAV/FLAC/MP3/AAC without a full decode&rarr;encode round trip.</p>
+          <p class="feature-desc">Trim any supported source, into any supported destination format, without a full decode&rarr;encode round trip on the untouched region.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128269;</div>
