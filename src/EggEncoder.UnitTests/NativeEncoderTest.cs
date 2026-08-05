@@ -12,6 +12,8 @@ namespace EggEncoder.UnitTests
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _movFixturePath = Path.GetFullPath("Codecs/Mov/test.mov");
         private static readonly string _mp4FixturePath = Path.GetFullPath("Codecs/Mov/test.mp4");
+        private static readonly string _aacFixturePath = Path.GetFullPath("Codecs/Aac/tone_mono.aac");
+        private static readonly string _wmaFixturePath = Path.GetFullPath("Codecs/Wma/tone_mono.wma");
 
         private readonly Mock<ILogger<NativeEncoder>> _logger = new();
 
@@ -27,10 +29,20 @@ namespace EggEncoder.UnitTests
         {
             var probeResult = await _nativeEncoder.Probe(_wavFixturePath);
 
-            probeResult.SampleRate.Should().Be(44100);
-            probeResult.BitsPerSample.Should().Be(16);
-            probeResult.DurationInSeconds.Should().Be(2);
             AssertNonEmptyWaveform(probeResult.WaveformResult);
+
+            probeResult.Format.FormatName.Should().Be("wav");
+            probeResult.Format.SizeBytes.Should().Be(new FileInfo(_wavFixturePath).Length);
+            probeResult.Format.DurationSeconds.Should().BeApproximately(2, 0.1);
+            probeResult.Format.StreamCount.Should().Be(1);
+
+            probeResult.Stream.CodecType.Should().Be("audio");
+            probeResult.Stream.CodecName.Should().Be("pcm_s16le");
+            probeResult.Stream.SampleRate.Should().Be(44100);
+            probeResult.Stream.Channels.Should().Be(2);
+            probeResult.Stream.ChannelLayout.Should().Be("stereo");
+            probeResult.Stream.BitsPerSample.Should().Be(16);
+            probeResult.Stream.TimeBase.Should().Be("1/44100");
         }
 
         [Fact]
@@ -45,10 +57,14 @@ namespace EggEncoder.UnitTests
 
                 var probeResult = await _nativeEncoder.Probe(flacPath);
 
-                probeResult.SampleRate.Should().Be(44100);
-                probeResult.BitsPerSample.Should().Be(16);
-                probeResult.DurationInSeconds.Should().Be(2);
                 AssertNonEmptyWaveform(probeResult.WaveformResult);
+
+                probeResult.Format.FormatName.Should().Be("flac");
+                probeResult.Format.DurationSeconds.Should().BeApproximately(2, 0.1);
+                probeResult.Stream.CodecName.Should().Be("flac");
+                probeResult.Stream.SampleRate.Should().Be(44100);
+                probeResult.Stream.BitsPerSample.Should().Be(16);
+                probeResult.Stream.ChannelLayout.Should().Be("stereo");
             }
             finally
             {
@@ -68,10 +84,14 @@ namespace EggEncoder.UnitTests
 
                 var probeResult = await _nativeEncoder.Probe(mp3Path);
 
-                probeResult.SampleRate.Should().Be(44100);
-                probeResult.BitsPerSample.Should().Be(16);
-                probeResult.DurationInSeconds.Should().Be(2);
                 AssertNonEmptyWaveform(probeResult.WaveformResult);
+
+                probeResult.Format.FormatName.Should().Be("mp3");
+                probeResult.Format.DurationSeconds.Should().BeApproximately(2, 0.1);
+                probeResult.Stream.CodecName.Should().Be("mp3");
+                probeResult.Stream.SampleRate.Should().Be(44100);
+                probeResult.Stream.BitsPerSample.Should().Be(16);
+                probeResult.Stream.ChannelLayout.Should().Be("stereo");
             }
             finally
             {
@@ -80,14 +100,40 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_AacFile_Should_Return_Correct_Metadata()
+        {
+            var probeResult = await _nativeEncoder.Probe(_aacFixturePath);
+
+            probeResult.Format.FormatName.Should().Be("aac");
+            probeResult.Stream.SampleRate.Should().BePositive();
+            probeResult.Stream.CodecName.Should().Be("aac");
+            probeResult.Stream.CodecType.Should().Be("audio");
+            probeResult.Stream.ChannelLayout.Should().Be("mono");
+        }
+
+        [Fact]
+        public async Task Probe_WmaFile_Should_Return_Correct_Metadata()
+        {
+            var probeResult = await _nativeEncoder.Probe(_wmaFixturePath);
+
+            probeResult.Format.FormatName.Should().Be("asf");
+            probeResult.Stream.SampleRate.Should().BePositive();
+            probeResult.Stream.CodecName.Should().Be("wmav2");
+            probeResult.Stream.CodecType.Should().Be("audio");
+        }
+
+        [Fact]
         public async Task Probe_MovFile_Should_Return_Correct_VideoMetadata()
         {
             var probeResult = await _nativeEncoder.Probe(_movFixturePath);
 
-            probeResult.DurationInSeconds.Should().Be(5);
-            probeResult.Width.Should().Be(640);
-            probeResult.Height.Should().Be(360);
             probeResult.WaveformResult.Should().BeNull();
+
+            probeResult.Format.FormatName.Should().Be("mov");
+            probeResult.Format.DurationSeconds.Should().BeApproximately(5, 0.1);
+            probeResult.Stream.CodecType.Should().Be("video");
+            probeResult.Stream.Width.Should().Be(640);
+            probeResult.Stream.Height.Should().Be(360);
         }
 
         [Fact]
@@ -95,10 +141,12 @@ namespace EggEncoder.UnitTests
         {
             var probeResult = await _nativeEncoder.Probe(_mp4FixturePath);
 
-            probeResult.DurationInSeconds.Should().Be(5);
-            probeResult.Width.Should().Be(640);
-            probeResult.Height.Should().Be(360);
             probeResult.WaveformResult.Should().BeNull();
+            probeResult.Stream.Width.Should().Be(640);
+            probeResult.Stream.Height.Should().Be(360);
+
+            probeResult.Format.FormatName.Should().Be("mp4");
+            probeResult.Format.DurationSeconds.Should().BeApproximately(5, 0.1);
         }
 
         [Fact]

@@ -46,9 +46,12 @@ namespace EggEncoder.Codecs.Mov
                 break;
             }
 
+            var durationSeconds = timescale > 0 ? duration / (double)timescale : 0;
+
             return new MovProbeResult
             {
-                DurationInSeconds = timescale > 0 ? (int)(duration / timescale) : 0,
+                DurationInSeconds = (int)durationSeconds,
+                DurationSeconds = durationSeconds,
                 Width = width,
                 Height = height,
                 CodecFourCc = codecFourCc
@@ -161,6 +164,8 @@ namespace EggEncoder.Codecs.Mov
     public class MovProbeResult
     {
         public required int DurationInSeconds { get; init; }
+
+        public required double DurationSeconds { get; init; }
 
         public required int? Width { get; init; }
 
