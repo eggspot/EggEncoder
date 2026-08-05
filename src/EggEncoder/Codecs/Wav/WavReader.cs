@@ -5,17 +5,21 @@ namespace EggEncoder.Codecs.Wav
     public sealed class WavReader : IDisposable
     {
         private const int PcmFormatTag = 1;
+        private const int IeeeFloatFormatTag = 3;
         private const int WaveFormatExtensibleTag = 0xFFFE;
 
         private readonly FileStream _stream;
         private readonly long _dataChunkLength;
+        private readonly bool _isFloatFormat;
 
         private long _bytesRead;
+        private byte[] _rawBytes = [];
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, long dataChunkStart, long dataChunkLength)
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
+            _isFloatFormat = isFloatFormat;
 
             Channels = channels;
             SampleRate = sampleRate;
@@ -54,6 +58,7 @@ namespace EggEncoder.Codecs.Wav
                 int? channels = null;
                 int? sampleRate = null;
                 int? bitsPerSample = null;
+                var isFloatFormat = false;
                 long dataChunkStart = 0;
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
@@ -67,10 +72,12 @@ namespace EggEncoder.Codecs.Wav
                     if (chunkId == "fmt ")
                     {
                         var formatTag = reader.ReadUInt16();
-                        if (formatTag != PcmFormatTag && formatTag != WaveFormatExtensibleTag)
+                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != WaveFormatExtensibleTag)
                         {
-                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM is supported");
+                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM and IEEE float are supported");
                         }
+
+                        isFloatFormat = formatTag == IeeeFloatFormatTag;
 
                         channels = reader.ReadUInt16();
                         sampleRate = (int)reader.ReadUInt32();
@@ -99,12 +106,19 @@ namespace EggEncoder.Codecs.Wav
                     throw new InvalidDataException($"'{filePath}' is missing a 'data' chunk");
                 }
 
-                if (bitsPerSample is not 16 and not 24)
+                if (isFloatFormat)
                 {
-                    throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 16-bit and 24-bit PCM are supported");
+                    if (bitsPerSample != 32)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit IEEE float samples; only 32-bit IEEE float is supported");
+                    }
+                }
+                else if (bitsPerSample is not 8 and not 16 and not 24 and not 32)
+                {
+                    throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
                 }
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, dataChunkStart, dataChunkLength);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength);
             }
             catch
             {
@@ -125,7 +139,12 @@ namespace EggEncoder.Codecs.Wav
                 return 0;
             }
 
-            var rawBytes = new byte[framesToRead * bytesPerFrame];
+            var byteCount = framesToRead * bytesPerFrame;
+            if (_rawBytes.Length < byteCount)
+            {
+                _rawBytes = new byte[byteCount];
+            }
+
             var bytesActuallyRead = ReadFully();
             _bytesRead += bytesActuallyRead;
 
@@ -135,8 +154,12 @@ namespace EggEncoder.Codecs.Wav
                 var byteOffset = i * bytesPerSample;
                 buffer[i] = bytesPerSample switch
                 {
-                    2 => (short)(rawBytes[byteOffset] | (rawBytes[byteOffset + 1] << 8)),
-                    3 => (rawBytes[byteOffset] | (rawBytes[byteOffset + 1] << 8) | (rawBytes[byteOffset + 2] << 16)) << 8 >> 8,
+                    1 => _rawBytes[byteOffset] - 128,
+                    2 => (short)(_rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8)),
+                    3 => (_rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8) | (_rawBytes[byteOffset + 2] << 16)) << 8 >> 8,
+                    4 => _isFloatFormat
+                        ? Float32ToInt32(BitConverter.Int32BitsToSingle(_rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8) | (_rawBytes[byteOffset + 2] << 16) | (_rawBytes[byteOffset + 3] << 24)))
+                        : _rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8) | (_rawBytes[byteOffset + 2] << 16) | (_rawBytes[byteOffset + 3] << 24),
                     _ => throw new NotSupportedException($"Unsupported bytes per sample: {bytesPerSample}")
                 };
             }
@@ -146,9 +169,9 @@ namespace EggEncoder.Codecs.Wav
             int ReadFully()
             {
                 var totalBytesRead = 0;
-                while (totalBytesRead < rawBytes.Length)
+                while (totalBytesRead < byteCount)
                 {
-                    var bytesReadThisCall = _stream.Read(rawBytes, totalBytesRead, rawBytes.Length - totalBytesRead);
+                    var bytesReadThisCall = _stream.Read(_rawBytes, totalBytesRead, byteCount - totalBytesRead);
                     if (bytesReadThisCall == 0)
                     {
                         break;
@@ -159,6 +182,14 @@ namespace EggEncoder.Codecs.Wav
 
                 return totalBytesRead;
             }
+        }
+
+        private static int Float32ToInt32(float sample)
+        {
+            // Widen to double before scaling: int.MaxValue isn't exactly representable as a float
+            // (it rounds up to 2^31), which would overflow the cast back to int for sample == 1f.
+            var clamped = Math.Clamp((double)sample, -1.0, 1.0);
+            return (int)(clamped * int.MaxValue);
         }
 
         public void Dispose()

@@ -2,43 +2,61 @@ namespace EggEncoder.Codecs.Aac
 {
     public sealed class AacEncoderSession : IAudioSink
     {
-        private readonly string _destFilePath;
+        private readonly FileStream _destStream;
+        private readonly AacFrameEncoder _frameEncoder;
         private readonly int _channels;
-        private readonly int _sampleRate;
-        private readonly List<short> _samples = [];
 
-        private AacEncoderSession(string destFilePath, int channels, int sampleRate)
+        private bool _disposed;
+
+        private AacEncoderSession(FileStream destStream, int channels, int sampleRate)
         {
-            _destFilePath = destFilePath ?? throw new ArgumentNullException(nameof(destFilePath));
+            _destStream = destStream;
             _channels = channels;
-            _sampleRate = sampleRate;
+            _frameEncoder = new AacFrameEncoder(destStream, channels, sampleRate);
         }
 
         public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate)
         {
-            if (channels != 1)
-            {
-                throw new NotSupportedException("Only mono AAC encoding is supported");
-            }
+            AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);
 
-            return new AacEncoderSession(destFilePath, channels, sampleRate);
+            var destStream = File.Create(destFilePath);
+            try
+            {
+                return new AacEncoderSession(destStream, channels, sampleRate);
+            }
+            catch
+            {
+                destStream.Dispose();
+                throw;
+            }
         }
+
+        internal long BytesWrittenForTesting => _destStream.Position;
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
         {
-            for (var i = 0; i < frameCount * _channels; i++)
+            var sampleCount = frameCount * _channels;
+            for (var i = 0; i < sampleCount; i++)
             {
-                _samples.Add((short)buffer[i]);
+                _frameEncoder.WriteSample((short)buffer[i]);
             }
         }
 
         public void Finish()
         {
-            AacEncoder.Encode(_destFilePath, _samples, _channels, _sampleRate);
+            _frameEncoder.Flush();
         }
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _frameEncoder.Dispose();
+            _destStream.Dispose();
         }
     }
 }

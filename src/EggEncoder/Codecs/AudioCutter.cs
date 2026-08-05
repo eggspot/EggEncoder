@@ -22,121 +22,24 @@ namespace EggEncoder.Codecs
             var sourceExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
             var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
 
-            switch (sourceExtension)
+            IAudioSink? destSink = null;
+            var scratch = new ScratchBuffer();
+
+            try
             {
-                case ".wav":
-                    ConvertWav();
-                    break;
-                case ".flac":
-                    ConvertFlac();
-                    break;
-                case ".mp3":
-                    ConvertMp3();
-                    break;
-                case ".aac":
-                    ConvertAac();
-                    break;
-                case ".wma":
-                    ConvertWma();
-                    break;
-                default:
-                    throw new NotSupportedException($"Converting '{sourceExtension}' files is not supported by the native audio encoder");
+                DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                {
+                    destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
+
+                    var buffer = scratch.CopyFrom(block);
+                    destSink.WriteInterleavedSamples(buffer, block.Length / channels);
+                });
+
+                destSink?.Finish();
             }
-
-            void ConvertWav()
+            finally
             {
-                using var wavReader = WavReader.Open(sourceFilePath);
-                using var destSink = OpenSink(destExtension, destFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, wavReader.TotalSamples);
-
-                var buffer = new int[FramesPerBlock * wavReader.Channels];
-
-                int framesRead;
-                while ((framesRead = wavReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
-                {
-                    destSink.WriteInterleavedSamples(buffer, framesRead);
-                }
-
-                destSink.Finish();
-            }
-
-            void ConvertFlac()
-            {
-                IAudioSink? destSink = null;
-
-                try
-                {
-                    FlacDecoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                    {
-                        destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
-                        destSink.WriteInterleavedSamples(block.ToArray(), block.Length / channels);
-                    });
-
-                    destSink?.Finish();
-                }
-                finally
-                {
-                    destSink?.Dispose();
-                }
-            }
-
-            void ConvertMp3()
-            {
-                IAudioSink? destSink = null;
-
-                try
-                {
-                    Mp3Decoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                    {
-                        destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
-                        destSink.WriteInterleavedSamples(block.ToArray(), block.Length / channels);
-                    });
-
-                    destSink?.Finish();
-                }
-                finally
-                {
-                    destSink?.Dispose();
-                }
-            }
-
-            void ConvertAac()
-            {
-                IAudioSink? destSink = null;
-
-                try
-                {
-                    AacDecoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                    {
-                        destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
-                        destSink.WriteInterleavedSamples(block.ToArray(), block.Length / channels);
-                    });
-
-                    destSink?.Finish();
-                }
-                finally
-                {
-                    destSink?.Dispose();
-                }
-            }
-
-            void ConvertWma()
-            {
-                IAudioSink? destSink = null;
-
-                try
-                {
-                    WmaDecoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                    {
-                        destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
-                        destSink.WriteInterleavedSamples(block.ToArray(), block.Length / channels);
-                    });
-
-                    destSink?.Finish();
-                }
-                finally
-                {
-                    destSink?.Dispose();
-                }
+                destSink?.Dispose();
             }
         }
 
@@ -145,169 +48,78 @@ namespace EggEncoder.Codecs
             var sourceExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
             var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
 
-            if (destExtension != sourceExtension)
-            {
-                throw new NotSupportedException($"Cutting a '{sourceExtension}' source into a '{destExtension}' destination is not supported by the native audio encoder");
-            }
+            IAudioSink? destSink = null;
+            var rangeComputed = false;
+            var startSample = 0L;
+            var endSample = 0L;
+            var currentFrame = 0L;
+            var scratch = new ScratchBuffer();
 
-            return sourceExtension switch
+            try
             {
-                ".wav" => CutWav(),
-                ".flac" => CutFlac(),
-                ".mp3" => CutMp3(),
-                ".aac" => CutAac(),
-                _ => throw new NotSupportedException($"Cutting '{sourceExtension}' files is not supported by the native audio encoder")
-            };
-
-            bool CutWav()
-            {
-                using var wavReader = WavReader.Open(sourceFilePath);
-
-                var (startSample, endSample) = GetSampleRange(wavReader.SampleRate, wavReader.TotalSamples, startInSeconds, endInSeconds);
-                if (startSample >= endSample)
+                DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
-                    return false;
-                }
-
-                using var wavWriter = WavWriter.Create(destFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, endSample - startSample);
-
-                var buffer = new int[FramesPerBlock * wavReader.Channels];
-                var currentFrame = 0L;
-
-                int framesRead;
-                while (currentFrame < endSample && (framesRead = wavReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
-                {
-                    ForwardOverlap(new ReadOnlySpan<int>(buffer, 0, framesRead * wavReader.Channels), wavReader.Channels, currentFrame, startSample, endSample, wavWriter.WriteInterleavedSamples);
-                    currentFrame += framesRead;
-                }
-
-                return true;
-            }
-
-            bool CutFlac()
-            {
-                FlacEncoderSession? session = null;
-                var currentFrame = 0L;
-                var rangeComputed = false;
-                var startSample = 0L;
-                var endSample = 0L;
-
-                try
-                {
-                    FlacDecoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                    if (!rangeComputed)
                     {
-                        if (!rangeComputed)
+                        (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);
+                        rangeComputed = true;
+
+                        if (startSample < endSample)
                         {
-                            (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);
-                            rangeComputed = true;
-
-                            if (startSample < endSample)
-                            {
-                                session = FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate);
-                            }
+                            destSink = OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, endSample - startSample);
                         }
+                    }
 
-                        if (session is null)
-                        {
-                            return;
-                        }
+                    if (destSink is null)
+                    {
+                        return;
+                    }
 
-                        ForwardOverlap(block, channels, currentFrame, startSample, endSample, session.WriteInterleavedSamples);
-                        currentFrame += block.Length / channels;
-                    });
+                    ForwardOverlap(block, channels, currentFrame, startSample, endSample, scratch, destSink.WriteInterleavedSamples);
+                    currentFrame += block.Length / channels;
+                });
 
-                    session?.Finish();
-                }
-                finally
-                {
-                    session?.Dispose();
-                }
-
-                return session is not null;
+                destSink?.Finish();
+            }
+            finally
+            {
+                destSink?.Dispose();
             }
 
-            bool CutMp3()
+            return destSink is not null;
+        }
+
+        private static void DecodeSource(string sourceFilePath, string sourceExtension, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            switch (sourceExtension)
             {
-                Mp3EncoderSession? session = null;
-                var currentFrame = 0L;
-                var rangeComputed = false;
-                var startSample = 0L;
-                var endSample = 0L;
-
-                try
-                {
-                    Mp3Decoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                case ".wav":
+                    using (var wavReader = WavReader.Open(sourceFilePath))
                     {
-                        if (!rangeComputed)
+                        var buffer = new int[FramesPerBlock * wavReader.Channels];
+
+                        int framesRead;
+                        while ((framesRead = wavReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
                         {
-                            (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);
-                            rangeComputed = true;
-
-                            if (startSample < endSample)
-                            {
-                                session = Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample);
-                            }
+                            onBlockDecoded(new ReadOnlySpan<int>(buffer, 0, framesRead * wavReader.Channels), wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, wavReader.TotalSamples);
                         }
+                    }
 
-                        if (session is null)
-                        {
-                            return;
-                        }
-
-                        ForwardOverlap(block, channels, currentFrame, startSample, endSample, session.WriteInterleavedSamples);
-                        currentFrame += block.Length / channels;
-                    });
-
-                    session?.Finish();
-                }
-                finally
-                {
-                    session?.Dispose();
-                }
-
-                return session is not null;
-            }
-
-            bool CutAac()
-            {
-                AacEncoderSession? session = null;
-                var currentFrame = 0L;
-                var rangeComputed = false;
-                var startSample = 0L;
-                var endSample = 0L;
-
-                try
-                {
-                    AacDecoder.Decode(sourceFilePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                    {
-                        if (!rangeComputed)
-                        {
-                            (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);
-                            rangeComputed = true;
-
-                            if (startSample < endSample)
-                            {
-                                session = AacEncoderSession.OpenSession(destFilePath, channels, sampleRate);
-                            }
-                        }
-
-                        if (session is null)
-                        {
-                            return;
-                        }
-
-                        ForwardOverlap(block, channels, currentFrame, startSample, endSample, session.WriteInterleavedSamples);
-                        currentFrame += block.Length / channels;
-                    });
-
-                    session?.Finish();
-                }
-                finally
-                {
-                    session?.Dispose();
-                }
-
-                return session is not null;
+                    break;
+                case ".flac":
+                    FlacDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
+                case ".mp3":
+                    Mp3Decoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
+                case ".aac":
+                    AacDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
+                case ".wma":
+                    WmaDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
+                default:
+                    throw new NotSupportedException($"Decoding '{sourceExtension}' files is not supported by the native audio encoder");
             }
         }
 
@@ -323,7 +135,7 @@ namespace EggEncoder.Codecs
             };
         }
 
-        private static void ForwardOverlap(ReadOnlySpan<int> block, int channels, long blockStartFrame, long startSample, long endSample, Action<int[], int> writeInterleavedSamples)
+        private static void ForwardOverlap(ReadOnlySpan<int> block, int channels, long blockStartFrame, long startSample, long endSample, ScratchBuffer scratch, Action<int[], int> writeInterleavedSamples)
         {
             var blockFrames = block.Length / channels;
             var blockEndFrame = blockStartFrame + blockFrames;
@@ -338,8 +150,10 @@ namespace EggEncoder.Codecs
 
             var sliceStartFrame = (int)(overlapStart - blockStartFrame);
             var sliceFrameCount = (int)(overlapEnd - overlapStart);
+            var slice = block.Slice(sliceStartFrame * channels, sliceFrameCount * channels);
 
-            writeInterleavedSamples(block.Slice(sliceStartFrame * channels, sliceFrameCount * channels).ToArray(), sliceFrameCount);
+            var buffer = scratch.CopyFrom(slice);
+            writeInterleavedSamples(buffer, sliceFrameCount);
         }
 
         private static (long StartSample, long EndSample) GetSampleRange(int sampleRate, long totalSamples, int startInSeconds, int endInSeconds)
@@ -348,6 +162,23 @@ namespace EggEncoder.Codecs
             var endSample = Math.Clamp((long)endInSeconds * sampleRate, startSample, totalSamples);
 
             return (startSample, endSample);
+        }
+
+        // Reused, grow-only backing array so repeated block callbacks don't allocate on every invocation.
+        private sealed class ScratchBuffer
+        {
+            private int[] _buffer = [];
+
+            public int[] CopyFrom(ReadOnlySpan<int> source)
+            {
+                if (_buffer.Length < source.Length)
+                {
+                    _buffer = new int[source.Length];
+                }
+
+                source.CopyTo(_buffer);
+                return _buffer;
+            }
         }
     }
 }
