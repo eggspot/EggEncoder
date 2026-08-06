@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — native MP3/FLAC codec bindings, managed AAC/WMA decode, and built-in waveform generation, all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, and built-in waveform generation, all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -72,7 +72,7 @@ var probeResult = await encoder.Probe("track.flac");
 | FLAC   | ✅ | ✅ | ✅ |
 | MP3    | ✅ | ✅ | ✅ |
 | AAC    | ✅ | ✅ | ✅ |
-| WMA    | ✅ | ✅ | ❌ |
+| WMA    | ✅ | ✅ | ✅ |
 | MOV/MP4 (metadata only) | ✅ | ❌ | ❌ |
 
 `IMediaEncoder.CutFile` decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.

@@ -131,6 +131,7 @@ namespace EggEncoder.Codecs
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
                 ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate),
+                ".wma" => WmaEncoderSession.OpenSession(destFilePath, channels, sampleRate),
                 _ => throw new NotSupportedException($"Converting to '{destExtension}' files is not supported by the native audio encoder")
             };
         }

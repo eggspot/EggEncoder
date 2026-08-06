@@ -1,6 +1,6 @@
 # EggEncoder
 
-> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA decode, and built-in waveform generation, behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, and built-in waveform generation, behind one IMediaEncoder interface.
 
 ## What is EggEncoder?
 
@@ -61,12 +61,12 @@ var probeResult = await encoder.Probe("track.flac");
 
 ## Supported Formats
 
-WAV, FLAC, MP3, AAC, WMA (decode-only, mono-only); MOV/MP4 metadata probing via `MovProbe` (no audio decode).
+WAV, FLAC, MP3, AAC, WMA (encode + decode); MOV/MP4 metadata probing via `MovProbe` (no audio decode).
 
 ## Constraints
 
 - Native codec binaries are Windows x64 only — there is no cross-platform fallback
-- `WmaDecoder` does not support mid/side stereo coding (the default for most real-world WMAv2 encoders) — throws `NotSupportedException` for genuine stereo files
+- `WmaDecoder` does not support mid/side stereo coding (the default for most real-world WMAv2 encoders) — throws `NotSupportedException` for genuine stereo files. `WmaEncoder` always writes independently-coded channels, so its own output is always decodable.
 - `AudioCutter.Cut` decodes any supported source and can write any supported destination format — it can transcode while trimming, source and destination extensions no longer need to match
 
 ## Links
