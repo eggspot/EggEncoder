@@ -180,7 +180,7 @@ namespace EggEncoder.UnitTests
                 probeResult.Channels.Should().Be(1);
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
-                AssertNonEmptyWaveform(probeResult.WaveformResult);
+                AssertNonEmptyWaveform(probeResult.Waveform);
             }
             finally
             {
