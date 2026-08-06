@@ -27,11 +27,11 @@ namespace EggEncoder.Codecs.Wma
         public WmaFrameEncoder(int channels, int sampleRate)
         {
             _channels = channels;
-            _frameLengthBits = GetFrameLengthBits(sampleRate);
+            _frameLengthBits = WmaTables.GetFrameLengthBits(sampleRate);
             FrameLength = 1 << _frameLengthBits;
             _coefsEnd = FrameLength - (FrameLength * 9 / 100);
-            _exponentBands = BuildExponentBands(sampleRate, FrameLength);
-            _window = BuildSineWindow(FrameLength);
+            _exponentBands = WmaTables.BuildExponentBands(sampleRate, FrameLength);
+            _window = WmaTables.BuildSineWindow(FrameLength);
 
             _previousBlock = new double[channels][];
             for (var channel = 0; channel < channels; channel++)
@@ -67,7 +67,7 @@ namespace EggEncoder.Codecs.Wma
                 desiredTotalGain = Math.Max(desiredTotalGain, SolveTotalGain(peakCoefficientMagnitude));
             }
 
-            var coefficientBitWidth = TotalGainToBits(desiredTotalGain);
+            var coefficientBitWidth = WmaTables.TotalGainToBits(desiredTotalGain);
 
             WriteGain(writer, desiredTotalGain);
 
@@ -317,85 +317,5 @@ namespace EggEncoder.Codecs.Wma
             // code belongs here.
         }
 
-        private static int TotalGainToBits(int totalGain)
-        {
-            if (totalGain < 15)
-            {
-                return 13;
-            }
-
-            if (totalGain < 32)
-            {
-                return 12;
-            }
-
-            if (totalGain < 40)
-            {
-                return 11;
-            }
-
-            if (totalGain < 45)
-            {
-                return 10;
-            }
-
-            return 9;
-        }
-
-        private static int GetFrameLengthBits(int sampleRate)
-        {
-            if (sampleRate <= 16000)
-            {
-                return 9;
-            }
-
-            if (sampleRate <= 22050)
-            {
-                return 10;
-            }
-
-            return 11;
-        }
-
-        private static ushort[] BuildExponentBands(int sampleRate, int blockLength)
-        {
-            var bands = new List<ushort>();
-            var lastPosition = 0;
-
-            foreach (var criticalFrequency in WmaTables.CriticalFrequencies)
-            {
-                var position = ((blockLength * 2 * criticalFrequency) + (sampleRate << 1)) / (4 * sampleRate);
-                position <<= 2;
-                if (position > blockLength)
-                {
-                    position = blockLength;
-                }
-
-                if (position > lastPosition)
-                {
-                    bands.Add((ushort)(position - lastPosition));
-                }
-
-                if (position >= blockLength)
-                {
-                    break;
-                }
-
-                lastPosition = position;
-            }
-
-            return [.. bands];
-        }
-
-        private static double[] BuildSineWindow(int blockLength)
-        {
-            var window = new double[blockLength];
-            for (var n = 0; n < blockLength; n++)
-            {
-                window[n] = Math.Sin((Math.PI / (2 * blockLength)) * (n + 0.5));
-            }
-
-            return window;
-        }
     }
 }

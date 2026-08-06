@@ -282,6 +282,35 @@ namespace EggEncoder.Codecs.Wma
             return index + run;
         }
 
+        // Number of bits used to store an escaped coefficient level (and, on decode, the width
+        // DecodeCoefficients reads escaped levels as) -- coarser for louder frames (higher
+        // totalGain already carries more of the dynamic range) so louder content costs fewer bits
+        // per escaped coefficient.
+        public static int TotalGainToBits(int totalGain)
+        {
+            if (totalGain < 15)
+            {
+                return 13;
+            }
+
+            if (totalGain < 32)
+            {
+                return 12;
+            }
+
+            if (totalGain < 40)
+            {
+                return 11;
+            }
+
+            if (totalGain < 45)
+            {
+                return 10;
+            }
+
+            return 9;
+        }
+
         public static int GetFrameLengthBits(int sampleRate)
         {
             if (sampleRate <= 16000)

@@ -123,7 +123,7 @@ namespace EggEncoder.Codecs.Wma
                     totalGain += gainIncrement;
                 } while (gainIncrement == 127);
 
-                var coefficientBitWidth = TotalGainToBits(totalGain);
+                var coefficientBitWidth = WmaTables.TotalGainToBits(totalGain);
 
                 if (channels == 2 && reader.ReadBits(1) != 0)
                 {
@@ -182,31 +182,6 @@ namespace EggEncoder.Codecs.Wma
                 }
 
                 return channelCoefficients;
-
-                static int TotalGainToBits(int totalGain)
-                {
-                    if (totalGain < 15)
-                    {
-                        return 13;
-                    }
-
-                    if (totalGain < 32)
-                    {
-                        return 12;
-                    }
-
-                    if (totalGain < 40)
-                    {
-                        return 11;
-                    }
-
-                    if (totalGain < 45)
-                    {
-                        return 10;
-                    }
-
-                    return 9;
-                }
 
                 static double DecodeExponents(BitReader reader, ushort[] exponentBands, double[] exponents)
                 {
