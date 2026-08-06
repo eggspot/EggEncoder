@@ -237,5 +237,134 @@ namespace EggEncoder.Codecs.Wma
         ];
 
         public static readonly HuffmanTable Coef4Huffman = new HuffmanTable(Coef4Codes, Coef4Bits);
+
+        // Coef4Levels is a run-length histogram: for level L (1-based), there are Coef4Levels[L-1]
+        // consecutive Huffman symbol indices (starting at 2, since 0 is the escape code and 1 is the
+        // end-of-coefficients marker) assigned to run = 0, 1, 2, ... up to Coef4Levels[L-1]-1.
+        public static (int[] RunTable, int[] LevelTable) BuildCoefficientRunLevelTables()
+        {
+            var runTable = new int[Coef4Bits.Length];
+            var levelTable = new int[Coef4Bits.Length];
+
+            var index = 2;
+            var level = 1;
+            foreach (var runLength in Coef4Levels)
+            {
+                for (var j = 0; j < runLength; j++)
+                {
+                    runTable[index] = j;
+                    levelTable[index] = level;
+                    index++;
+                }
+
+                level++;
+            }
+
+            return (runTable, levelTable);
+        }
+
+        // Inverse of BuildCoefficientRunLevelTables: given a (run, level) pair, returns the
+        // Coef4Huffman symbol index that encodes it directly, or -1 if this combination isn't
+        // representable in the table -- the caller must fall back to the escape code (symbol 0).
+        public static int FindCoefficientIndex(int run, int level)
+        {
+            if (level < 1 || level > Coef4Levels.Length || run < 0 || run >= Coef4Levels[level - 1])
+            {
+                return -1;
+            }
+
+            var index = 2;
+            for (var precedingLevel = 1; precedingLevel < level; precedingLevel++)
+            {
+                index += Coef4Levels[precedingLevel - 1];
+            }
+
+            return index + run;
+        }
+
+        // Number of bits used to store an escaped coefficient level (and, on decode, the width
+        // DecodeCoefficients reads escaped levels as) -- coarser for louder frames (higher
+        // totalGain already carries more of the dynamic range) so louder content costs fewer bits
+        // per escaped coefficient.
+        public static int TotalGainToBits(int totalGain)
+        {
+            if (totalGain < 15)
+            {
+                return 13;
+            }
+
+            if (totalGain < 32)
+            {
+                return 12;
+            }
+
+            if (totalGain < 40)
+            {
+                return 11;
+            }
+
+            if (totalGain < 45)
+            {
+                return 10;
+            }
+
+            return 9;
+        }
+
+        public static int GetFrameLengthBits(int sampleRate)
+        {
+            if (sampleRate <= 16000)
+            {
+                return 9;
+            }
+
+            if (sampleRate <= 22050)
+            {
+                return 10;
+            }
+
+            return 11;
+        }
+
+        public static ushort[] BuildExponentBands(int sampleRate, int blockLength)
+        {
+            var bands = new List<ushort>();
+            var lastPosition = 0;
+
+            foreach (var criticalFrequency in CriticalFrequencies)
+            {
+                var position = ((blockLength * 2 * criticalFrequency) + (sampleRate << 1)) / (4 * sampleRate);
+                position <<= 2;
+                if (position > blockLength)
+                {
+                    position = blockLength;
+                }
+
+                if (position > lastPosition)
+                {
+                    bands.Add((ushort)(position - lastPosition));
+                }
+
+                if (position >= blockLength)
+                {
+                    break;
+                }
+
+                lastPosition = position;
+            }
+
+            return [.. bands];
+        }
+
+        public static double[] BuildSineWindow(int blockLength)
+        {
+            var window = new double[blockLength];
+            for (var n = 0; n < blockLength; n++)
+            {
+                window[n] = Math.Sin((Math.PI / (2 * blockLength)) * (n + 0.5));
+            }
+
+            return window;
+        }
     }
 }

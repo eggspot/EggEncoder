@@ -39,12 +39,12 @@ namespace EggEncoder.Codecs.Wma
                 throw new NotSupportedException("WMA LSP-coded exponents are not supported; only Huffman-coded (VLC) exponents are supported");
             }
 
-            var frameLengthBits = GetFrameLengthBits(streamProperties.SampleRate);
+            var frameLengthBits = WmaTables.GetFrameLengthBits(streamProperties.SampleRate);
             var frameLength = 1 << frameLengthBits;
             var coefsEnd = frameLength - (frameLength * 9 / 100);
-            var exponentBands = BuildExponentBands(streamProperties.SampleRate, frameLength);
-            var window = BuildSineWindow(frameLength);
-            var (runTable, levelTable) = BuildRunLevelTables();
+            var exponentBands = WmaTables.BuildExponentBands(streamProperties.SampleRate, frameLength);
+            var window = WmaTables.BuildSineWindow(frameLength);
+            var (runTable, levelTable) = WmaTables.BuildCoefficientRunLevelTables();
 
             var channels = streamProperties.Channels;
             var previousOverlap = new double[channels][];
@@ -104,84 +104,6 @@ namespace EggEncoder.Codecs.Wma
                 TotalSamples = totalSamples
             };
 
-            static int GetFrameLengthBits(int sampleRate)
-            {
-                if (sampleRate <= 16000)
-                {
-                    return 9;
-                }
-
-                if (sampleRate <= 22050)
-                {
-                    return 10;
-                }
-
-                return 11;
-            }
-
-            static ushort[] BuildExponentBands(int sampleRate, int blockLength)
-            {
-                var bands = new List<ushort>();
-                var lastPosition = 0;
-
-                foreach (var criticalFrequency in WmaTables.CriticalFrequencies)
-                {
-                    var position = ((blockLength * 2 * criticalFrequency) + (sampleRate << 1)) / (4 * sampleRate);
-                    position <<= 2;
-                    if (position > blockLength)
-                    {
-                        position = blockLength;
-                    }
-
-                    if (position > lastPosition)
-                    {
-                        bands.Add((ushort)(position - lastPosition));
-                    }
-
-                    if (position >= blockLength)
-                    {
-                        break;
-                    }
-
-                    lastPosition = position;
-                }
-
-                return [.. bands];
-            }
-
-            static (int[] RunTable, int[] LevelTable) BuildRunLevelTables()
-            {
-                var runTable = new int[WmaTables.Coef4Bits.Length];
-                var levelTable = new int[WmaTables.Coef4Bits.Length];
-
-                var index = 2;
-                var level = 1;
-                foreach (var runLength in WmaTables.Coef4Levels)
-                {
-                    for (var j = 0; j < runLength; j++)
-                    {
-                        runTable[index] = j;
-                        levelTable[index] = level;
-                        index++;
-                    }
-
-                    level++;
-                }
-
-                return (runTable, levelTable);
-            }
-
-            static double[] BuildSineWindow(int blockLength)
-            {
-                var window = new double[blockLength];
-                for (var n = 0; n < blockLength; n++)
-                {
-                    window[n] = Math.Sin((Math.PI / (2 * blockLength)) * (n + 0.5));
-                }
-
-                return window;
-            }
-
             static double[][] DecodeFrame(
                 BitReader reader,
                 int channels,
@@ -201,7 +123,7 @@ namespace EggEncoder.Codecs.Wma
                     totalGain += gainIncrement;
                 } while (gainIncrement == 127);
 
-                var coefficientBitWidth = TotalGainToBits(totalGain);
+                var coefficientBitWidth = WmaTables.TotalGainToBits(totalGain);
 
                 if (channels == 2 && reader.ReadBits(1) != 0)
                 {
@@ -260,31 +182,6 @@ namespace EggEncoder.Codecs.Wma
                 }
 
                 return channelCoefficients;
-
-                static int TotalGainToBits(int totalGain)
-                {
-                    if (totalGain < 15)
-                    {
-                        return 13;
-                    }
-
-                    if (totalGain < 32)
-                    {
-                        return 12;
-                    }
-
-                    if (totalGain < 40)
-                    {
-                        return 11;
-                    }
-
-                    if (totalGain < 45)
-                    {
-                        return 10;
-                    }
-
-                    return 9;
-                }
 
                 static double DecodeExponents(BitReader reader, ushort[] exponentBands, double[] exponents)
                 {

@@ -2,12 +2,6 @@ namespace EggEncoder.Codecs.Wma
 {
     internal static class AsfContainerReader
     {
-        private static readonly Guid HeaderObjectGuid = new Guid(0x75B22630, 0x668E, 0x11CF, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C);
-        private static readonly Guid FilePropertiesObjectGuid = new Guid(0x8CABDCA1, 0xA947, 0x11CF, 0x8E, 0xE4, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65);
-        private static readonly Guid StreamPropertiesObjectGuid = new Guid(0xB7DC0791, 0xA9B7, 0x11CF, 0x8E, 0xE6, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65);
-        private static readonly Guid DataObjectGuid = new Guid(0x75B22636, 0x668E, 0x11CF, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C);
-        private static readonly Guid AudioStreamTypeGuid = new Guid(0xF8699E40, 0x5B4D, 0x11CF, 0xA8, 0xFD, 0x00, 0x80, 0x5F, 0x5C, 0x44, 0x2B);
-
         private const byte ErrorCorrectionPresentFlag = 0x80;
         private const byte ErrorCorrectionLengthTypeMask = 0x60;
         private const byte ErrorCorrectionDataSizeMask = 0x02;
@@ -28,7 +22,7 @@ namespace EggEncoder.Codecs.Wma
             var position = 0;
 
             var headerGuid = ReadGuid(fileBytes, ref position);
-            if (headerGuid != HeaderObjectGuid)
+            if (headerGuid != AsfGuids.HeaderObject)
             {
                 throw new InvalidDataException("Missing ASF Header Object");
             }
@@ -46,16 +40,16 @@ namespace EggEncoder.Codecs.Wma
                 var subObjectGuid = ReadGuid(fileBytes, ref position);
                 var subObjectSize = (long)ReadUInt64(fileBytes, ref position);
 
-                if (subObjectGuid == FilePropertiesObjectGuid)
+                if (subObjectGuid == AsfGuids.FilePropertiesObject)
                 {
                     // Preroll is nominally 64-bit; only the low 32 bits (preroll) matter, the high 32 (ignore) are skipped.
                     position += 16 + 8 + 8 + 8 + 8 + 8 + 4 + 4 + 4;
                     packetSize = (int)ReadUInt32(fileBytes, ref position);
                 }
-                else if (subObjectGuid == StreamPropertiesObjectGuid)
+                else if (subObjectGuid == AsfGuids.StreamPropertiesObject)
                 {
                     var streamTypeGuid = ReadGuid(fileBytes, ref position);
-                    if (streamTypeGuid == AudioStreamTypeGuid)
+                    if (streamTypeGuid == AsfGuids.AudioStreamType)
                     {
                         streamProperties = ReadStreamProperties(fileBytes, ref position);
                     }
@@ -67,7 +61,7 @@ namespace EggEncoder.Codecs.Wma
             position = (int)headerSize;
 
             var dataGuid = ReadGuid(fileBytes, ref position);
-            if (dataGuid != DataObjectGuid)
+            if (dataGuid != AsfGuids.DataObject)
             {
                 throw new InvalidDataException("Missing ASF Data Object");
             }

@@ -175,8 +175,13 @@ public sealed class WavWriter : IDisposable
       <pre><code class="language-csharp">public static class WmaDecoder
 {
     public static WmaStreamInfo Decode(string wmaFilePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class WmaEncoder
+{
+    public static void Encode(string destFilePath, IReadOnlyList&lt;short&gt; interleavedSamples, int channels, int sampleRate);
 }</code></pre>
-      <p>Decode-only — mono only (mid/side stereo coding, used by real-world WMAv2 encoders including ffmpeg's, is not supported and throws <code>NotSupportedException</code>).</p>
+      <p>Mono or independently-coded stereo only. Mid/side stereo coding (used by most real-world WMAv2 encoders, including ffmpeg's) is not supported for decode and throws <code>NotSupportedException</code>; <code>WmaEncoder</code> never produces mid/side output, so this library's own encoder/decoder round-trip always works.</p>
 
       <h3>MOV/MP4 — <code>EggEncoder.Codecs.Mov</code></h3>
       <pre><code class="language-csharp">public static class MovProbe
