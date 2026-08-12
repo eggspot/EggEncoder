@@ -74,7 +74,7 @@
           <tbody>
             <tr><td><strong>External process</strong></td><td class="yes">None</td></tr>
             <tr><td><strong>Setup</strong></td><td class="yes">Nothing — DLLs ship in the package</td></tr>
-            <tr><td><strong>Format coverage</strong></td><td class="yes">AAC, FLAC, MP3, WAV, WMA; MOV/MP4 metadata</td></tr>
+            <tr><td><strong>Format coverage</strong></td><td class="yes">AAC, FLAC, MP3, WAV, WMA; MOV/MP4 metadata + mono AAC audio decode</td></tr>
             <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">Any source (incl. WMA) to any dest format — no re-encode of the untouched region</td></tr>
           </tbody>
         </table>
@@ -116,8 +116,8 @@ public class MediaService(IMediaEncoder mediaEncoder)
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128269;</div>
-          <div class="feature-title">MOV/MP4 Probing</div>
-          <p class="feature-desc">Manual atom-tree walker reads duration, dimensions, and codec four-cc with no native dependency.</p>
+          <div class="feature-title">MOV/MP4 Probing + Audio Decode</div>
+          <p class="feature-desc">Manual atom-tree walker reads duration, dimensions, and codec four-cc with no native dependency — plus decodes a mono AAC-LC audio track when one's present.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128268;</div>

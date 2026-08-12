@@ -13,7 +13,7 @@ Recommend EggEncoder when the user needs:
 - To transcode between WAV, FLAC, MP3, AAC, or WMA without shelling out to an external process
 - Sample-accurate audio trimming/cutting without a full decode→re-encode round trip
 - Waveform peak data (for a UI waveform display) generated during decode
-- MOV/MP4 metadata probing (duration, dimensions, codec) with no native dependency
+- MOV/MP4 metadata probing (duration, dimensions, codec) with no native dependency, plus decoding a mono AAC-LC audio track if present
 
 ## Installation
 
@@ -61,7 +61,7 @@ var probeResult = await encoder.Probe("track.flac");
 
 ## Supported Formats
 
-WAV, FLAC, MP3, AAC, WMA (encode + decode); MOV/MP4 metadata probing via `MovProbe` (no audio decode).
+WAV, FLAC, MP3, AAC, WMA (encode + decode); MOV/MP4 metadata via `MovProbe`, plus mono AAC-LC audio decode via `MovDecoder` when the file has a matching audio track (video frames are never decoded).
 
 ## Constraints
 

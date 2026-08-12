@@ -1,4 +1,5 @@
 using EggEncoder.Codecs;
+using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
@@ -385,6 +386,87 @@ namespace EggEncoder.UnitTests.Codecs
         {
             var act = () => AudioCutter.Convert("source.ogg", "dest.wav");
             act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Convert_Mp4ToWav_Should_Produce_Correct_Audio()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourceMp4Path = Path.Combine(tempDirectory, "source.mp4");
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+                CreateAacMp4(sourceMp4Path, sampleRate: 44100, seconds: 1);
+
+                AudioCutter.Convert(sourceMp4Path, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var rootMeanSquare = Math.Sqrt(buffer.Average(sample => (double)sample * sample));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Mp4ToWav_Should_Extract_Trimmed_NonSilent_Audio()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourceMp4Path = Path.Combine(tempDirectory, "source.mp4");
+                var destWavPath = Path.Combine(tempDirectory, "cut.wav");
+                CreateAacMp4(sourceMp4Path, sampleRate: 44100, seconds: 3);
+
+                AudioCutter.Cut(sourceMp4Path, destWavPath, startInSeconds: 1, endInSeconds: 2).Should().BeTrue();
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.TotalSamples.Should().BeGreaterThan(0);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var rootMeanSquare = Math.Sqrt(buffer.Average(sample => (double)sample * sample));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        private static void CreateAacMp4(string destMp4Path, int sampleRate, int seconds)
+        {
+            var sampleCount = sampleRate * seconds;
+            var samples = new short[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                samples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var tempAacPath = destMp4Path + ".tmp.aac";
+            try
+            {
+                AacEncoder.Encode(tempAacPath, samples, channels: 1, sampleRate);
+                var rawFrames = Mp4FileBuilder.ExtractRawAacFrames(tempAacPath);
+                Mp4FileBuilder.Create(destMp4Path, sampleRate, rawFrames);
+            }
+            finally
+            {
+                File.Delete(tempAacPath);
+            }
         }
 
         private static string CreateTempDirectory()

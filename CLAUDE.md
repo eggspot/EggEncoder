@@ -29,12 +29,12 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 | Folder | Contents |
 |--------|----------|
-| `Aac/` | Pure managed AAC decoder/encoder + scale-factor/Huffman tables (`AacDecoder`, `AacEncoder`, `AacEncoderSession`, `AacTables`) |
+| `Aac/` | Pure managed AAC decoder/encoder + scale-factor/Huffman tables (`AacDecoder`, `AacFrameDecoder`, `AacEncoder`, `AacFrameEncoder`, `AacEncoderSession`, `AacTables`). `AacFrameDecoder` decodes one raw_data_block into PCM independent of ADTS framing, shared by `AacDecoder` (ADTS) and `MovDecoder` (MP4) |
 | `Flac/` | `FlacDecoder`/`FlacEncoder` — thin wrappers over native `libFLAC` P/Invoke bindings |
 | `Mp3/` | `Mp3Decoder` (via the `NLayer` managed decoder), `Mp3Encoder` (native `libmp3lame` P/Invoke), `Mp3Probe` (manual frame-header parsing, no native call) |
 | `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to |
 | `Wma/` | Pure managed WMAv2 decoder/encoder (`WmaDecoder`, `WmaEncoder`, `WmaEncoderSession`, `WmaFrameEncoder`) + `AsfContainerReader`/`AsfContainerWriter` (ASF/WMA container I/O) + `WmaTables` |
-| `Mov/` | `MovProbe` — MOV/MP4 atom-tree walker for metadata-only probing (no audio decode) |
+| `Mov/` | `MovProbe` — MOV/MP4 metadata (duration/dimensions/codec); `MovDecoder` — decodes a mono AAC-LC 'soun' track via `stsd`/`esds`/sample-table demuxing (`Mp4EsdsParser`, `Mp4SampleTable`) and the shared `AacFrameDecoder`; `MovAtomReader` — shared atom-tree walker used by both |
 | `AudioCutter.cs` | Format-dispatching `Convert`/`Cut` used by `NativeEncoder`; defines the internal `IAudioSink` interface implemented by each codec's writer/session type |
 
 ### Supporting infrastructure

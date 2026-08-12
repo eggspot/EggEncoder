@@ -293,6 +293,8 @@ namespace EggEncoder
                 _ => ("mov", "QuickTime / MOV")
             };
 
+            var audio = TryDecodeAudioTrack(filePath);
+
             return new ProbeResult
             {
                 FormatName = formatName,
@@ -303,8 +305,59 @@ namespace EggEncoder
                 CodecName = movProbeResult.CodecFourCc,
                 Width = movProbeResult.Width,
                 Height = movProbeResult.Height,
-                Waveform = null
+                SampleRate = audio?.SampleRate,
+                Channels = audio?.Channels,
+                ChannelLayout = audio is null ? null : DescribeChannelLayout(audio.Channels),
+                BitsPerSample = audio?.BitsPerSample,
+                BitRate = audio is null ? null : audio.SampleRate * audio.BitsPerSample * audio.Channels,
+                DurationInSamples = audio?.TotalSamples,
+                TimeBase = audio is not null && audio.SampleRate > 0 ? $"1/{audio.SampleRate}" : null,
+                Waveform = audio?.Waveform
             };
+        }
+
+        private static DecodedAudioTrack? TryDecodeAudioTrack(string filePath)
+        {
+            WaveformCalculator? waveformCalculator = null;
+            MovStreamInfo streamInfo;
+
+            try
+            {
+                streamInfo = MovDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                {
+                    waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                    waveformCalculator.AddBlock(block);
+                });
+            }
+            catch (Exception)
+            {
+                // No audio track, or an audio codec/configuration this library doesn't decode
+                // (stereo, non-AAC-LC, etc.) -- video-only metadata is still a useful probe result,
+                // so this degrades gracefully instead of failing the whole probe.
+                return null;
+            }
+
+            return new DecodedAudioTrack
+            {
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                BitsPerSample = streamInfo.BitsPerSample,
+                TotalSamples = streamInfo.TotalSamples,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
+            };
+        }
+
+        private sealed class DecodedAudioTrack
+        {
+            public required int SampleRate { get; init; }
+
+            public required int Channels { get; init; }
+
+            public required int BitsPerSample { get; init; }
+
+            public required long TotalSamples { get; init; }
+
+            public required IReadOnlyList<double> Waveform { get; init; }
         }
 
         private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat)

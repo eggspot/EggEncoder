@@ -1,5 +1,7 @@
+using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -145,6 +147,45 @@ namespace EggEncoder.UnitTests
 
             probeResult.FormatName.Should().Be("mp4");
             probeResult.DurationSeconds.Should().BeApproximately(5, 0.1);
+        }
+
+        [Fact]
+        public async Task Probe_Mp4FileWithAacAudio_Should_Return_AudioMetadata_And_Waveform()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 44100;
+                const int sampleCount = sampleRate;
+
+                var samples = new short[sampleCount];
+                for (var i = 0; i < sampleCount; i++)
+                {
+                    samples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var aacPath = Path.Combine(tempDirectory, "source.aac");
+                AacEncoder.Encode(aacPath, samples, channels: 1, sampleRate);
+
+                var rawFrames = Mp4FileBuilder.ExtractRawAacFrames(aacPath);
+                var mp4Path = Path.Combine(tempDirectory, "source.mp4");
+                Mp4FileBuilder.Create(mp4Path, sampleRate, rawFrames);
+
+                var probeResult = await _nativeEncoder.Probe(mp4Path);
+
+                probeResult.FormatName.Should().Be("mp4");
+                probeResult.CodecType.Should().Be("video");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                AssertNonEmptyWaveform(probeResult.Waveform);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
 
         [Fact]

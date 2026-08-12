@@ -97,7 +97,7 @@
     public static void Convert(string sourceFilePath, string destFilePath);
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }</code></pre>
-      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
+      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
 
       <h2>WaveformCalculator</h2>
       <p>Namespace: <code>EggEncoder.Waveform</code>.</p>
@@ -192,10 +192,17 @@ public static class WmaEncoder
 public class MovProbeResult
 {
     public int DurationInSeconds { get; init; }
+    public double DurationSeconds { get; init; }
     public int? Width { get; init; }
     public int? Height { get; init; }
     public string? CodecFourCc { get; init; }
+}
+
+public static class MovDecoder
+{
+    public static MovStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
 }</code></pre>
+      <p>Decodes a mono AAC-LC 'soun' track via the MP4 sample table (no ADTS framing, unlike standalone <code>.aac</code>). Throws <code>InvalidDataException</code> if there's no audio track, <code>NotSupportedException</code> for stereo or a non-AAC codec.</p>
 
       <h2>Decode Callback Signature</h2>
       <p>Every codec's <code>Decode</code> method streams blocks through the same callback shape rather than returning the full signal in memory. It's a plain delegate rather than a generic <code>Action&lt;&gt;</code> because <code>ReadOnlySpan&lt;int&gt;</code> can't be used as a generic type argument on <code>net8.0</code>:</p>
