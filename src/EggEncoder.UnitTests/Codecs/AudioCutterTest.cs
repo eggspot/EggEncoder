@@ -2,6 +2,7 @@ using EggEncoder.Codecs;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.Wma;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
@@ -309,6 +310,62 @@ namespace EggEncoder.UnitTests.Codecs
                 AudioCutter.Convert(sourceMp3Path, destFlacPath);
 
                 var (streamInfo, decodedSamples) = FlacTestDecoder.DecodeAll(destFlacPath);
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.SampleRate.Should().Be(44100);
+                decodedSamples.Should().NotBeEmpty();
+
+                var rootMeanSquare = Math.Sqrt(decodedSamples.Average(sample => (double)sample * sample));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToWma_Should_Produce_Correct_Duration_And_NonSilent_Output()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWmaPath = Path.Combine(tempDirectory, "dest.wma");
+
+                AudioCutter.Convert(_wavFixturePath, destWmaPath);
+
+                var decodedSamples = new List<int>();
+                var streamInfo = WmaDecoder.Decode(destWmaPath, (block, _, _, _, _) => decodedSamples.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.SampleRate.Should().Be(44100);
+                decodedSamples.Should().NotBeEmpty();
+
+                var rootMeanSquare = Math.Sqrt(decodedSamples.Average(sample => (double)sample * sample));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WavToWma_Should_Produce_Trimmed_NonSilent_Output()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWmaPath = Path.Combine(tempDirectory, "cut.wma");
+
+                var wasCut = AudioCutter.Cut(_wavFixturePath, destWmaPath, startInSeconds: 0, endInSeconds: 1);
+
+                wasCut.Should().BeTrue();
+
+                var decodedSamples = new List<int>();
+                var streamInfo = WmaDecoder.Decode(destWmaPath, (block, _, _, _, _) => decodedSamples.AddRange(block.ToArray()));
 
                 streamInfo.Channels.Should().Be(2);
                 streamInfo.SampleRate.Should().Be(44100);

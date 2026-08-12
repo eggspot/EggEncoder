@@ -58,7 +58,7 @@ List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 w
       <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once.</p>
 
       <h2>Sample-Accurate Cutting</h2>
-      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and writes any supported destination format (WAV, FLAC, MP3, AAC) without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
+      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and writes any supported destination format (WAV, FLAC, MP3, AAC, WMA) without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;
 
 bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90);

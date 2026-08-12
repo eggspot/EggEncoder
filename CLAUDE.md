@@ -33,7 +33,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 | `Flac/` | `FlacDecoder`/`FlacEncoder` — thin wrappers over native `libFLAC` P/Invoke bindings |
 | `Mp3/` | `Mp3Decoder` (via the `NLayer` managed decoder), `Mp3Encoder` (native `libmp3lame` P/Invoke), `Mp3Probe` (manual frame-header parsing, no native call) |
 | `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to |
-| `Wma/` | `WmaDecoder` + `AsfContainerReader` (ASF/WMA container parsing) + `WmaTables` |
+| `Wma/` | Pure managed WMAv2 decoder/encoder (`WmaDecoder`, `WmaEncoder`, `WmaEncoderSession`, `WmaFrameEncoder`) + `AsfContainerReader`/`AsfContainerWriter` (ASF/WMA container I/O) + `WmaTables` |
 | `Mov/` | `MovProbe` — MOV/MP4 atom-tree walker for metadata-only probing (no audio decode) |
 | `AudioCutter.cs` | Format-dispatching `Convert`/`Cut` used by `NativeEncoder`; defines the internal `IAudioSink` interface implemented by each codec's writer/session type |
 

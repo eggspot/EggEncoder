@@ -1,6 +1,6 @@
 # EggEncoder — Full Reference
 
-> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA decode, and built-in waveform generation, behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, and built-in waveform generation, behind one IMediaEncoder interface.
 
 ## Overview
 
@@ -106,10 +106,10 @@ public class TranscodeWorker(IServiceProvider serviceProvider)
 | FLAC   | yes | yes | yes |
 | MP3    | yes | yes | yes |
 | AAC    | yes | yes | yes |
-| WMA    | yes | yes | no  |
+| WMA    | yes | yes | yes |
 | MOV/MP4 (metadata only) | yes | no | no |
 
-`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA) and writes to any supported destination format, including WAV, FLAC, MP3, or AAC — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` is decode-only and mono-only: real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`.
+`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA) and writes to any supported destination format, including WAV, FLAC, MP3, AAC, or WMA — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` supports mono and independently-coded stereo; real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`. `WmaEncoder` always writes independently-coded channels, so its own output is always decodable by `WmaDecoder`.
 
 ## Codec Reference
 
@@ -204,11 +204,17 @@ Every other codec's `Convert`/`Cut` path reads from or writes to WAV as the comm
 public static class WmaDecoder
 {
     public static WmaStreamInfo Decode(string wmaFilePath, AudioBlockDecodedCallback onBlockDecoded);
-    // throws NotSupportedException for stereo (mid/side coding unsupported) or channel counts other than 1/2
+    // throws NotSupportedException for mid/side-coded stereo or channel counts other than 1/2
+}
+
+public static class WmaEncoder
+{
+    public static void Encode(string destFilePath, IReadOnlyList<short> interleavedSamples, int channels, int sampleRate);
+    // mono or stereo only; always writes independently-coded channels (no mid/side stereo)
 }
 ```
 
-Container parsing via the internal `AsfContainerReader`. Decode-only — there is no `WmaEncoder`.
+Container parsing/writing via the internal `AsfContainerReader`/`AsfContainerWriter`. `WmaEncoderSession` implements the same streaming `IAudioSink` used by the other codecs' `AudioCutter` integration.
 
 ### MOV/MP4 — `EggEncoder.Codecs.Mov`
 
@@ -241,7 +247,7 @@ public static class AudioCutter
 
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
     // decodes any supported source (.wav/.flac/.mp3/.aac/.wma) and writes any supported dest
-    // extension (.wav/.flac/.mp3/.aac) -- source and dest extensions no longer need to match,
+    // extension (.wav/.flac/.mp3/.aac/.wma) -- source and dest extensions no longer need to match,
     // so Cut can transcode while it trims
     // returns false (and writes no file) if the requested range is entirely outside the source duration
 }
@@ -283,7 +289,7 @@ Every codec's `Decode` method streams blocks through the same `AudioBlockDecoded
 ## Constraints and Gotchas
 
 - **Windows x64 only.** `NativeEncoder` and its codec bindings P/Invoke into bundled `win-x64` binaries. There is no cross-platform build or fallback engine — this library does not run on Linux/macOS/ARM.
-- **WMA is decode-only and mono-only.** Genuine stereo WMA files (mid/side coded, the real-world default) throw `NotSupportedException` by design rather than decoding incorrectly.
+- **WMA supports mono and independently-coded stereo only.** Genuine mid/side-coded stereo WMA files (the real-world default for most third-party encoders) throw `NotSupportedException` on decode rather than decoding incorrectly; `WmaEncoder` never produces mid/side output, so round-tripping through this library's own encoder/decoder always works.
 - **`AudioCutter.Cut` can transcode while it trims.** Source and destination extensions no longer need to match -- it decodes any supported source and writes any supported destination format.
 - **AAC encoding is mono-only** and restricted to a fixed set of MPEG-4 sample rates (see `AacTables.SampleRates`); other combinations throw `NotSupportedException`.
 
