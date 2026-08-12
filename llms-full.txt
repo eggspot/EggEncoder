@@ -58,7 +58,8 @@ Only fields this library can genuinely compute are populated -- nothing is fille
 ```csharp
 using EggEncoder;
 
-builder.Services.AddEggEncoder(); // no options — registers IMediaEncoder -> NativeEncoder (scoped)
+builder.Services.AddEggEncoder(); // registers IMediaEncoder -> NativeEncoder (scoped)
+// optional: AddEggEncoder(enableLogging: false) to silence Start/Completed/Failed logging entirely
 ```
 
 ### Consuming IMediaEncoder

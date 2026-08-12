@@ -192,6 +192,75 @@ namespace EggEncoder.UnitTests
             }
         }
 
+        [Fact]
+        public async Task Probe_Should_Log_Start_And_Completion()
+        {
+            await _nativeEncoder.Probe(_wavFixturePath);
+
+            _logger.Invocations.Should().HaveCountGreaterThanOrEqualTo(2, "both a start and a completion message should be logged");
+        }
+
+        [Fact]
+        public async Task ConvertFile_Should_Log_Start_And_Completion()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "dest.flac");
+
+                await _nativeEncoder.ConvertFile(_wavFixturePath, destPath);
+
+                _logger.Invocations.Should().HaveCountGreaterThanOrEqualTo(2, "both a start and a completion message should be logged");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task CutFile_Should_Log_Start_And_Completion()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "cut.wav");
+
+                await _nativeEncoder.CutFile(_wavFixturePath, destPath, 0, 1);
+
+                _logger.Invocations.Should().HaveCountGreaterThanOrEqualTo(2, "both a start and a completion message should be logged");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_WithLoggingDisabled_Should_Not_Log()
+        {
+            var logger = new Mock<ILogger<NativeEncoder>>();
+            var encoder = new NativeEncoder(logger.Object, enableLogging: false);
+
+            await encoder.Probe(_wavFixturePath);
+
+            logger.Invocations.Should().BeEmpty();
+        }
+
+        [Fact]
+        public async Task Probe_WithLoggingDisabled_OnFailure_Should_Not_Log()
+        {
+            var logger = new Mock<ILogger<NativeEncoder>>();
+            var encoder = new NativeEncoder(logger.Object, enableLogging: false);
+
+            var act = () => encoder.Probe("file.ogg");
+
+            await act.Should().ThrowExactlyAsync<NotSupportedException>();
+            logger.Invocations.Should().BeEmpty();
+        }
+
         private static void AssertNonEmptyWaveform(IReadOnlyList<double>? waveform)
         {
             waveform.Should().NotBeNull();
