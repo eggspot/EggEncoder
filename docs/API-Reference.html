@@ -161,7 +161,9 @@ public sealed class PcmTransformPipeline
     public IReadOnlyList&lt;IPcmTransform&gt; Transforms { get; }
     public bool CanChangeFrameCount { get; }
     public (int channels, int sampleRate, int bitsPerSample) ComputeOutputFormat(int inputChannels, int inputSampleRate, int inputBitsPerSample);
+    public (int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample) Apply(int[] inputBuffer, int frameCount, int channels, int sampleRate, int bitsPerSample);
 }</code></pre>
+      <p><code>Apply</code> is what <code>AudioCutter.Convert</code>/<code>Cut</code> call per decoded block; most consumers won't call it directly, but it's there if you're driving the pipeline yourself.</p>
       <p><strong>A pipeline instance carries cross-block state (a resampler's fractional position, a fade's frame position, a peak normalizer's measured gain) and is meant for exactly one <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh one per call rather than reusing an instance across multiple calls.</strong></p>
 
       <h3>Transforms — <code>EggEncoder.Pcm</code></h3>

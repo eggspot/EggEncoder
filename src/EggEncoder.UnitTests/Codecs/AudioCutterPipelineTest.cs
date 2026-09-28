@@ -164,6 +164,24 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void WriteWavFromFloat_NonPositiveChannels_Should_Throw()
+        {
+            var act = () => AudioCutter.WriteWavFromFloat("dest.wav", [0.5f, -0.5f], channels: 0, sampleRate: 44100);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
+        [Fact]
+        public void WriteWavFromFloat_SampleCountNotAWholeNumberOfFrames_Should_Throw()
+        {
+            // 3 samples doesn't divide evenly into 2-channel frames -- silently truncating via integer
+            // division would drop the trailing sample instead of erroring.
+            var act = () => AudioCutter.WriteWavFromFloat("dest.wav", [0.5f, -0.5f, 0.25f], channels: 2, sampleRate: 44100);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
         public void ReadWavAsFloat_IntegerSource_Should_Normalize_Against_Its_Own_Bit_Depth()
         {
             var tempDirectory = CreateTempDirectory();

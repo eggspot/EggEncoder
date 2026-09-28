@@ -388,6 +388,18 @@ namespace EggEncoder.Codecs
         /// </summary>
         public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan<float> interleavedSamples, int channels, int sampleRate)
         {
+            if (channels <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channels must be positive");
+            }
+
+            if (interleavedSamples.Length % channels != 0)
+            {
+                throw new ArgumentException(
+                    $"interleavedSamples.Length ({interleavedSamples.Length}) is not a whole number of {channels}-channel frames",
+                    nameof(interleavedSamples));
+            }
+
             var intSamples = FloatSampleConverter.FromFloat(interleavedSamples);
             var totalFrames = intSamples.Length / channels;
 
