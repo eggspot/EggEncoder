@@ -86,16 +86,37 @@
       <h2>ServiceCollectionExtensions</h2>
       <pre><code class="language-csharp">public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddEggEncoder(this IServiceCollection services);
-    // registers IMediaEncoder -> NativeEncoder (scoped). No options.
+    public static IServiceCollection AddEggEncoder(this IServiceCollection services, bool enableLogging = true);
+    // Registers one scoped NativeEncoder instance, then maps both IMediaEncoder and
+    // IPcmTransformEncoder to resolve that same instance -- resolving either interface in the
+    // same DI scope gives you the same underlying NativeEncoder.
 }</code></pre>
 
       <h2>AudioCutter</h2>
-      <p>Namespace: <code>EggEncoder.Codecs</code>. Format-dispatching convert/cut used internally by <code>NativeEncoder</code>; also usable directly.</p>
+      <p>Namespace: <code>EggEncoder.Codecs</code>. Format-dispatching convert/cut used internally by <code>NativeEncoder</code>; also usable directly. The two-argument/four-argument <code>Convert</code>/<code>Cut</code> overloads are unchanged since the original release; the <code>PcmTransformPipeline</code>/<code>CutOptions</code> overloads and everything else below are new — see <a href="Advanced-Features.html#pcm-transform-pipeline">PCM Transform Pipeline</a>.</p>
       <pre><code class="language-csharp">public static class AudioCutter
 {
     public static void Convert(string sourceFilePath, string destFilePath);
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+
+    // Pipeline-aware overloads: run every decoded block through a PcmTransformPipeline first.
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline);
+    public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options);
+
+    // Mixes 2+ same-format sources with per-input gain; decodes every input fully into memory.
+    public static void Mix(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath);
+
+    // Concatenates 2+ same-format sources, in order. Fully streaming for non-WAV destinations;
+    // a WAV destination buffers the combined output in memory (see Advanced-Features.html).
+    public static void Concatenate(IReadOnlyList&lt;string&gt; sourceFilePaths, string destFilePath);
+
+    // Decodes sourceFilePath fully to find its peak absolute sample value, for a true whole-file
+    // PeakNormalizationTransform.MeasurePeak(long, int) measurement.
+    public static (long Peak, int BitsPerSample) MeasurePeakAmplitude(string sourceFilePath);
+
+    // Convenience float[] entry points -- see FloatSampleConverter below.
+    public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
+    public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan&lt;float&gt; interleavedSamples, int channels, int sampleRate);
 }</code></pre>
       <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
 
@@ -109,6 +130,100 @@
     public void AddBlock(ReadOnlySpan&lt;int&gt; interleavedSamples);
     public List&lt;double&gt; GetNormalizedWindows();
 }</code></pre>
+
+      <h2 id="pcm-transform-pipeline">PCM Transform Pipeline</h2>
+      <p>See <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for a full walkthrough with usage examples and important limits. This section is the type reference.</p>
+
+      <h3>IPcmTransformEncoder — <code>EggEncoder</code></h3>
+      <p>Implemented by <code>NativeEncoder</code> alongside <code>IMediaEncoder</code>; resolve it from DI the same way (see <code>ServiceCollectionExtensions</code> above), or construct <code>NativeEncoder</code> directly.</p>
+      <pre><code class="language-csharp">public interface IPcmTransformEncoder
+{
+    Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline);
+    Task&lt;bool&gt; CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options);
+    Task MixFiles(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath);
+    Task ConcatenateFiles(IReadOnlyList&lt;string&gt; sourceFilePaths, string destFilePath);
+}</code></pre>
+
+      <h3>PcmTransformPipeline &amp; IPcmTransform — <code>EggEncoder.Pcm</code></h3>
+      <pre><code class="language-csharp">public interface IPcmTransform
+{
+    int OutputSampleRate { get; }      // 0 = passthrough
+    int OutputChannels { get; }        // 0 = passthrough
+    int OutputBitsPerSample { get; }   // 0 = passthrough
+    bool CanChangeFrameCount { get; }
+    (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample);
+}
+
+public sealed class PcmTransformPipeline
+{
+    public PcmTransformPipeline(params IPcmTransform[] transforms);
+    public bool HasTransforms { get; }
+    public IReadOnlyList&lt;IPcmTransform&gt; Transforms { get; }
+    public bool CanChangeFrameCount { get; }
+    public (int channels, int sampleRate, int bitsPerSample) ComputeOutputFormat(int inputChannels, int inputSampleRate, int inputBitsPerSample);
+}</code></pre>
+      <p><strong>A pipeline instance carries cross-block state (a resampler's fractional position, a fade's frame position, a peak normalizer's measured gain) and is meant for exactly one <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh one per call rather than reusing an instance across multiple calls.</strong></p>
+
+      <h3>Transforms — <code>EggEncoder.Pcm</code></h3>
+      <pre><code class="language-csharp">public sealed class ResamplingTransform : IPcmTransform
+{
+    public ResamplingTransform(int sourceRate, int targetRate, int channels);
+    public void Reset(); // restart the cross-block fractional position tracker
+}
+
+public sealed class VolumeTransform : IPcmTransform
+{
+    public VolumeTransform(double gain); // 1.0 = no change, 0.0 = silence
+}
+
+public sealed class PeakNormalizationTransform : IPcmTransform
+{
+    public PeakNormalizationTransform(double targetDb); // e.g. -1.0; must be &lt;= 0
+    public void MeasurePeak(int[] buffer, int frameCount, int channels, int bitsPerSample);
+    public void MeasurePeak(long maxAbsoluteSample, int bitsPerSample);
+    public static long ComputeMaxAbsoluteSample(ReadOnlySpan&lt;int&gt; samples);
+}
+
+public sealed class ChannelRemixTransform : IPcmTransform
+{
+    public ChannelRemixTransform(int inputChannels, int outputChannels, ChannelRemixMode mixMode = ChannelRemixMode.Auto);
+}
+public enum ChannelRemixMode { Auto, PassThrough, Downmix, UpMix }
+
+public sealed class BitDepthFormatTransform : IPcmTransform
+{
+    public BitDepthFormatTransform(int fromBits, int toBits); // each 8, 16, 24, or 32
+    public static (long Min, long Max) GetNativeRange(int bits);
+}
+
+public sealed class FadeTransform : IPcmTransform
+{
+    public FadeTransform(long totalFrames, long fadeInFrames = 0, long fadeOutFrames = 0, FadeCurve curve = FadeCurve.Linear);
+    public void Reset(); // restart the cross-block frame position tracker
+}
+public enum FadeCurve { Linear, EqualPower }</code></pre>
+      <p><strong>Peak normalization used naively:</strong> if <code>PeakNormalizationTransform</code> is dropped into a pipeline and never pre-measured, <code>MeasurePeak</code> self-measures from whatever buffer <code>Apply</code> first sees — which, driven by <code>AudioCutter.Convert</code>/<code>Cut</code>, is one ~4096-frame decode block, not the whole file. For a true whole-file measurement, call <code>AudioCutter.MeasurePeakAmplitude</code> first and pass its result to <code>MeasurePeak(long, int)</code> before handing the transform to a pipeline.</p>
+      <p><strong>Resampler quality:</strong> <code>ResamplingTransform</code> is a linear-interpolation resampler, not a windowed-sinc/polyphase one — adequate quality for most uses, but not the cleanest available. It tracks fractional position across decode blocks so the total output frame count is exact across a stream, but a destination frame that would need the *next* block's first sample duplicates the last available sample instead (at most one frame per block boundary — negligible at the default 4096-frame block size, but output isn't bit-for-bit identical to resampling the same audio in one block).</p>
+
+      <h3>CutOptions &amp; MixInput — <code>EggEncoder.Codecs</code></h3>
+      <pre><code class="language-csharp">public sealed class CutOptions
+{
+    public PcmTransformPipeline? Pipeline { get; init; }
+    public double FadeInSeconds { get; init; }
+    public double FadeOutSeconds { get; init; }
+    public FadeCurve FadeCurve { get; init; } = FadeCurve.Linear;
+}
+
+public readonly record struct MixInput(string FilePath, double Gain = 1.0);</code></pre>
+      <p>A fade, if requested, runs over the retained range before any transform in <code>Pipeline</code>. <code>AudioCutter.Mix</code> requires every input to share the same channels/sample rate/bit depth, and decodes all of them fully into memory — clip-length material, not multi-hour streams. <code>AudioCutter.Concatenate</code> has the same format-matching requirement.</p>
+
+      <h3>FloatSampleConverter — <code>EggEncoder.Pcm</code></h3>
+      <pre><code class="language-csharp">public static class FloatSampleConverter
+{
+    public static int[] FromFloat(ReadOnlySpan&lt;float&gt; floatSamples);           // -1.0..1.0 -> 32-bit native range
+    public static float[] ToFloat(ReadOnlySpan&lt;int&gt; samples, int bitsPerSample); // any native range -> -1.0..1.0
+}</code></pre>
+      <p>The pipeline itself is exclusively <code>int[]</code>-based; a normalized float sample maps 1:1 onto the 32-bit int native range (the same scale <code>WavReader</code>/<code>WavWriter</code> use for IEEE float WAV). Use this type when you have (or want) <code>float[]</code> directly rather than a WAV file — <code>AudioCutter.ReadWavAsFloat</code>/<code>WriteWavFromFloat</code> wrap it for the WAV case.</p>
 
       <h2>Codecs</h2>
 
@@ -166,10 +281,10 @@ public static class Mp3Probe // manual frame-header parsing, no native call
 
 public sealed class WavWriter : IDisposable
 {
-    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, bool isFloatFormat = false);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
-      <p>Supports 8-bit unsigned, 16/24/32-bit signed integer, and (read-only) 32-bit IEEE float PCM.</p>
+      <p>Supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (both read and write — <code>isFloatFormat: true</code> requires <code>bitsPerSample: 32</code>). Samples are always exchanged as <code>int[]</code>, at this codebase's native-range convention for whatever bit depth is in play (see <a href="Advanced-Features.html#pcm-transform-pipeline">PCM Transform Pipeline</a>); for float format that range is the full 32-bit int range, matching what a normalized <code>-1.0..1.0</code> float sample maps to.</p>
 
       <h3>WMA — <code>EggEncoder.Codecs.Wma</code></h3>
       <pre><code class="language-csharp">public static class WmaDecoder
