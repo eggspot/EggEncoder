@@ -49,6 +49,10 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 `libmp3lame.dll` and `libFLAC.dll` live at `src/EggEncoder/Native/win-x64/` and are packed via the NuGet `contentFiles` convention (see `EggEncoder.csproj`) so they land at `Native/win-x64/*.dll` relative to the consuming application's output directory — exactly where `NativeLibraryLoader` expects them. If you change this packaging, keep it in sync with `NativeLibraryLoader.Resolve`.
 
+### Native AOT
+
+`EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe interop: `[LibraryImport]` (not `[DllImport]`) for P/Invoke, `[UnmanagedCallersOnly]` static methods + `GCHandle` (not marshaled delegate closures) for native callbacks (see `FlacDecoder`), and `AppContext.BaseDirectory` (not `Assembly.Location`) for native binary resolution. `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project that round-trips WAV → MP3/FLAC → probe through a real native-compiled binary in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling or `Reflection.Emit`.
+
 ## Testing Conventions
 
 - Framework: **xUnit** + **FluentAssertions**
@@ -57,6 +61,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - Tests live in `src/EggEncoder.UnitTests/`, mirroring the `src/EggEncoder/` folder structure
 - Fixture audio files (`.wav`/`.flac`/`.mp3`/`.mov`/`.mp4`) live alongside their tests and are copied to the test output directory — see `<None ... CopyToOutputDirectory>` entries in `EggEncoder.UnitTests.csproj`
 - Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference fixtures checked into the repo — no external ffmpeg install is needed to run the tests, only the fixture files themselves
+- `src/EggEncoder.AotSmokeTest/` covers Native AOT: it's a separate `PublishAot=true` console project (not an xUnit test, since xUnit runs under the JIT) that CI publishes with `dotnet publish -r win-x64` and then executes, to catch AOT/trimming regressions that the build-time analyzer alone can't (e.g. inside the `NLayer` dependency, which ships no AOT metadata of its own)
 
 ## Release Process
 

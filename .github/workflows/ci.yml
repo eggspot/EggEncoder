@@ -41,3 +41,16 @@ jobs:
         run: |
           MAJOR=$(echo "${{ matrix.dotnet-version }}" | cut -d. -f1)
           dotnet test --configuration Release --no-build --framework "net${MAJOR}.0" --verbosity normal
+
+      # EggEncoder.AotSmokeTest only targets net10.0, so this only needs to run once regardless
+      # of which SDK the matrix leg is testing. A real `PublishAot=true` publish (not just a
+      # build) is required to catch trimming/AOT issues the Roslyn analyzer alone would miss —
+      # e.g. in the NLayer MP3 decoder dependency, which ships no AOT/trim metadata of its own.
+      - name: Publish Native AOT smoke test (.NET 10)
+        if: matrix.dotnet-version == '10.0.x'
+        run: dotnet publish src/EggEncoder.AotSmokeTest/EggEncoder.AotSmokeTest.csproj --configuration Release --runtime win-x64
+
+      - name: Run Native AOT smoke test (.NET 10)
+        if: matrix.dotnet-version == '10.0.x'
+        shell: bash
+        run: ./src/EggEncoder.AotSmokeTest/bin/Release/net10.0/win-x64/publish/EggEncoder.AotSmokeTest.exe
