@@ -11,7 +11,18 @@ namespace EggEncoder.Pcm;
 /// the interface is designed to swap implementations without changing callers.
 ///
 /// Handles changing frame counts per block correctly: each block is resampled independently
-/// using a fractional position tracker that advances across the full stream.
+/// using a fractional position tracker that advances across the full stream, so the total output
+/// frame count across many blocks matches processing the whole stream as one block.
+///
+/// Known limitation: a destination frame whose interpolation would need the *next* block's first
+/// source sample (i.e. one landing on the last source frame of the current block with a nonzero
+/// fractional offset) duplicates that last sample instead, since the next block hasn't been
+/// decoded yet when the current one is processed. This affects at most one interpolated frame per
+/// block boundary -- with the default 4096-frame decode block size that's a negligible fraction of
+/// output, but it means block-by-block output is not bit-for-bit identical to resampling the same
+/// audio as a single block. Fixing it would require buffering the last pending output frame across
+/// Apply() calls (and a final flush once the stream ends), which the current IPcmTransform contract
+/// (no end-of-stream hook) doesn't support.
 /// </summary>
 public sealed class ResamplingTransform : IPcmTransform
 {
