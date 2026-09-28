@@ -48,21 +48,37 @@ namespace EggEncoder.Codecs
 
             IAudioSink? destSink = null;
             var scratch = new ScratchBuffer();
+            var sourceChannels = 0;
+            var sourceSampleRate = 0;
+            var sourceBitsPerSample = 0;
 
             try
             {
                 DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
-                    if (destSink is null)
-                    {
-                        var (outChannels, outSampleRate, outBitsPerSample) = pipeline.ComputeOutputFormat(channels, sampleRate, bitsPerSample);
-                        destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
-                    }
+                    sourceChannels = channels;
+                    sourceSampleRate = sampleRate;
+                    sourceBitsPerSample = bitsPerSample;
 
                     var scratchBuffer = scratch.CopyFrom(block);
-                    var (outBuffer, outFrameCount, _, _, _) = pipeline.Apply(scratchBuffer, block.Length / channels, channels, sampleRate, bitsPerSample);
+                    var (outBuffer, outFrameCount, outChannels, outSampleRate, outBitsPerSample) =
+                        pipeline.Apply(scratchBuffer, block.Length / channels, channels, sampleRate, bitsPerSample);
+
+                    // Opened only after the first successful Apply() call: if the pipeline rejects the
+                    // source format (e.g. a mismatched ChannelRemixTransform), no destination file is
+                    // ever created, instead of leaving a truncated header-only file behind.
+                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
+
+                if (destSink is not null)
+                {
+                    var (flushBuffer, flushFrameCount, _, _, _) = pipeline.Flush(sourceChannels, sourceSampleRate, sourceBitsPerSample);
+                    if (flushFrameCount > 0)
+                    {
+                        destSink.WriteInterleavedSamples(flushBuffer, flushFrameCount);
+                    }
+                }
 
                 destSink?.Finish();
             }
@@ -88,9 +104,13 @@ namespace EggEncoder.Codecs
             var rangeComputed = false;
             var startSample = 0L;
             var endSample = 0L;
+            var retainedFrames = 0L;
             var currentFrame = 0L;
             var scratch = new ScratchBuffer();
             PcmTransformPipeline? effectivePipeline = null;
+            var sourceChannels = 0;
+            var sourceSampleRate = 0;
+            var sourceBitsPerSample = 0;
 
             try
             {
@@ -103,27 +123,42 @@ namespace EggEncoder.Codecs
 
                         if (startSample < endSample)
                         {
-                            var retainedFrames = endSample - startSample;
+                            retainedFrames = endSample - startSample;
                             effectivePipeline = BuildCutPipeline(options, retainedFrames, sampleRate);
-
-                            var (outChannels, outSampleRate, outBitsPerSample) = effectivePipeline.ComputeOutputFormat(channels, sampleRate, bitsPerSample);
-                            destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames);
                         }
                     }
 
-                    if (destSink is null)
+                    if (effectivePipeline is null)
                     {
                         return;
                     }
 
+                    sourceChannels = channels;
+                    sourceSampleRate = sampleRate;
+                    sourceBitsPerSample = bitsPerSample;
+
                     ForwardOverlap(block, channels, currentFrame, startSample, endSample, scratch, (trimmedBuffer, trimmedFrameCount) =>
                     {
-                        var (outBuffer, outFrameCount, _, _, _) = effectivePipeline!.Apply(trimmedBuffer, trimmedFrameCount, channels, sampleRate, bitsPerSample);
-                        destSink!.WriteInterleavedSamples(outBuffer, outFrameCount);
+                        var (outBuffer, outFrameCount, outChannels, outSampleRate, outBitsPerSample) =
+                            effectivePipeline!.Apply(trimmedBuffer, trimmedFrameCount, channels, sampleRate, bitsPerSample);
+
+                        // Opened only after the first successful Apply() call -- see the Convert(pipeline)
+                        // overload's matching comment.
+                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames);
+                        destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                     });
 
                     currentFrame += block.Length / channels;
                 });
+
+                if (destSink is not null)
+                {
+                    var (flushBuffer, flushFrameCount, _, _, _) = effectivePipeline!.Flush(sourceChannels, sourceSampleRate, sourceBitsPerSample);
+                    if (flushFrameCount > 0)
+                    {
+                        destSink.WriteInterleavedSamples(flushBuffer, flushFrameCount);
+                    }
+                }
 
                 destSink?.Finish();
             }

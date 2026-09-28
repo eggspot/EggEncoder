@@ -231,6 +231,81 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WhenPipelineRejectsTheSourceFormat_Should_Not_Create_A_Destination_File()
+        {
+            // Regression test: the destination sink is only opened after the first successful
+            // pipeline.Apply() call. Previously it was opened first (writing a WAV header up front), so a
+            // pipeline validation failure on the very first block -- e.g. a ChannelRemixTransform built
+            // for the wrong input channel count -- left a corrupt, header-only WAV file behind instead of
+            // no file at all.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 10, sampleRate: 1000); // 2 channels
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var mismatchedPipeline = new PcmTransformPipeline(new ChannelRemixTransform(inputChannels: 1, outputChannels: 2));
+                var act = () => AudioCutter.Convert(sourcePath, destPath, mismatchedPipeline);
+
+                act.Should().Throw<ArgumentException>();
+                File.Exists(destPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithResamplingTransform_Should_Flush_The_Resamplers_Tail_Into_The_Destination()
+        {
+            // Without draining the resampler's pending tail on Flush, a source small enough to fit in one
+            // decode block but too small to fill the filter's lookahead window would silently produce
+            // fewer output frames than round(sourceFrames * ratio) -- or, for a source much smaller than
+            // the filter's half-width, none at all.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 5, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 2));
+                AudioCutter.Convert(sourcePath, destPath, pipeline);
+
+                using var reader = WavReader.Open(destPath);
+                reader.TotalSamples.Should().Be(10); // round(5 * 2.0), entirely from Flush since 5 frames can't fill the filter's lookahead
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WithResamplingTransform_Should_Flush_The_Resamplers_Tail_Into_The_Destination()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 5, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 0, endInSeconds: 1, new CutOptions
+                {
+                    Pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 2))
+                });
+
+                produced.Should().BeTrue();
+                using var reader = WavReader.Open(destPath);
+                reader.TotalSamples.Should().Be(10);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithBitDepthFormatTransform_Should_Change_Destination_Bit_Depth()
         {
             var tempDirectory = CreateTempDirectory();

@@ -85,5 +85,68 @@ namespace EggEncoder.UnitTests.Pcm
             sampleRate.Should().Be(22050);
             bitsPerSample.Should().Be(8);
         }
+
+        [Fact]
+        public void Flush_EmptyPipeline_Should_Produce_No_Output()
+        {
+            var pipeline = new PcmTransformPipeline();
+
+            var (buffer, frameCount, channels, sampleRate, bitsPerSample) = pipeline.Flush(channels: 2, sampleRate: 44100, bitsPerSample: 16);
+
+            frameCount.Should().Be(0);
+            buffer.Should().BeEmpty();
+            channels.Should().Be(2);
+            sampleRate.Should().Be(44100);
+            bitsPerSample.Should().Be(16);
+        }
+
+        [Fact]
+        public void Flush_PipelineWithNoStatefulTransforms_Should_Produce_No_Output()
+        {
+            var pipeline = new PcmTransformPipeline(new VolumeTransform(2.0));
+            pipeline.Apply([1000, 2000], frameCount: 2, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            var (buffer, frameCount, _, _, _) = pipeline.Flush(channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            frameCount.Should().Be(0);
+            buffer.Should().BeEmpty();
+        }
+
+        [Fact]
+        public void Flush_Should_Drain_A_Resamplers_Pending_Tail()
+        {
+            var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 1));
+
+            var (_, applyFrameCount, _, _, _) = pipeline.Apply([1, 2, 3], frameCount: 3, channels: 1, sampleRate: 1000, bitsPerSample: 16);
+            var (_, flushFrameCount, _, _, _) = pipeline.Flush(channels: 1, sampleRate: 1000, bitsPerSample: 16);
+
+            (applyFrameCount + flushFrameCount).Should().Be(6); // round(3 * 2.0)
+        }
+
+        [Fact]
+        public void Flush_Should_Push_An_Upstream_Transforms_Tail_Through_Every_Later_Transform()
+        {
+            // The resampler's flushed tail must itself be doubled by the VolumeTransform that follows it
+            // in the pipeline -- not written out untouched. Compare against an identical pipeline minus
+            // the VolumeTransform to prove the relationship, rather than asserting on raw magnitudes.
+            int[] source = [100, 200, 300, 400, 500];
+
+            var withoutVolume = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 1));
+            withoutVolume.Apply((int[])source.Clone(), frameCount: source.Length, channels: 1, sampleRate: 1000, bitsPerSample: 16);
+            var (unscaledFlush, unscaledFlushCount, _, _, _) = withoutVolume.Flush(channels: 1, sampleRate: 1000, bitsPerSample: 16);
+
+            var withVolume = new PcmTransformPipeline(
+                new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 1),
+                new VolumeTransform(2.0));
+            withVolume.Apply((int[])source.Clone(), frameCount: source.Length, channels: 1, sampleRate: 1000, bitsPerSample: 16);
+            var (scaledFlush, scaledFlushCount, _, _, _) = withVolume.Flush(channels: 1, sampleRate: 1000, bitsPerSample: 16);
+
+            scaledFlushCount.Should().Be(unscaledFlushCount);
+            scaledFlushCount.Should().BeGreaterThan(0);
+            for (var i = 0; i < scaledFlushCount; i++)
+            {
+                scaledFlush[i].Should().Be(unscaledFlush[i] * 2);
+            }
+        }
     }
 }
