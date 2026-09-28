@@ -64,6 +64,7 @@ var probeResult = await encoder.Probe("track.flac");
 - `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform` — the six built-in transforms
 - `FloatSampleConverter` — int PCM ↔ normalized IEEE-float sample conversion at application boundaries (not itself a pipeline transform; the pipeline is exclusively int[]-based)
 - `CutOptions` / `MixInput` — options for the pipeline-aware `Cut`/`Mix` overloads
+- `WavSampleFormat` (`Integer`/`Float32`) — selects a `.wav` destination's on-disk encoding for `Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate`; ignored for non-WAV destinations
 
 ## PCM Transform Pipeline
 
@@ -80,11 +81,12 @@ AudioCutter.Convert(sourcePath, destPath, pipeline);
 Covers all six requested capabilities: resampling, gain/peak normalization, channel remix, bit-depth/float PCM conversion, fades on a cut (`CutOptions.FadeInSeconds`/`FadeOutSeconds`), and mixing (`AudioCutter.Mix`) / concatenation (`AudioCutter.Concatenate`).
 
 Important limits an LLM should surface when recommending this:
-- A `PcmTransformPipeline` instance carries cross-block state (resampler fractional position, fade frame position, measured peak gain) — build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
+- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain) — build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
+- Any transform implementing `IPcmTransform.Flush` (currently `ResamplingTransform`) holds output back until it has enough lookahead, and needs `pipeline.Flush(channels, sampleRate, bitsPerSample)` called once after the last block to drain its tail. `AudioCutter.Convert(pipeline)`/`Cut(options)` call this automatically; only code driving `PcmTransformPipeline` directly needs to call it itself.
 - `PeakNormalizationTransform` dropped into a pipeline without pre-measuring self-measures from the *first decode block only*, not the whole file. True whole-file measurement: call `AudioCutter.MeasurePeakAmplitude(sourcePath)` first, then `peakTransform.MeasurePeak(peak, bitsPerSample)` before running the pipeline.
-- `Mix`/`Concatenate` require every source to share channels/sample rate/bit depth (mismatches throw `NotSupportedException`). `Mix` decodes every input fully into memory — clip-length material, not multi-hour streams.
-- `ResamplingTransform` is linear-interpolation, not windowed-sinc/polyphase — decent quality, not the cleanest available; it tracks position across blocks so total output frame count is exact, but one destination frame per block boundary approximates (duplicates the last sample) rather than truly interpolating.
-- Float PCM: the pipeline is int[]-only; `FloatSampleConverter`/`AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` convert at the boundary. `Convert`/`Cut`/`Mix`/`Concatenate` do not automatically preserve a float WAV source's format on write (output is always integer PCM unless you use the float-specific entry points).
+- `Mix`/`Concatenate` require every source to share channels/sample rate/bit depth (mismatches throw `NotSupportedException`). `Mix` decodes every input fully into memory, concurrently — clip-length material, not multi-hour streams.
+- `ResamplingTransform` is a Kaiser-windowed-sinc polyphase filter (anti-aliasing on downsample, band-limited reconstruction on upsample), not linear interpolation. It tracks a cumulative floor(sourceFrames * ratio) target so total output frame count is exact regardless of block splits; the fractional source position is quantized to 1024 polyphase table phases (negligible timing error); downsampling scales the filter's half-width up to preserve anti-aliasing quality, capped at 256 taps for extreme ratios.
+- Float PCM: the pipeline is int[]-only; `FloatSampleConverter`/`AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` convert at the boundary. A float WAV *source* always decodes transparently into int PCM. For a float WAV *destination*, pass `WavSampleFormat.Float32` to `Convert`/`Cut`(`CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate` — it requires the destination's bit depth to already be 32-bit (widen a narrower source with `BitDepthFormatTransform` first) and throws `NotSupportedException` against a non-WAV destination. NaN samples convert to silence (0), not undefined behavior; Infinity clamps to +/-1.0.
 
 ## Supported Formats
 

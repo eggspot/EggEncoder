@@ -103,12 +103,20 @@
     public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline);
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options);
 
-    // Mixes 2+ same-format sources with per-input gain; decodes every input fully into memory.
+    // WavSampleFormat overloads: select a .wav destination's on-disk encoding (Integer, the default
+    // matching every overload above, or Float32); ignored for non-WAV destinations, which throw
+    // NotSupportedException if Float32 is requested against them.
+    public static void Convert(string sourceFilePath, string destFilePath, WavSampleFormat destinationWavFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat);
+
+    // Mixes 2+ same-format sources with per-input gain; decodes every input fully into memory, concurrently.
     public static void Mix(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath);
+    public static void Mix(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath, WavSampleFormat destinationWavFormat);
 
     // Concatenates 2+ same-format sources, in order. Fully streaming for non-WAV destinations;
     // a WAV destination buffers the combined output in memory (see Advanced-Features.html).
     public static void Concatenate(IReadOnlyList&lt;string&gt; sourceFilePaths, string destFilePath);
+    public static void Concatenate(IReadOnlyList&lt;string&gt; sourceFilePaths, string destFilePath, WavSampleFormat destinationWavFormat);
 
     // Decodes sourceFilePath fully to find its peak absolute sample value, for a true whole-file
     // PeakNormalizationTransform.MeasurePeak(long, int) measurement.
@@ -152,6 +160,11 @@
     int OutputBitsPerSample { get; }   // 0 = passthrough
     bool CanChangeFrameCount { get; }
     (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample);
+
+    // Default interface method -- existing implementers don't need to change. Drains output this
+    // transform is still holding back (e.g. a resampler's pending tail); call once, after the last
+    // Apply() call for a stream. Most transforms hold no such state and keep the default (no output).
+    (int[] buffer, int frameCount) Flush() =&gt; (Array.Empty&lt;int&gt;(), 0);
 }
 
 public sealed class PcmTransformPipeline
@@ -162,15 +175,20 @@ public sealed class PcmTransformPipeline
     public bool CanChangeFrameCount { get; }
     public (int channels, int sampleRate, int bitsPerSample) ComputeOutputFormat(int inputChannels, int inputSampleRate, int inputBitsPerSample);
     public (int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample) Apply(int[] inputBuffer, int frameCount, int channels, int sampleRate, int bitsPerSample);
+    public (int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample) Flush(int channels, int sampleRate, int bitsPerSample);
 }</code></pre>
-      <p><code>Apply</code> is what <code>AudioCutter.Convert</code>/<code>Cut</code> call per decoded block; most consumers won't call it directly, but it's there if you're driving the pipeline yourself.</p>
-      <p><strong>A pipeline instance carries cross-block state (a resampler's fractional position, a fade's frame position, a peak normalizer's measured gain) and is meant for exactly one <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh one per call rather than reusing an instance across multiple calls.</strong></p>
+      <p><code>Apply</code> is what <code>AudioCutter.Convert</code>/<code>Cut</code> call per decoded block; most consumers won't call it directly, but it's there if you're driving the pipeline yourself. Likewise <code>Flush</code>, which those same <code>AudioCutter</code> overloads call automatically once after the last block — see <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for why it exists and a worked example of calling it directly.</p>
+      <p><strong>A pipeline instance carries cross-block state (a resampler's source history, a fade's frame position, a peak normalizer's measured gain) and is meant for exactly one <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh one per call rather than reusing an instance across multiple calls.</strong></p>
 
       <h3>Transforms — <code>EggEncoder.Pcm</code></h3>
       <pre><code class="language-csharp">public sealed class ResamplingTransform : IPcmTransform
 {
-    public ResamplingTransform(int sourceRate, int targetRate, int channels);
-    public void Reset(); // restart the cross-block fractional position tracker
+    public const int DefaultFilterHalfWidth = 32;
+
+    public ResamplingTransform(int sourceRate, int targetRate, int channels, int filterHalfWidth = DefaultFilterHalfWidth);
+    public int FilterHalfWidth { get; } // the effective half-width actually used, after any downsampling scale-up/cap
+    public void Reset(); // restart all cross-block state (history, stream position, flushed flag)
+    // Flush() drains the last few output frames a full lookahead window couldn't yet be gathered for; see above.
 }
 
 public sealed class VolumeTransform : IPcmTransform
@@ -205,7 +223,7 @@ public sealed class FadeTransform : IPcmTransform
 }
 public enum FadeCurve { Linear, EqualPower }</code></pre>
       <p><strong>Peak normalization used naively:</strong> if <code>PeakNormalizationTransform</code> is dropped into a pipeline and never pre-measured, <code>MeasurePeak</code> self-measures from whatever buffer <code>Apply</code> first sees — which, driven by <code>AudioCutter.Convert</code>/<code>Cut</code>, is one ~4096-frame decode block, not the whole file. For a true whole-file measurement, call <code>AudioCutter.MeasurePeakAmplitude</code> first and pass its result to <code>MeasurePeak(long, int)</code> before handing the transform to a pipeline.</p>
-      <p><strong>Resampler quality:</strong> <code>ResamplingTransform</code> is a linear-interpolation resampler, not a windowed-sinc/polyphase one — adequate quality for most uses, but not the cleanest available. It tracks fractional position across decode blocks so the total output frame count is exact across a stream, but a destination frame that would need the *next* block's first sample duplicates the last available sample instead (at most one frame per block boundary — negligible at the default 4096-frame block size, but output isn't bit-for-bit identical to resampling the same audio in one block).</p>
+      <p><strong>Resampler quality:</strong> <code>ResamplingTransform</code> is a Kaiser-windowed-sinc polyphase filter — anti-aliasing on downsample, band-limited reconstruction on upsample — not linear interpolation. Output is held back until its full tap window (<code>FilterHalfWidth</code> source frames on each side) has genuinely arrived, rather than falling back to duplicating an edge sample at a block boundary; see <code>Flush</code> above for draining the last few frames this implies at the true end of a stream. Total output frame count is a cumulative <code>floor(sourceFramesSoFar * ratio)</code>, so it's exact regardless of how a stream is split into blocks — no per-block rounding drift to account for. The continuous fractional source position is quantized to 1024 polyphase-table phases (a small, standard timing error for this class of resampler); downsampling scales the filter's half-width up by <code>1/cutoff</code> to preserve anti-aliasing quality as the ratio shrinks, capped at 256 taps so an extreme ratio (e.g. 100:1) can't grow the table or per-sample cost unboundedly.</p>
 
       <h3>CutOptions &amp; MixInput — <code>EggEncoder.Codecs</code></h3>
       <pre><code class="language-csharp">public sealed class CutOptions
@@ -214,10 +232,13 @@ public enum FadeCurve { Linear, EqualPower }</code></pre>
     public double FadeInSeconds { get; init; }
     public double FadeOutSeconds { get; init; }
     public FadeCurve FadeCurve { get; init; } = FadeCurve.Linear;
+    public WavSampleFormat DestinationWavFormat { get; init; } = WavSampleFormat.Integer;
 }
 
-public readonly record struct MixInput(string FilePath, double Gain = 1.0);</code></pre>
-      <p>A fade, if requested, runs over the retained range before any transform in <code>Pipeline</code>. <code>AudioCutter.Mix</code> requires every input to share the same channels/sample rate/bit depth, and decodes all of them fully into memory — clip-length material, not multi-hour streams. <code>AudioCutter.Concatenate</code> has the same format-matching requirement.</p>
+public readonly record struct MixInput(string FilePath, double Gain = 1.0);
+
+public enum WavSampleFormat { Integer, Float32 }</code></pre>
+      <p>A fade, if requested, runs over the retained range before any transform in <code>Pipeline</code>. <code>AudioCutter.Mix</code> requires every input to share the same channels/sample rate/bit depth, and decodes all of them fully into memory, concurrently — clip-length material, not multi-hour streams. <code>AudioCutter.Concatenate</code> has the same format-matching requirement. <code>WavSampleFormat</code> selects a <code>.wav</code> destination's on-disk encoding (see <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for the float-WAV walkthrough); it's ignored for every other destination format, and <code>Float32</code> requires the destination's bit depth to already be 32.</p>
 
       <h3>FloatSampleConverter — <code>EggEncoder.Pcm</code></h3>
       <pre><code class="language-csharp">public static class FloatSampleConverter

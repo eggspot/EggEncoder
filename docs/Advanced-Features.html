@@ -79,7 +79,21 @@ var pipeline = new PcmTransformPipeline(
     new BitDepthFormatTransform(fromBits: 16, toBits: 24));
 
 AudioCutter.Convert(sourcePath, destPath, pipeline);</code></pre>
-      <p>Transforms run in the order given; each receives the previous one's output. A pipeline instance carries state across blocks (a resampler's fractional position, a peak normalizer's measured gain) and is meant for exactly <strong>one</strong> <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh <code>PcmTransformPipeline</code> per call rather than reusing an instance.</p>
+      <p>Transforms run in the order given; each receives the previous one's output. A pipeline instance carries state across blocks (a resampler's source history, a peak normalizer's measured gain) and is meant for exactly <strong>one</strong> <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call — build a fresh <code>PcmTransformPipeline</code> per call rather than reusing an instance.</p>
+
+      <h3>Resampling quality, and why <code>Flush()</code> exists</h3>
+      <p><code>ResamplingTransform</code> is a Kaiser-windowed-sinc polyphase filter: it anti-aliases on downsample and band-limit-reconstructs on upsample, rather than a naive linear interpolation between neighboring samples. To do that correctly across an arbitrarily block-split stream, it holds a destination frame back until the source frames on <em>both</em> sides of it have actually arrived — including a few frames past the end of the current block. That means the very last few output frames of a stream can't be produced until the transform is told there's no more input coming:</p>
+      <pre><code class="language-csharp">int[] channels = ...;
+var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 2));
+
+// AudioCutter.Convert(pipeline)/Cut(options) already call Flush for you -- only a driver working
+// against PcmTransformPipeline directly needs to do this itself:
+var (buffer, frameCount, ch, sampleRate, bitsPerSample) = pipeline.Apply(sourceBlock, frameCount, 2, 44100, 16);
+destSink.WriteInterleavedSamples(buffer, frameCount);
+// ... more Apply() calls for subsequent blocks ...
+var (tailBuffer, tailFrameCount, _, _, _) = pipeline.Flush(2, 44100, 16); // drains the resampler's pending tail
+if (tailFrameCount > 0) destSink.WriteInterleavedSamples(tailBuffer, tailFrameCount);</code></pre>
+      <p><code>IPcmTransform.Flush()</code> is a default interface method (existing custom transforms don't need to implement it; the default is a no-op) that cascades through every transform in a pipeline in order — a resampler's flushed tail is pushed through every later transform's own <code>Apply</code>, exactly like one final block, before that transform's own <code>Flush</code> drains whatever it, in turn, is left holding. Total output frame count converges exactly on <code>round(totalSourceFrames * ratio)</code> once flushed, regardless of how the source was split into blocks.</p>
 
       <h3>Fades on a cut</h3>
       <pre><code class="language-csharp">AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90, new CutOptions
@@ -118,7 +132,19 @@ float[] backToFloat = FloatSampleConverter.ToFloat(intSamples, bitsPerSample: 32
 // Or directly against a WAV file:
 AudioCutter.WriteWavFromFloat(destPath, myFloatSamples, channels: 2, sampleRate: 44100);
 var (samples, channels, sampleRate) = AudioCutter.ReadWavAsFloat(sourcePath); // any WAV bit depth, normalized</code></pre>
-      <p><code>WavWriter.Create(..., isFloatFormat: true)</code> writes a real 32-bit IEEE float WAV (previously only readable, not writable). One limitation: <code>AudioCutter.Convert</code>/<code>Cut</code>/<code>Mix</code>/<code>Concatenate</code> don't preserve a WAV source's float-vs-integer format automatically — converting a float WAV through <code>Convert</code> today always produces an integer PCM WAV destination, because float-ness isn't threaded through the shared decode callback all 5 codecs use. Use <code>ReadWavAsFloat</code>/<code>WriteWavFromFloat</code> directly when you specifically need a float destination.</p>
+      <p><code>WavWriter.Create(..., isFloatFormat: true)</code> writes a real 32-bit IEEE float WAV. A float WAV <strong>source</strong> already decodes transparently into int PCM through <code>Convert</code>/<code>Cut</code>/<code>Mix</code>/<code>Concatenate</code> — no special handling needed. For a float <strong>destination</strong> through those same entry points, pass <code>WavSampleFormat.Float32</code>:</p>
+      <pre><code class="language-csharp">using EggEncoder.Codecs;
+
+AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.Float32);
+
+AudioCutter.Cut(sourcePath, destPath, startInSeconds: 0, endInSeconds: 30, new CutOptions
+{
+    DestinationWavFormat = WavSampleFormat.Float32
+});
+
+AudioCutter.Mix(inputs, destPath, WavSampleFormat.Float32);
+AudioCutter.Concatenate(sourcePaths, destPath, WavSampleFormat.Float32);</code></pre>
+      <p><code>WavSampleFormat.Float32</code> requires the destination's bit depth to already be 32 (widen a narrower source first with a <code>BitDepthFormatTransform</code> in the pipeline — <code>Mix</code>/<code>Concatenate</code> have no bit-depth conversion of their own, so their sources must already be 32-bit) and throws <code>NotSupportedException</code> against a non-WAV destination. The default, <code>WavSampleFormat.Integer</code>, is unchanged from before this option existed. Internally, processing always stays <code>int[]</code>-based at the usual native-range scale — this only selects how <code>WavWriter</code> encodes that data on disk. <code>float.NaN</code> samples convert to silence (<code>0</code>), not the unspecified result of a raw <code>(int)double.NaN</code> cast; <code>float.PositiveInfinity</code>/<code>NegativeInfinity</code> clamp to +/-1.0, same as any other out-of-range value.</p>
 
       <h2>MOV/MP4 Probing and Audio Decode</h2>
       <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code. It's metadata-only and never decodes audio or video frames:</p>
