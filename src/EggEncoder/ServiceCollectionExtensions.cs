@@ -10,6 +10,9 @@ namespace EggEncoder
             services.AddScoped<IMediaEncoder>(serviceProvider =>
                 new NativeEncoder(serviceProvider.GetRequiredService<ILogger<NativeEncoder>>(), enableLogging));
 
+            services.AddScoped<IPcmTransformEncoder>(serviceProvider =>
+                new NativeEncoder(serviceProvider.GetRequiredService<ILogger<NativeEncoder>>(), enableLogging));
+
             return services;
         }
     }
