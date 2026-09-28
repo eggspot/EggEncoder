@@ -24,6 +24,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>

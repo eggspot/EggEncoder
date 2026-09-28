@@ -17,6 +17,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 ### Why EggEncoder?
 
 - 🚀 **Fully native, in-process** — direct P/Invoke to LAME (MP3) and libFLAC, no subprocess/shell-out overhead
+- ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, FLAC, MP3, WAV, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
