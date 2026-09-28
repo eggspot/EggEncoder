@@ -14,7 +14,7 @@ namespace EggEncoder.Codecs
         void Finish();
     }
 
-    public static class AudioCutter
+    public static partial class AudioCutter
     {
         private const int FramesPerBlock = 4096;
 

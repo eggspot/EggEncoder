@@ -10,7 +10,7 @@ using EggEncoder.Waveform;
 
 namespace EggEncoder
 {
-    public class NativeEncoder : IMediaEncoder
+    public partial class NativeEncoder : IMediaEncoder
     {
         private const int FramesPerBlock = 4096;
 
