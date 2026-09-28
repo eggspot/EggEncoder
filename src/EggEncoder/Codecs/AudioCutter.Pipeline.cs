@@ -357,6 +357,45 @@ namespace EggEncoder.Codecs
             return (maxAbs, bitsPerSample);
         }
 
+        /// <summary>
+        /// Reads a WAV file -- any supported integer bit depth, or 32-bit IEEE float -- fully into
+        /// normalized float samples. A convenience for callers that want <see langword="float"/>[]
+        /// directly rather than driving int PCM through a <see cref="PcmTransformPipeline"/> themselves;
+        /// see <see cref="FloatSampleConverter"/> for the underlying per-sample conversion, which is the
+        /// same conversion regardless of whether the source file was itself integer or float.
+        /// </summary>
+        public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath)
+        {
+            using var reader = WavReader.Open(sourceFilePath);
+            var buffer = new int[FramesPerBlock * reader.Channels];
+            var samples = new List<int>();
+
+            int framesRead;
+            while ((framesRead = reader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+            {
+                samples.AddRange(buffer.AsSpan(0, framesRead * reader.Channels).ToArray());
+            }
+
+            var floatSamples = FloatSampleConverter.ToFloat(samples.ToArray(), reader.BitsPerSample);
+            return (floatSamples, reader.Channels, reader.SampleRate);
+        }
+
+        /// <summary>
+        /// Writes normalized float samples (range -1.0..1.0; out-of-range values are clamped) to a
+        /// 32-bit IEEE float WAV file. A convenience for callers that have <see langword="float"/>[]
+        /// directly (e.g. synthesized audio) rather than driving int PCM through <c>AudioCutter</c>; see
+        /// <see cref="FloatSampleConverter"/> for the underlying per-sample conversion.
+        /// </summary>
+        public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan<float> interleavedSamples, int channels, int sampleRate)
+        {
+            var intSamples = FloatSampleConverter.FromFloat(interleavedSamples);
+            var totalFrames = intSamples.Length / channels;
+
+            using var writer = WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample: 32, totalFrames, isFloatFormat: true);
+            writer.WriteInterleavedSamples(intSamples, totalFrames);
+            writer.Finish();
+        }
+
         // Buffers written samples in memory and only opens the real WavWriter (which needs an exact frame
         // count up front) once Finish() reports the true total. See OpenSinkForPipeline.
         private sealed class DeferredWavSink : IAudioSink

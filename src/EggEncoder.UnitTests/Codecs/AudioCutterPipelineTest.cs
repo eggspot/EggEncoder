@@ -129,6 +129,64 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void WriteWavFromFloat_Then_ReadWavAsFloat_Should_RoundTrip()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "float.wav");
+                float[] original = [0.5f, -0.5f, 1.0f, -1.0f, 0.0f, 0.25f];
+
+                AudioCutter.WriteWavFromFloat(destPath, original, channels: 2, sampleRate: 44100);
+
+                using (var reader = WavReader.Open(destPath))
+                {
+                    reader.IsFloatFormat.Should().BeTrue();
+                    reader.BitsPerSample.Should().Be(32);
+                    reader.Channels.Should().Be(2);
+                    reader.SampleRate.Should().Be(44100);
+                }
+
+                var (samples, channels, sampleRate) = AudioCutter.ReadWavAsFloat(destPath);
+
+                channels.Should().Be(2);
+                sampleRate.Should().Be(44100);
+                samples.Should().HaveCount(original.Length);
+                for (var i = 0; i < original.Length; i++)
+                {
+                    samples[i].Should().BeApproximately(original[i], 0.0001f);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void ReadWavAsFloat_IntegerSource_Should_Normalize_Against_Its_Own_Bit_Depth()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, interleavedSamples: [32767, -32768, 0]);
+
+                var (samples, channels, sampleRate) = AudioCutter.ReadWavAsFloat(sourcePath);
+
+                channels.Should().Be(1);
+                sampleRate.Should().Be(8000);
+                samples[0].Should().BeApproximately(1.0f, 0.0001f);
+                samples[1].Should().BeApproximately(-1.0f, 0.0001f);
+                samples[2].Should().Be(0.0f);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithChannelRemixTransform_Should_Change_Destination_Channel_Count()
         {
             var tempDirectory = CreateTempDirectory();
