@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <NoWarn>CA1050</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EggEncoder\EggEncoder.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Reuses the FLAC codec's WAV fixture rather than duplicating a binary file — this project
+      only needs *a* valid WAV to round-trip through every codec path, not a codec-specific one.
+    -->
+    <None Include="..\EggEncoder.UnitTests\Codecs\Flac\sample.wav" Link="sample.wav" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
