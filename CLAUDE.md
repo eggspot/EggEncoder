@@ -32,7 +32,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 | `Aac/` | Pure managed AAC decoder/encoder + scale-factor/Huffman tables (`AacDecoder`, `AacFrameDecoder`, `AacEncoder`, `AacFrameEncoder`, `AacEncoderSession`, `AacTables`). `AacFrameDecoder` decodes one raw_data_block into PCM independent of ADTS framing, shared by `AacDecoder` (ADTS) and `MovDecoder` (MP4) |
 | `Flac/` | `FlacDecoder`/`FlacEncoder` — thin wrappers over native `libFLAC` P/Invoke bindings |
 | `Mp3/` | `Mp3Decoder` (via the `NLayer` managed decoder), `Mp3Encoder` (native `libmp3lame` P/Invoke), `Mp3Probe` (manual frame-header parsing, no native call) |
-| `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to |
+| `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to. Both support 8/16/24/32-bit integer and 32-bit IEEE float (`WavWriter.Create(..., isFloatFormat: true)`) |
 | `Wma/` | Pure managed WMAv2 decoder/encoder (`WmaDecoder`, `WmaEncoder`, `WmaEncoderSession`, `WmaFrameEncoder`) + `AsfContainerReader`/`AsfContainerWriter` (ASF/WMA container I/O) + `WmaTables` |
 | `Mov/` | `MovProbe` — MOV/MP4 metadata (duration/dimensions/codec); `MovDecoder` — decodes a mono AAC-LC 'soun' track via `stsd`/`esds`/sample-table demuxing (`Mp4EsdsParser`, `Mp4SampleTable`) and the shared `AacFrameDecoder`; `MovAtomReader` — shared atom-tree walker used by both |
 | `AudioCutter.cs` | Format-dispatching `Convert`/`Cut` used by `NativeEncoder`; defines the internal `IAudioSink` interface implemented by each codec's writer/session type |
@@ -63,6 +63,8 @@ A `PcmTransformPipeline` is an ordered list of `IPcmTransform`s run on each deco
 `Mix` (2+ same-format sources, per-input gain, silence-padded to the longest) decodes every input fully into memory — clip-length material, not multi-hour streams. `Concatenate` (2+ same-format sources) is fully streaming.
 
 Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fractional position, `FadeTransform`'s frame position, `PeakNormalizationTransform`'s measured gain) — build a fresh `PcmTransformPipeline` per `Convert`/`Cut`/`Mix` call rather than reusing one across multiple calls.
+
+**Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. Known limitation: `AudioCutter.Convert`/`Cut`/`Mix`/`Concatenate` do not preserve a WAV source's float-vs-integer format automatically (`WavReader.IsFloatFormat` isn't threaded through `AudioBlockDecodedCallback`, the shared decode delegate all 5 codecs use) — converting a float WAV through `Convert` always produces an integer PCM destination; use the float-specific entry points when a float destination is required.
 
 ### Native binary packaging
 
