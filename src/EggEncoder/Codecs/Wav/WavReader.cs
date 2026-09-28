@@ -186,13 +186,9 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
-        private static int Float32ToInt32(float sample)
-        {
-            // Widen to double before scaling: int.MaxValue isn't exactly representable as a float
-            // (it rounds up to 2^31), which would overflow the cast back to int for sample == 1f.
-            var clamped = Math.Clamp((double)sample, -1.0, 1.0);
-            return (int)(clamped * int.MaxValue);
-        }
+        // Delegates to FloatSampleConverter's shared conversion so a float WAV's NaN/Infinity/
+        // out-of-range samples are handled identically regardless of entry point -- see its doc comment.
+        private static int Float32ToInt32(float sample) => Pcm.FloatSampleConverter.ClampToNativeInt32(sample);
 
         public void Dispose()
         {

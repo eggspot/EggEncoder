@@ -70,7 +70,7 @@ public sealed class BitDepthFormatTransform : IPcmTransform
     /// <summary>
     /// The native (min, max) range for a given bit depth in this codebase's convention: signed,
     /// sign-extended to that bit depth (see this type's doc comment). Shared with
-    /// <see cref="EggEncoder.Codecs.AudioCutter.Mix"/>, which needs the same range to clamp a mixed-down sum.
+    /// <see cref="EggEncoder.Codecs.AudioCutter.Mix(System.Collections.Generic.IReadOnlyList{EggEncoder.Codecs.MixInput}, string)"/>, which needs the same range to clamp a mixed-down sum.
     /// </summary>
     public static (long Min, long Max) GetNativeRange(int bits)
     {

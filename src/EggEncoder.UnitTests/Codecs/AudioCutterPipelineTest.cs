@@ -205,6 +205,186 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithFloat32Destination_Should_Write_A_Float_Wav()
+        {
+            // Closes the "int PCM -> float WAV through the generic Convert API" gap: previously the only
+            // way to get a float destination was the float-specific WriteWavFromFloat entry point.
+            // Float32 requires a 32-bit source (WavWriter.Create enforces this -- see
+            // Convert_WithFloat32Destination_NonThirtyTwoBitSource_Should_Throw for the mismatched case);
+            // use a BitDepthFormatTransform pipeline to widen a non-32-bit source first.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 8000, bitsPerSample: 32, interleavedSamples: [1_000_000_000, -1_000_000_000, 0]);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.Float32);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsFloatFormat.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(32);
+
+                var buffer = new int[3];
+                reader.ReadInterleavedSamples(buffer, 3);
+                buffer[0].Should().BeCloseTo(1_000_000_000, 5); // re-quantized through actual float32 storage
+                buffer[2].Should().Be(0);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithFloat32Destination_NonThirtyTwoBitSource_Should_Throw()
+        {
+            // Float32 is only valid at 32-bit (see WavWriter.Create); a caller converting a non-32-bit
+            // source must widen it first (e.g. with a BitDepthFormatTransform pipeline).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 4, sampleRate: 8000); // 16-bit
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.Float32);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithFloat32Destination_ToNonWavExtension_Should_Throw()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 4, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.flac");
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.Float32);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_FloatWavSource_WithDefaultIntegerDestination_Should_Decode_Transparently()
+        {
+            // The other half of the format-boundary gap: a float WAV *source* has always decoded
+            // transparently into int PCM (WavReader.IsFloatFormat handles this on read); this locks that
+            // behavior in through the generic Convert API's default (Integer) destination format.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.CreateFloat32(sourcePath, channels: 1, sampleRate: 8000, [0.5f, -0.5f, 1.0f]);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsFloatFormat.Should().BeFalse();
+                reader.BitsPerSample.Should().Be(32);
+
+                var buffer = new int[3];
+                reader.ReadInterleavedSamples(buffer, 3);
+                buffer[0].Should().Be((int)(0.5 * int.MaxValue));
+                buffer[2].Should().Be(int.MaxValue);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WithFloat32DestinationOption_Should_Write_A_Float_Wav()
+        {
+            // Float32 requires a 32-bit source (WavWriter.Create enforces this); CreateRampWav is
+            // 16-bit, so widen it first via a BitDepthFormatTransform.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 10, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 0, endInSeconds: 1, new CutOptions
+                {
+                    Pipeline = new PcmTransformPipeline(new BitDepthFormatTransform(fromBits: 16, toBits: 32)),
+                    DestinationWavFormat = WavSampleFormat.Float32
+                });
+
+                produced.Should().BeTrue();
+                using var reader = WavReader.Open(destPath);
+                reader.IsFloatFormat.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(32);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Mix_WithFloat32Destination_Should_Write_A_Float_Wav()
+        {
+            // Float32 requires a 32-bit source (WavWriter.Create enforces this); Mix has no bit-depth
+            // conversion of its own, so the sources must already be 32-bit.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var firstPath = Path.Combine(tempDirectory, "first.wav");
+                var secondPath = Path.Combine(tempDirectory, "second.wav");
+                WavFileBuilder.Create(firstPath, channels: 1, sampleRate: 1000, bitsPerSample: 32, interleavedSamples: [1_000_000_000, 1_000_000_000]);
+                WavFileBuilder.Create(secondPath, channels: 1, sampleRate: 1000, bitsPerSample: 32, interleavedSamples: [500_000_000, -1_500_000_000]);
+                var destPath = Path.Combine(tempDirectory, "mixed.wav");
+
+                AudioCutter.Mix([new MixInput(firstPath), new MixInput(secondPath, Gain: 0.5)], destPath, WavSampleFormat.Float32);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsFloatFormat.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(32);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Concatenate_WithFloat32Destination_Should_Write_A_Float_Wav()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var firstPath = Path.Combine(tempDirectory, "first.wav");
+                var secondPath = Path.Combine(tempDirectory, "second.wav");
+                WavFileBuilder.Create(firstPath, channels: 1, sampleRate: 1000, bitsPerSample: 32, interleavedSamples: [1, 2, 3]);
+                WavFileBuilder.Create(secondPath, channels: 1, sampleRate: 1000, bitsPerSample: 32, interleavedSamples: [4, 5]);
+                var destPath = Path.Combine(tempDirectory, "concat.wav");
+
+                AudioCutter.Concatenate([firstPath, secondPath], destPath, WavSampleFormat.Float32);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsFloatFormat.Should().BeTrue();
+                reader.TotalSamples.Should().Be(5);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithChannelRemixTransform_Should_Change_Destination_Channel_Count()
         {
             var tempDirectory = CreateTempDirectory();

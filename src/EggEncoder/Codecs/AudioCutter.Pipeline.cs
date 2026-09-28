@@ -3,7 +3,7 @@ using EggEncoder.Pcm;
 
 namespace EggEncoder.Codecs
 {
-    /// <summary>One input to <see cref="AudioCutter.Mix"/>: a source file and its linear mix gain.</summary>
+    /// <summary>One input to <see cref="AudioCutter.Mix(System.Collections.Generic.IReadOnlyList{MixInput}, string)"/>: a source file and its linear mix gain.</summary>
     public readonly record struct MixInput(string FilePath, double Gain = 1.0);
 
     /// <summary>
@@ -24,6 +24,12 @@ namespace EggEncoder.Codecs
 
         /// <summary>Curve shape used by both the fade-in and fade-out.</summary>
         public FadeCurve FadeCurve { get; init; } = FadeCurve.Linear;
+
+        /// <summary>
+        /// Sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>); ignored for
+        /// every other destination format. Defaults to <see cref="WavSampleFormat.Integer"/>, the long-standing behavior.
+        /// </summary>
+        public WavSampleFormat DestinationWavFormat { get; init; } = WavSampleFormat.Integer;
     }
 
     public static partial class AudioCutter
@@ -40,6 +46,16 @@ namespace EggEncoder.Codecs
         /// reusing one pipeline instance across multiple calls will carry that state over between them.
         /// </remarks>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
+        {
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Convert(string, string, PcmTransformPipeline)"/>, but additionally selects the
+        /// on-disk sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>);
+        /// ignored for every other destination format.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
 
@@ -67,7 +83,7 @@ namespace EggEncoder.Codecs
                     // Opened only after the first successful Apply() call: if the pipeline rejects the
                     // source format (e.g. a mismatched ChannelRemixTransform), no destination file is
                     // ever created, instead of leaving a truncated header-only file behind.
-                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
+                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
 
@@ -144,7 +160,7 @@ namespace EggEncoder.Codecs
 
                         // Opened only after the first successful Apply() call -- see the Convert(pipeline)
                         // overload's matching comment.
-                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames);
+                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat);
                         destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                     });
 
@@ -177,6 +193,16 @@ namespace EggEncoder.Codecs
         /// material, not multi-hour streams.
         /// </summary>
         public static void Mix(IReadOnlyList<MixInput> inputs, string destFilePath)
+        {
+            Mix(inputs, destFilePath, WavSampleFormat.Integer);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Mix(IReadOnlyList{MixInput}, string)"/>, but additionally selects the on-disk
+        /// sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>); ignored
+        /// for every other destination format.
+        /// </summary>
+        public static void Mix(IReadOnlyList<MixInput> inputs, string destFilePath, WavSampleFormat destinationWavFormat)
         {
             ArgumentNullException.ThrowIfNull(inputs);
             if (inputs.Count < 2)
@@ -234,7 +260,7 @@ namespace EggEncoder.Codecs
 
             var totalFrames = maxSampleCount / channels;
 
-            using var destSink = OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames);
+            using var destSink = OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat);
 
             var offset = 0;
             while (offset < mixed.Length)
@@ -258,6 +284,16 @@ namespace EggEncoder.Codecs
         /// combined output is buffered in memory until the true total is known (see DeferredWavSink).
         /// </summary>
         public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath)
+        {
+            Concatenate(sourceFilePaths, destFilePath, WavSampleFormat.Integer);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Concatenate(IReadOnlyList{string}, string)"/>, but additionally selects the
+        /// on-disk sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>);
+        /// ignored for every other destination format.
+        /// </summary>
+        public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath, WavSampleFormat destinationWavFormat)
         {
             ArgumentNullException.ThrowIfNull(sourceFilePaths);
             if (sourceFilePaths.Count < 2)
@@ -290,7 +326,7 @@ namespace EggEncoder.Codecs
                             // count before every source has been decoded, so a WAV destination always
                             // defers (see OpenSinkForPipeline) -- Concatenate is fully streaming only for
                             // non-WAV destinations, whose encoder sessions don't need a frame count at all.
-                            destSink = OpenSinkForPipeline(destExtension, destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames: null);
+                            destSink = OpenSinkForPipeline(destExtension, destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames: null, destinationWavFormat);
                         }
                         else if (channels != expectedChannels || sampleRate != expectedSampleRate || bitsPerSample != expectedBitsPerSample)
                         {
@@ -338,16 +374,17 @@ namespace EggEncoder.Codecs
         // output frame count (exactTotalFrames has a value -- true whenever nothing in play can change frame
         // count, e.g. a pipeline with no resampling, or no pipeline at all), open the real WavWriter directly
         // instead of paying for DeferredWavSink's whole-file in-memory buffering.
-        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames)
+        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer)
         {
             if (destExtension != ".wav")
             {
-                return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0);
+                return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat);
             }
 
+            var isFloatFormat = destinationWavFormat == WavSampleFormat.Float32;
             return exactTotalFrames.HasValue
-                ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
-                : new DeferredWavSink(destFilePath, channels, sampleRate, bitsPerSample);
+                ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, isFloatFormat)
+                : new DeferredWavSink(destFilePath, channels, sampleRate, bitsPerSample, isFloatFormat);
         }
 
         private static (int[] Samples, int Channels, int SampleRate, int BitsPerSample) DecodeFully(string filePath)
@@ -451,15 +488,17 @@ namespace EggEncoder.Codecs
             private readonly int _channels;
             private readonly int _sampleRate;
             private readonly int _bitsPerSample;
+            private readonly bool _isFloatFormat;
             private readonly List<int[]> _chunks = [];
             private long _totalFrames;
 
-            public DeferredWavSink(string destFilePath, int channels, int sampleRate, int bitsPerSample)
+            public DeferredWavSink(string destFilePath, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat = false)
             {
                 _destFilePath = destFilePath;
                 _channels = channels;
                 _sampleRate = sampleRate;
                 _bitsPerSample = bitsPerSample;
+                _isFloatFormat = isFloatFormat;
             }
 
             public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -478,7 +517,7 @@ namespace EggEncoder.Codecs
 
             public void Finish()
             {
-                using var writer = WavWriter.Create(_destFilePath, _channels, _sampleRate, _bitsPerSample, _totalFrames);
+                using var writer = WavWriter.Create(_destFilePath, _channels, _sampleRate, _bitsPerSample, _totalFrames, _isFloatFormat);
                 foreach (var chunk in _chunks)
                 {
                     writer.WriteInterleavedSamples(chunk, chunk.Length / _channels);

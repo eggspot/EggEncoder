@@ -18,21 +18,40 @@ namespace EggEncoder.Pcm;
 public static class FloatSampleConverter
 {
     /// <summary>
-    /// Converts normalized float samples (expected range -1.0..1.0; out-of-range values are clamped,
-    /// matching how <c>WavReader</c> decodes a float WAV) into 32-bit-native-range int PCM, ready to
-    /// feed into a <see cref="PcmTransformPipeline"/> or an <c>AudioCutter</c> sink at
+    /// Converts normalized float samples (expected range -1.0..1.0) into 32-bit-native-range int PCM,
+    /// ready to feed into a <see cref="PcmTransformPipeline"/> or an <c>AudioCutter</c> sink at
     /// <c>bitsPerSample: 32</c>.
+    ///
+    /// <para>
+    /// Out-of-range values are clamped: <see cref="float.PositiveInfinity"/> and any value above 1.0
+    /// clamp to 1.0 (<see cref="int.MaxValue"/>), <see cref="float.NegativeInfinity"/> and any value
+    /// below -1.0 clamp to -1.0 (-<see cref="int.MaxValue"/>). <see cref="float.NaN"/> -- not a valid
+    /// sample under any convention, but not impossible to receive from a synthesized or third-party
+    /// source -- maps to 0 (digital silence) rather than propagating <see cref="double.NaN"/>'s
+    /// unspecified <see langword="int"/> conversion result (a plain <c>(int)double.NaN</c> cast is
+    /// undefined-ish by the C# spec and, in practice on .NET, evaluates to <see cref="int.MinValue"/> --
+    /// full-scale noise, not silence).
+    /// </para>
     /// </summary>
     public static int[] FromFloat(ReadOnlySpan<float> floatSamples)
     {
         var result = new int[floatSamples.Length];
         for (var i = 0; i < floatSamples.Length; i++)
         {
-            var clamped = Math.Clamp((double)floatSamples[i], -1.0, 1.0);
-            result[i] = (int)(clamped * int.MaxValue);
+            result[i] = ClampToNativeInt32(floatSamples[i]);
         }
 
         return result;
+    }
+
+    // Shared by FromFloat and WavReader's float-WAV decode path (see WavReader.Float32ToInt32) so both
+    // apply the identical NaN/Infinity/out-of-range convention.
+    internal static int ClampToNativeInt32(float sample)
+    {
+        if (float.IsNaN(sample)) return 0;
+
+        var clamped = Math.Clamp((double)sample, -1.0, 1.0);
+        return (int)(clamped * int.MaxValue);
     }
 
     /// <summary>
