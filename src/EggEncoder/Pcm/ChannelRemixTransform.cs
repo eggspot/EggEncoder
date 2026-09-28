@@ -23,6 +23,10 @@ public sealed class ChannelRemixTransform : IPcmTransform
             throw new ArgumentOutOfRangeException(nameof(outputChannels), outputChannels, "Channels must be positive");
         if (mixMode == ChannelRemixMode.PassThrough && inputChannels != outputChannels)
             throw new ArgumentException($"{nameof(ChannelRemixMode.PassThrough)} requires inputChannels == outputChannels, but got {inputChannels} and {outputChannels}");
+        if (mixMode == ChannelRemixMode.Downmix && inputChannels <= outputChannels)
+            throw new ArgumentException($"{nameof(ChannelRemixMode.Downmix)} requires inputChannels > outputChannels, but got {inputChannels} and {outputChannels}");
+        if (mixMode == ChannelRemixMode.UpMix && inputChannels >= outputChannels)
+            throw new ArgumentException($"{nameof(ChannelRemixMode.UpMix)} requires inputChannels < outputChannels, but got {inputChannels} and {outputChannels}");
 
         _inputChannels = inputChannels;
 

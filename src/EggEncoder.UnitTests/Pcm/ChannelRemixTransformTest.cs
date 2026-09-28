@@ -121,6 +121,53 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Apply_ExplicitDownmixMode_Should_Behave_Like_Auto_Downmix()
+        {
+            var transform = new ChannelRemixTransform(inputChannels: 4, outputChannels: 2, ChannelRemixMode.Downmix);
+            var buffer = new[] { 0, 100, 200, 300 };
+
+            var (outBuffer, frameCount) = transform.Apply(buffer, frameCount: 1, channels: 4, sampleRate: 44100, bitsPerSample: 16);
+
+            frameCount.Should().Be(1);
+            outBuffer.Should().Equal(50, 250);
+        }
+
+        [Fact]
+        public void Apply_ExplicitUpMixMode_Should_Behave_Like_Auto_Upmix()
+        {
+            var transform = new ChannelRemixTransform(inputChannels: 1, outputChannels: 4, ChannelRemixMode.UpMix);
+            var buffer = new[] { 500 };
+
+            var (outBuffer, frameCount) = transform.Apply(buffer, frameCount: 1, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            frameCount.Should().Be(1);
+            outBuffer.Should().Equal(500, 500, 500, 500);
+        }
+
+        [Theory]
+        [InlineData(2, 4)]  // fewer inputs than outputs -- not a downmix
+        [InlineData(2, 2)]  // equal channel counts -- not a downmix
+        public void Constructor_DownmixMode_With_InputChannels_Not_Greater_Than_Output_Should_Throw(int inputChannels, int outputChannels)
+        {
+            // Regression test: BuildMixMatrix used to dispatch purely on inCh-vs-outCh, silently ignoring
+            // an explicitly requested Downmix/UpMix that contradicted the channel-count relationship
+            // (e.g. Downmix with inCh < outCh would silently upmix instead).
+            var act = () => new ChannelRemixTransform(inputChannels, outputChannels, ChannelRemixMode.Downmix);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Theory]
+        [InlineData(4, 2)]  // fewer outputs than inputs -- not an upmix
+        [InlineData(2, 2)]  // equal channel counts -- not an upmix
+        public void Constructor_UpMixMode_With_InputChannels_Not_Less_Than_Output_Should_Throw(int inputChannels, int outputChannels)
+        {
+            var act = () => new ChannelRemixTransform(inputChannels, outputChannels, ChannelRemixMode.UpMix);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
         public void OutputChannels_Should_Reflect_Constructor_Argument()
         {
             var transform = new ChannelRemixTransform(inputChannels: 2, outputChannels: 1);
