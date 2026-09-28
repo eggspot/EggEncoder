@@ -678,6 +678,29 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Mix_DecodesInputsConcurrently_And_Surfaces_The_Original_Exception_Type()
+        {
+            // Regression guard: Mix decodes every input concurrently (Task.WaitAll), which by default
+            // wraps a faulted task's exception in AggregateException -- callers catching a specific
+            // exception type (e.g. FileNotFoundException) must still see exactly that, not a wrapper.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var existingPath = Path.Combine(tempDirectory, "first.wav");
+                WavFileBuilder.Create(existingPath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples: [1, 2]);
+                var missingPath = Path.Combine(tempDirectory, "missing.wav");
+
+                var act = () => AudioCutter.Mix([new MixInput(existingPath), new MixInput(missingPath)], Path.Combine(tempDirectory, "mixed.wav"));
+
+                act.Should().Throw<FileNotFoundException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Mix_FewerThanTwoInputs_Should_Throw()
         {
             var act = () => AudioCutter.Mix([new MixInput("only.wav")], "dest.wav");

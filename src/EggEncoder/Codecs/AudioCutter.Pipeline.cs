@@ -1,5 +1,6 @@
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
+using System.Runtime.ExceptionServices;
 
 namespace EggEncoder.Codecs
 {
@@ -211,11 +212,34 @@ namespace EggEncoder.Codecs
             }
 
             var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
-            var decoded = new (int[] Samples, int Channels, int SampleRate, int BitsPerSample)[inputs.Count];
 
+            // Each input is decoded independently (own reader, own local state), so this is safe to run
+            // concurrently -- decoding N clip-length files one at a time paid for N files' worth of I/O
+            // and CPU serially for no reason. Task.WaitAll wraps a faulted task in AggregateException;
+            // re-throw the original exception (type and stack trace intact) instead, so a caller catching
+            // e.g. FileNotFoundException still sees exactly that, matching the sequential behavior this
+            // replaces.
+            var decodeTasks = new Task<(int[] Samples, int Channels, int SampleRate, int BitsPerSample)>[inputs.Count];
             for (var i = 0; i < inputs.Count; i++)
             {
-                decoded[i] = DecodeFully(inputs[i].FilePath);
+                var filePath = inputs[i].FilePath;
+                decodeTasks[i] = Task.Run(() => DecodeFully(filePath));
+            }
+
+            try
+            {
+                Task.WaitAll(decodeTasks);
+            }
+            catch (AggregateException ex)
+            {
+                ExceptionDispatchInfo.Capture(ex.Flatten().InnerExceptions[0]).Throw();
+                throw;
+            }
+
+            var decoded = new (int[] Samples, int Channels, int SampleRate, int BitsPerSample)[inputs.Count];
+            for (var i = 0; i < inputs.Count; i++)
+            {
+                decoded[i] = decodeTasks[i].Result;
             }
 
             var channels = decoded[0].Channels;
