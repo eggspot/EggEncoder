@@ -91,6 +91,22 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Apply_FramesBeyondTotalFrames_Should_Hold_Steady_Instead_Of_Going_Negative()
+        {
+            // Defensive: this transform is meant to receive exactly totalFrames frames (CutOptions always
+            // arranges that), but it's public API -- a caller could drive more through it (e.g. via the
+            // generic Convert(pipeline) overload with a source longer than totalFrames). Without clamping,
+            // frames past the end compute a negative (or, for EqualPower, sign-oscillating) gain instead
+            // of holding steady.
+            var transform = new FadeTransform(totalFrames: 2, fadeOutFrames: 2);
+
+            var (outBuffer, _) = transform.Apply([1000, 1000, 1000, 1000], frameCount: 4, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            outBuffer[2].Should().Be(0);
+            outBuffer[3].Should().Be(0);
+        }
+
+        [Fact]
         public void Constructor_FadeFramesLongerThanTotal_Should_Clamp_Without_Throwing()
         {
             var transform = new FadeTransform(totalFrames: 2, fadeInFrames: 100);

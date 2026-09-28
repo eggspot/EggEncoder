@@ -95,7 +95,12 @@ public sealed class FadeTransform : IPcmTransform
     {
         if (totalFrames <= 0) return 1.0;
 
-        var t = (double)position / totalFrames;
+        // Clamp: this transform is meant to be fed exactly totalFrames frames (CutOptions always
+        // arranges that), but it's also public API, so guard against a caller driving more frames
+        // through it than that (e.g. via the generic Convert(pipeline) overload with a source longer
+        // than totalFrames) -- without this, framesFromEnd goes negative past the end, producing a
+        // negative (Linear) or sign-oscillating (EqualPower) gain instead of holding steady at 1.0.
+        var t = Math.Clamp((double)position / totalFrames, 0.0, 1.0);
         return curve switch
         {
             FadeCurve.Linear => t,

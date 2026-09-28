@@ -78,11 +78,12 @@ namespace EggEncoder.UnitTests.Codecs
                 WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples: [100, -32768, 200]);
                 var destPath = Path.Combine(tempDirectory, "dest.wav");
 
-                var peak = AudioCutter.MeasurePeakAmplitude(sourcePath);
+                var (peak, peakBitsPerSample) = AudioCutter.MeasurePeakAmplitude(sourcePath);
                 peak.Should().Be(32768);
+                peakBitsPerSample.Should().Be(16);
 
                 var normalize = new PeakNormalizationTransform(targetDb: 0.0);
-                normalize.MeasurePeak(peak);
+                normalize.MeasurePeak(peak, peakBitsPerSample);
 
                 AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(normalize));
 

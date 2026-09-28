@@ -23,6 +23,12 @@ namespace EggEncoder.Pcm;
 /// audio as a single block. Fixing it would require buffering the last pending output frame across
 /// Apply() calls (and a final flush once the stream ends), which the current IPcmTransform contract
 /// (no end-of-stream hook) doesn't support.
+///
+/// Each block's own output frame count is round(thisBlock'sFrameCount * ratio), computed
+/// independently per call rather than from a running cumulative total -- so for a stream split into
+/// many small or unevenly-sized blocks, per-block rounding can drift the total by a frame or so from
+/// what a single whole-stream pass would produce (in exchange for not needing to know the whole
+/// stream's length up front). With the default 4096-frame decode block size this drift is negligible.
 /// </summary>
 public sealed class ResamplingTransform : IPcmTransform
 {
@@ -64,7 +70,7 @@ public sealed class ResamplingTransform : IPcmTransform
         if (_ratio == 1.0 || frameCount <= 0) return (buffer, frameCount);
 
         var srcFrameCount = frameCount;
-        var dstFrameCount = (int)Math.Max(1, Math.Round(srcFrameCount * _ratio));
+        var dstFrameCount = (int)Math.Round(srcFrameCount * _ratio);
         var dstBuffer = new int[dstFrameCount * _channels];
 
         var srcPos = _streamPosition;
@@ -91,17 +97,24 @@ public sealed class ResamplingTransform : IPcmTransform
                 var srcNextBegin = (srcIdx + 1) * _channels;
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    var v0 = buffer[srcBegin + ch];
-                    var v1 = buffer[srcNextBegin + ch];
-                    var interp = (int)Math.Round(v0 + (v1 - v0) * srcFrac);
-                    dstBuffer[dstBegin + ch] = Math.Clamp(interp, int.MinValue, int.MaxValue);
+                    // Widen to double before subtracting: v1 - v0 as int can overflow int32 for
+                    // widely-separated 32-bit-depth samples (e.g. near int.MinValue and int.MaxValue).
+                    double v0 = buffer[srcBegin + ch];
+                    double v1 = buffer[srcNextBegin + ch];
+                    var interp = v0 + ((v1 - v0) * srcFrac);
+                    dstBuffer[dstBegin + ch] = (int)Math.Clamp(Math.Round(interp), int.MinValue, int.MaxValue);
                 }
             }
 
             srcPos += 1.0 / _ratio;
         }
 
-        _streamPosition = srcPos; // carry fractional position across blocks
+        // Rebase relative to the next block's frame indexing: the next Apply() call gets a fresh,
+        // zero-based buffer, so a position expressed in terms of *this* block's indices (e.g. 3.0
+        // after a 3-frame block) must become "0.0 into the next block", not carry forward unchanged
+        // (which would immediately overflow the new block's valid index range on the very first
+        // destination frame -- collapsing every subsequent block to a duplicated flat sample).
+        _streamPosition = srcPos - srcFrameCount;
         return (dstBuffer, dstFrameCount);
     }
 }

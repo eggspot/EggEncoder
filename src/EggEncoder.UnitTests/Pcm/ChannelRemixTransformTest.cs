@@ -54,6 +54,22 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Apply_ThreeToTwo_Downmix_Should_Not_DoubleCount_A_Boundary_Channel()
+        {
+            // Regression test: with inCh/outCh not evenly divisible, independently floor/ceil-ing each
+            // group's boundaries let a boundary channel land in two groups at once (e.g. the center
+            // channel counted toward both outputs), so its total contribution outweighed L/R's. Boundaries
+            // must instead partition every input channel into exactly one group.
+            var transform = new ChannelRemixTransform(inputChannels: 3, outputChannels: 2);
+            var buffer = new[] { 100, 200, 300 }; // L, C, R
+
+            var (outBuffer, frameCount) = transform.Apply(buffer, frameCount: 1, channels: 3, sampleRate: 44100, bitsPerSample: 16);
+
+            frameCount.Should().Be(1);
+            outBuffer.Should().Equal(150, 300); // group0 = avg(L,C); group1 = R alone
+        }
+
+        [Fact]
         public void Apply_OneToFour_Upmix_Should_Duplicate_Cyclically()
         {
             var transform = new ChannelRemixTransform(inputChannels: 1, outputChannels: 4);

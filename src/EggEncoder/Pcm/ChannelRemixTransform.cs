@@ -99,11 +99,17 @@ public sealed class ChannelRemixTransform : IPcmTransform
         }
         else if (inCh > outCh)
         {
-            // Downmix: equal-weight blend of input groups
+            // Downmix: equal-weight blend of non-overlapping input groups. Both boundaries of a group
+            // are rounded (not floor/ceil independently), so group j's end is exactly group j+1's
+            // start -- every input channel lands in exactly one group. (floor/ceil per group would let
+            // a boundary channel be double-counted, e.g. 3ch->2ch mapping the center channel into both
+            // outputs at full weight, when inCh isn't evenly divisible by outCh.) Group sizes can still
+            // differ by one channel when inCh doesn't divide evenly, so this isn't perfectly balanced
+            // for every ratio, but every channel contributes to exactly one output.
             for (var outIdx = 0; outIdx < outCh; outIdx++)
             {
-                var startIn = (int)Math.Floor((double)inCh * outIdx / outCh);
-                var endIn = (int)Math.Ceiling((double)inCh * (outIdx + 1) / outCh);
+                var startIn = (int)Math.Round((double)inCh * outIdx / outCh);
+                var endIn = (int)Math.Round((double)inCh * (outIdx + 1) / outCh);
                 var count = endIn - startIn;
                 var weight = 1.0f / count;
                 for (var i = startIn; i < endIn; i++)

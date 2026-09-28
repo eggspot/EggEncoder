@@ -44,7 +44,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - **`Native/`** — `FlacNative.cs`/`Mp3Native.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
-- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `IMediaEncoder` → `NativeEncoder` (scoped) and `IPcmTransformEncoder` → `NativeEncoder` (scoped, separate instance). `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
+- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `NativeEncoder` itself as scoped, then maps both `IMediaEncoder` and `IPcmTransformEncoder` to resolve that same scoped instance. `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
 
 ### PCM transform pipeline (`src/EggEncoder/Pcm/`)
 

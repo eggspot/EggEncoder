@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
+using EggEncoder.Pcm;
 
 namespace EggEncoder.Codecs
 {
@@ -18,76 +19,22 @@ namespace EggEncoder.Codecs
     {
         private const int FramesPerBlock = 4096;
 
+        /// <summary>
+        /// Delegates to the pipeline-aware overload with an empty pipeline, which for an empty pipeline
+        /// is exactly this method's original standalone implementation (verified: an empty
+        /// PcmTransformPipeline.Apply is a no-op passthrough, and ComputeOutputFormat with no transforms
+        /// returns the source format unchanged) -- kept as one implementation instead of two so a future
+        /// fix to the shared decode/sink lifecycle can't be applied to one path and missed in the other.
+        /// </summary>
         public static void Convert(string sourceFilePath, string destFilePath)
         {
-            var sourceExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
-            var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
-
-            IAudioSink? destSink = null;
-            var scratch = new ScratchBuffer();
-
-            try
-            {
-                DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                {
-                    destSink ??= OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalSamples);
-
-                    var buffer = scratch.CopyFrom(block);
-                    destSink.WriteInterleavedSamples(buffer, block.Length / channels);
-                });
-
-                destSink?.Finish();
-            }
-            finally
-            {
-                destSink?.Dispose();
-            }
+            Convert(sourceFilePath, destFilePath, new PcmTransformPipeline());
         }
 
+        /// <summary>Delegates to the pipeline-aware overload with empty CutOptions; see the Convert() overload's remarks.</summary>
         public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
-            var sourceExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
-            var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
-
-            IAudioSink? destSink = null;
-            var rangeComputed = false;
-            var startSample = 0L;
-            var endSample = 0L;
-            var currentFrame = 0L;
-            var scratch = new ScratchBuffer();
-
-            try
-            {
-                DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
-                {
-                    if (!rangeComputed)
-                    {
-                        (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);
-                        rangeComputed = true;
-
-                        if (startSample < endSample)
-                        {
-                            destSink = OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, endSample - startSample);
-                        }
-                    }
-
-                    if (destSink is null)
-                    {
-                        return;
-                    }
-
-                    ForwardOverlap(block, channels, currentFrame, startSample, endSample, scratch, destSink.WriteInterleavedSamples);
-                    currentFrame += block.Length / channels;
-                });
-
-                destSink?.Finish();
-            }
-            finally
-            {
-                destSink?.Dispose();
-            }
-
-            return destSink is not null;
+            return Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, new CutOptions());
         }
 
         private static void DecodeSource(string sourceFilePath, string sourceExtension, AudioBlockDecodedCallback onBlockDecoded)

@@ -336,24 +336,25 @@ namespace EggEncoder.Codecs
 
         /// <summary>
         /// Decodes <paramref name="sourceFilePath"/> fully to find its peak absolute sample value, for use
-        /// with <see cref="PeakNormalizationTransform.MeasurePeak(long)"/> to get a true whole-file
-        /// measurement into a pipeline that will otherwise only ever see one decode block at a time.
+        /// with <see cref="PeakNormalizationTransform.MeasurePeak(long, int)"/> to get a true whole-file
+        /// measurement into a pipeline that will otherwise only ever see one decode block at a time. The
+        /// returned bit depth is the source's own -- pass it straight through to MeasurePeak so it can
+        /// tell whether a later transform in the same pipeline has since changed the scale.
         /// </summary>
-        public static long MeasurePeakAmplitude(string sourceFilePath)
+        public static (long Peak, int BitsPerSample) MeasurePeakAmplitude(string sourceFilePath)
         {
             var extension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
             var maxAbs = 0L;
+            var bitsPerSample = 0;
 
-            DecodeSource(sourceFilePath, extension, (block, _, _, _, _) =>
+            DecodeSource(sourceFilePath, extension, (block, _, _, blockBitsPerSample, _) =>
             {
-                foreach (var sample in block)
-                {
-                    var abs = Math.Abs((long)sample);
-                    if (abs > maxAbs) maxAbs = abs;
-                }
+                bitsPerSample = blockBitsPerSample;
+                var blockMax = PeakNormalizationTransform.ComputeMaxAbsoluteSample(block);
+                if (blockMax > maxAbs) maxAbs = blockMax;
             });
 
-            return maxAbs;
+            return (maxAbs, bitsPerSample);
         }
 
         // Buffers written samples in memory and only opens the real WavWriter (which needs an exact frame
