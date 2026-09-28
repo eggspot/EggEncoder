@@ -32,6 +32,7 @@ public sealed class BitDepthFormatTransform : IPcmTransform
     public int OutputSampleRate => 0;   // passthrough — preserves input rate
     public int OutputChannels => 0;     // passthrough — preserves input channels
     public int OutputBitsPerSample => _toBits;
+    public bool CanChangeFrameCount => false;
 
     public (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample)
     {
@@ -53,8 +54,7 @@ public sealed class BitDepthFormatTransform : IPcmTransform
             var shift = _fromBits - _toBits;
             var divisor = 1L << shift;
             var half = divisor / 2;
-            var min = -(1 << (_toBits - 1));
-            var max = (1 << (_toBits - 1)) - 1;
+            var (min, max) = GetNativeRange(_toBits);
             for (var i = 0; i < n; i++)
             {
                 // Widen to long first: value + half can overflow int32 when value is near int.MaxValue.
@@ -65,6 +65,17 @@ public sealed class BitDepthFormatTransform : IPcmTransform
         }
 
         return (buffer, frameCount);
+    }
+
+    /// <summary>
+    /// The native (min, max) range for a given bit depth in this codebase's convention: signed,
+    /// sign-extended to that bit depth (see this type's doc comment). Shared with
+    /// <see cref="EggEncoder.Codecs.AudioCutter.Mix"/>, which needs the same range to clamp a mixed-down sum.
+    /// </summary>
+    public static (long Min, long Max) GetNativeRange(int bits)
+    {
+        ValidateBitDepth(bits, nameof(bits));
+        return (-(1L << (bits - 1)), (1L << (bits - 1)) - 1);
     }
 
     private static void ValidateBitDepth(int bits, string paramName)

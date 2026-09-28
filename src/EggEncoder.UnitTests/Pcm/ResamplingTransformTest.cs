@@ -134,5 +134,22 @@ namespace EggEncoder.UnitTests.Pcm
             transform.OutputChannels.Should().Be(2);
             transform.OutputBitsPerSample.Should().Be(0);
         }
+
+        [Fact]
+        public void CanChangeFrameCount_Should_Be_False_When_Rates_Are_Equal()
+        {
+            new ResamplingTransform(sourceRate: 44100, targetRate: 44100, channels: 1).CanChangeFrameCount.Should().BeFalse();
+            new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 1).CanChangeFrameCount.Should().BeTrue();
+        }
+
+        [Fact]
+        public void Apply_ZeroFrameCount_Should_Return_Empty_Without_Throwing()
+        {
+            var transform = new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 1);
+
+            var act = () => transform.Apply([], frameCount: 0, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            act.Should().NotThrow();
+        }
     }
 }

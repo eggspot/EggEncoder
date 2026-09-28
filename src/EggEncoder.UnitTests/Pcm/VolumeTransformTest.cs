@@ -101,6 +101,31 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void PeakNormalization_MeasurePeakFromKnownValue_Should_Fix_Gain_Without_A_Buffer()
+        {
+            // The correct way to get a true whole-file measurement into a block-by-block pipeline: measure
+            // the peak once (e.g. via AudioCutter.MeasurePeakAmplitude) and hand the scalar in directly.
+            var transform = new PeakNormalizationTransform(targetDb: 0.0);
+            transform.MeasurePeak(2_000_000L);
+
+            var (outBuffer, _) = transform.Apply([100], frameCount: 1, channels: 1, sampleRate: 44100, bitsPerSample: 32);
+
+            var expectedGain = (double)int.MaxValue / 2_000_000;
+            outBuffer[0].Should().Be((int)Math.Clamp(100 * expectedGain, int.MinValue, int.MaxValue));
+        }
+
+        [Fact]
+        public void PeakNormalization_MeasurePeakFromKnownValue_Zero_Should_Leave_Gain_At_One()
+        {
+            var transform = new PeakNormalizationTransform(targetDb: -1.0);
+            transform.MeasurePeak(0L);
+
+            var (outBuffer, _) = transform.Apply([0, 0], frameCount: 2, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            outBuffer.Should().OnlyContain(sample => sample == 0);
+        }
+
+        [Fact]
         public void PeakNormalization_PositiveTargetDb_Should_Throw()
         {
             var act = () => new PeakNormalizationTransform(targetDb: 0.1);

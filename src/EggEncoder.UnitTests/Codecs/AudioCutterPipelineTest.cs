@@ -39,6 +39,70 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithVolumeTransform_SpanningMultipleDecodeBlocks_Should_Write_Every_Frame()
+        {
+            // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this
+            // exercises the direct-WavWriter path (opened once with the exact known total up front) across
+            // more than one WriteInterleavedSamples call, rather than DeferredWavSink's buffer-then-flush.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, samples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 5000, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var reader = WavReader.Open(destPath);
+                reader.TotalSamples.Should().Be(5000);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, 5000);
+                buffer.Should().Equal(samples.Select(s => s * 2));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void MeasurePeakAmplitude_Then_PeakNormalization_Should_Normalize_By_The_True_WholeFile_Peak()
+        {
+            // The documented correct usage for peak normalization through a block-by-block pipeline:
+            // measure the true whole-file peak first, then hand it to the transform before the pipeline
+            // ever sees a single decode block.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples: [100, -32768, 200]);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                var peak = AudioCutter.MeasurePeakAmplitude(sourcePath);
+                peak.Should().Be(32768);
+
+                var normalize = new PeakNormalizationTransform(targetDb: 0.0);
+                normalize.MeasurePeak(peak);
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(normalize));
+
+                using var reader = WavReader.Open(destPath);
+                reader.BitsPerSample.Should().Be(16);
+                var buffer = new int[3];
+                reader.ReadInterleavedSamples(buffer, 3);
+
+                // Gain is computed against the 16-bit native range (-32768..32767), not a fixed 32-bit
+                // scale -- otherwise this would blow the samples miles outside what a 16-bit WAV can hold.
+                var expectedGain = 1.0 * 32767 / peak;
+                buffer[1].Should().Be((int)Math.Clamp(-32768 * expectedGain, -32768, 32767));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithResamplingTransform_Should_Produce_Exact_Frame_Count_For_A_Single_Block()
         {
             var tempDirectory = CreateTempDirectory();

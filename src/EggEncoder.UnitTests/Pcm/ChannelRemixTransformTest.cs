@@ -86,6 +86,25 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Apply_IdentityPassthrough_MismatchedActualChannelCount_Should_Also_Throw()
+        {
+            // Identity (in == out, Auto mode) skips the mix matrix, but must still validate the actual
+            // channel count -- a mismatched pipeline stage shouldn't silently pass corrupt data through.
+            var transform = new ChannelRemixTransform(inputChannels: 2, outputChannels: 2);
+            var act = () => transform.Apply([1, 2, 3], frameCount: 1, channels: 3, sampleRate: 44100, bitsPerSample: 16);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Constructor_PassThroughMode_With_Mismatched_Channels_Should_Throw()
+        {
+            var act = () => new ChannelRemixTransform(inputChannels: 2, outputChannels: 4, ChannelRemixMode.PassThrough);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
         public void OutputChannels_Should_Reflect_Constructor_Argument()
         {
             var transform = new ChannelRemixTransform(inputChannels: 2, outputChannels: 1);
@@ -93,6 +112,7 @@ namespace EggEncoder.UnitTests.Pcm
             transform.OutputChannels.Should().Be(1);
             transform.OutputSampleRate.Should().Be(0);
             transform.OutputBitsPerSample.Should().Be(0);
+            transform.CanChangeFrameCount.Should().BeFalse();
         }
     }
 }

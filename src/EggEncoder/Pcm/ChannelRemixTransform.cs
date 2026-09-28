@@ -8,6 +8,7 @@ namespace EggEncoder.Pcm;
 /// </summary>
 public sealed class ChannelRemixTransform : IPcmTransform
 {
+    private readonly int _inputChannels;
     private readonly int _outputChannels;
     private readonly float[,]? _mixMatrix;
 
@@ -16,8 +17,14 @@ public sealed class ChannelRemixTransform : IPcmTransform
     /// <param name="mixMode">How to handle channel mapping (downmix, upmix, or auto).</param>
     public ChannelRemixTransform(int inputChannels, int outputChannels, ChannelRemixMode mixMode = ChannelRemixMode.Auto)
     {
-        if (inputChannels <= 0 || outputChannels <= 0)
-            throw new ArgumentOutOfRangeException("Channels must be positive");
+        if (inputChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(inputChannels), inputChannels, "Channels must be positive");
+        if (outputChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(outputChannels), outputChannels, "Channels must be positive");
+        if (mixMode == ChannelRemixMode.PassThrough && inputChannels != outputChannels)
+            throw new ArgumentException($"{nameof(ChannelRemixMode.PassThrough)} requires inputChannels == outputChannels, but got {inputChannels} and {outputChannels}");
+
+        _inputChannels = inputChannels;
 
         // Identity remix — passthrough, no mixing needed
         if (inputChannels == outputChannels && mixMode == ChannelRemixMode.Auto)
@@ -34,15 +41,16 @@ public sealed class ChannelRemixTransform : IPcmTransform
     public int OutputSampleRate => 0;   // passthrough — preserves input rate
     public int OutputChannels => _outputChannels;
     public int OutputBitsPerSample => 0;
+    public bool CanChangeFrameCount => false;
 
     public (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample)
     {
+        if (channels != _inputChannels)
+            throw new ArgumentException($"ChannelRemixTransform expects {_inputChannels} input channels but received {channels}", nameof(channels));
+
         // Identity passthrough
         if (_mixMatrix == null)
             return (buffer, frameCount);
-
-        if (channels != _mixMatrix.GetLength(1))
-            throw new ArgumentException($"ChannelRemixTransform expects {_mixMatrix.GetLength(1)} input channels but received {channels}", nameof(channels));
 
         var dstFrameCount = frameCount;
         var dstSampleCount = dstFrameCount * _outputChannels;
@@ -57,7 +65,7 @@ public sealed class ChannelRemixTransform : IPcmTransform
             {
                 var sum = 0.0;
                 for (var inCh = 0; inCh < channels; inCh++)
-                    sum += buffer[srcBegin + inCh] * _mixMatrix[outCh, inCh];
+                    sum += buffer[srcBegin + inCh] * (double)_mixMatrix[outCh, inCh];
 
                 dstBuffer[dstBegin + outCh] = (int)Math.Round(sum);
             }

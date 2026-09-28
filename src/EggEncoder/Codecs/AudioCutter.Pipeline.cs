@@ -56,7 +56,7 @@ namespace EggEncoder.Codecs
                     if (destSink is null)
                     {
                         var (outChannels, outSampleRate, outBitsPerSample) = pipeline.ComputeOutputFormat(channels, sampleRate, bitsPerSample);
-                        destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample);
+                        destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
                     }
 
                     var scratchBuffer = scratch.CopyFrom(block);
@@ -107,7 +107,7 @@ namespace EggEncoder.Codecs
                             effectivePipeline = BuildCutPipeline(options, retainedFrames, sampleRate);
 
                             var (outChannels, outSampleRate, outBitsPerSample) = effectivePipeline.ComputeOutputFormat(channels, sampleRate, bitsPerSample);
-                            destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample);
+                            destSink = OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames);
                         }
                     }
 
@@ -190,7 +190,7 @@ namespace EggEncoder.Codecs
                 }
             }
 
-            var (minValue, maxValue) = GetNativeRange(bitsPerSample);
+            var (minValue, maxValue) = BitDepthFormatTransform.GetNativeRange(bitsPerSample);
             var mixed = new int[maxSampleCount];
             for (var i = 0; i < maxSampleCount; i++)
             {
@@ -216,8 +216,11 @@ namespace EggEncoder.Codecs
 
         /// <summary>
         /// Concatenates two or more same-format (matching channels, sample rate, and bit depth) source files,
-        /// in order, into one destination file. Fully streaming: sources are decoded and written one block
-        /// at a time, never held fully in memory.
+        /// in order, into one destination file. Sources are decoded and written one block at a time; for
+        /// every destination format except WAV that's fully streaming with nothing held fully in memory. A
+        /// WAV destination is the exception: since WavWriter needs an exact frame count when it's created and
+        /// Concatenate has no cheap way to learn the combined total before every source has been decoded, the
+        /// combined output is buffered in memory until the true total is known (see DeferredWavSink).
         /// </summary>
         public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath)
         {
@@ -248,7 +251,11 @@ namespace EggEncoder.Codecs
                             expectedChannels = channels;
                             expectedSampleRate = sampleRate;
                             expectedBitsPerSample = bitsPerSample;
-                            destSink = OpenSinkForPipeline(destExtension, destFilePath, channels, sampleRate, bitsPerSample);
+                            // Unlike Convert/Cut, there's no cheap way to know the combined total frame
+                            // count before every source has been decoded, so a WAV destination always
+                            // defers (see OpenSinkForPipeline) -- Concatenate is fully streaming only for
+                            // non-WAV destinations, whose encoder sessions don't need a frame count at all.
+                            destSink = OpenSinkForPipeline(destExtension, destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames: null);
                         }
                         else if (channels != expectedChannels || sampleRate != expectedSampleRate || bitsPerSample != expectedBitsPerSample)
                         {
@@ -291,14 +298,21 @@ namespace EggEncoder.Codecs
         }
 
         // Only WavWriter needs an exact frame count up front (it writes a fixed-size RIFF header at Create
-        // time with no patch-up on Finish). Every other sink format ignores the count, so a pipeline that
-        // changes frame count (resampling) can stream straight through for those formats. For WAV, defer
-        // opening the real writer until Finish(), once the true output frame count is known.
-        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample)
+        // time with no patch-up on Finish). Every other sink format ignores the count, so it always streams
+        // straight through regardless of exactTotalFrames. For WAV: if the caller already knows the exact
+        // output frame count (exactTotalFrames has a value -- true whenever nothing in play can change frame
+        // count, e.g. a pipeline with no resampling, or no pipeline at all), open the real WavWriter directly
+        // instead of paying for DeferredWavSink's whole-file in-memory buffering.
+        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames)
         {
-            return destExtension == ".wav"
-                ? new DeferredWavSink(destFilePath, channels, sampleRate, bitsPerSample)
-                : OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0);
+            if (destExtension != ".wav")
+            {
+                return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0);
+            }
+
+            return exactTotalFrames.HasValue
+                ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
+                : new DeferredWavSink(destFilePath, channels, sampleRate, bitsPerSample);
         }
 
         private static (int[] Samples, int Channels, int SampleRate, int BitsPerSample) DecodeFully(string filePath)
@@ -320,14 +334,27 @@ namespace EggEncoder.Codecs
             return ([.. samples], channels, sampleRate, bitsPerSample);
         }
 
-        private static (long Min, long Max) GetNativeRange(int bitsPerSample) => bitsPerSample switch
+        /// <summary>
+        /// Decodes <paramref name="sourceFilePath"/> fully to find its peak absolute sample value, for use
+        /// with <see cref="PeakNormalizationTransform.MeasurePeak(long)"/> to get a true whole-file
+        /// measurement into a pipeline that will otherwise only ever see one decode block at a time.
+        /// </summary>
+        public static long MeasurePeakAmplitude(string sourceFilePath)
         {
-            8 => (-128L, 127L),
-            16 => (-32768L, 32767L),
-            24 => (-8388608L, 8388607L),
-            32 => (int.MinValue, int.MaxValue),
-            _ => throw new NotSupportedException($"Unsupported bit depth: {bitsPerSample}")
-        };
+            var extension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
+            var maxAbs = 0L;
+
+            DecodeSource(sourceFilePath, extension, (block, _, _, _, _) =>
+            {
+                foreach (var sample in block)
+                {
+                    var abs = Math.Abs((long)sample);
+                    if (abs > maxAbs) maxAbs = abs;
+                }
+            });
+
+            return maxAbs;
+        }
 
         // Buffers written samples in memory and only opens the real WavWriter (which needs an exact frame
         // count up front) once Finish() reports the true total. See OpenSinkForPipeline.

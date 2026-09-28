@@ -34,8 +34,9 @@ public sealed class ResamplingTransform : IPcmTransform
 
     public ResamplingTransform(int sourceRate, int targetRate, int channels)
     {
-        if (sourceRate <= 0 || targetRate <= 0) throw new ArgumentOutOfRangeException("Sample rates must be positive");
-        if (channels <= 0) throw new ArgumentOutOfRangeException(nameof(channels), "Channels must be positive");
+        if (sourceRate <= 0) throw new ArgumentOutOfRangeException(nameof(sourceRate), sourceRate, "Sample rates must be positive");
+        if (targetRate <= 0) throw new ArgumentOutOfRangeException(nameof(targetRate), targetRate, "Sample rates must be positive");
+        if (channels <= 0) throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channels must be positive");
 
         _sourceRate = sourceRate;
         _targetRate = targetRate;
@@ -46,6 +47,7 @@ public sealed class ResamplingTransform : IPcmTransform
     public int OutputSampleRate => _targetRate;
     public int OutputChannels => _channels;
     public int OutputBitsPerSample => 0;
+    public bool CanChangeFrameCount => _ratio != 1.0;
 
     /// <summary>Reset the cross-block fractional position tracker. Call at the start of a new stream.</summary>
     public void Reset()
@@ -59,7 +61,7 @@ public sealed class ResamplingTransform : IPcmTransform
             throw new ArgumentException($"Expected {_channels} channels but received {channels}", nameof(channels));
         if (sampleRate != _sourceRate)
             throw new ArgumentException($"Expected {_sourceRate} Hz but received {sampleRate} Hz", nameof(sampleRate));
-        if (_ratio == 1.0) return (buffer, frameCount);
+        if (_ratio == 1.0 || frameCount <= 0) return (buffer, frameCount);
 
         var srcFrameCount = frameCount;
         var dstFrameCount = (int)Math.Max(1, Math.Round(srcFrameCount * _ratio));

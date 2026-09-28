@@ -29,9 +29,9 @@ public sealed class FadeTransform : IPcmTransform
         long fadeOutFrames = 0,
         FadeCurve curve = FadeCurve.Linear)
     {
-        if (totalFrames < 0) throw new ArgumentOutOfRangeException(nameof(totalFrames), "Total frame count must be non-negative");
-        if (fadeInFrames < 0 || fadeOutFrames < 0)
-            throw new ArgumentOutOfRangeException("Fade frame counts must be non-negative");
+        if (totalFrames < 0) throw new ArgumentOutOfRangeException(nameof(totalFrames), totalFrames, "Total frame count must be non-negative");
+        if (fadeInFrames < 0) throw new ArgumentOutOfRangeException(nameof(fadeInFrames), fadeInFrames, "Fade frame counts must be non-negative");
+        if (fadeOutFrames < 0) throw new ArgumentOutOfRangeException(nameof(fadeOutFrames), fadeOutFrames, "Fade frame counts must be non-negative");
 
         _totalFrames = totalFrames;
         _fadeInFrames = Math.Min(fadeInFrames, totalFrames);
@@ -42,6 +42,7 @@ public sealed class FadeTransform : IPcmTransform
     public int OutputSampleRate => 0;   // passthrough — preserves input rate
     public int OutputChannels => 0;     // passthrough — preserves input channels
     public int OutputBitsPerSample => 0;
+    public bool CanChangeFrameCount => false;
 
     /// <summary>Reset the cross-block frame position tracker. Call at the start of a new stream.</summary>
     public void Reset()
