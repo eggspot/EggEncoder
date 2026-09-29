@@ -680,9 +680,10 @@ namespace EggEncoder.UnitTests.Codecs
         [Fact]
         public void Mix_DecodesInputsConcurrently_And_Surfaces_The_Original_Exception_Type()
         {
-            // Regression guard: Mix decodes every input concurrently (Task.WaitAll), which by default
-            // wraps a faulted task's exception in AggregateException -- callers catching a specific
-            // exception type (e.g. FileNotFoundException) must still see exactly that, not a wrapper.
+            // Regression guard: Mix decodes every input concurrently (Parallel.For), which would
+            // otherwise let a faulted iteration's exception escape wrapped in AggregateException --
+            // callers catching a specific exception type (e.g. FileNotFoundException) must still see
+            // exactly that, not a wrapper.
             var tempDirectory = CreateTempDirectory();
             try
             {
@@ -693,6 +694,37 @@ namespace EggEncoder.UnitTests.Codecs
                 var act = () => AudioCutter.Mix([new MixInput(existingPath), new MixInput(missingPath)], Path.Combine(tempDirectory, "mixed.wav"));
 
                 act.Should().Throw<FileNotFoundException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Mix_WithMultipleFailingInputs_Should_Surface_The_FirstByIndex_Failure_Deterministically()
+        {
+            // Regression test: concurrent decode must not let whichever input's task happens to fault
+            // first (an artifact of thread-pool scheduling) determine which exception surfaces --
+            // matching the old sequential behavior, which always failed on the first bad input by index.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var existingPath = Path.Combine(tempDirectory, "first.wav");
+                WavFileBuilder.Create(existingPath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples: [1, 2]);
+                var missingPath = Path.Combine(tempDirectory, "missing.wav"); // index 1: FileNotFoundException
+                var unsupportedExtensionPath = Path.Combine(tempDirectory, "third.ogg"); // index 2: NotSupportedException
+
+                var act = () => AudioCutter.Mix(
+                    [new MixInput(existingPath), new MixInput(missingPath), new MixInput(unsupportedExtensionPath)],
+                    Path.Combine(tempDirectory, "mixed.wav"));
+
+                // Repeated to make a scheduling-order-dependent failure (i.e. the bug this guards against)
+                // very unlikely to pass by chance.
+                for (var i = 0; i < 20; i++)
+                {
+                    act.Should().Throw<FileNotFoundException>();
+                }
             }
             finally
             {

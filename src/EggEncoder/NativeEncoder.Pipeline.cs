@@ -7,6 +7,11 @@ namespace EggEncoder
     {
         public Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
         {
+            return ConvertFile(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer);
+        }
+
+        public Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat)
+        {
             ArgumentNullException.ThrowIfNull(pipeline);
 
             try
@@ -14,7 +19,7 @@ namespace EggEncoder
                 LogInformation($"Start native pipeline convert '{sourceFilePath}' to '{destFilePath}'");
 
                 EnsureDestinationDirectory(destFilePath);
-                AudioCutter.Convert(sourceFilePath, destFilePath, pipeline);
+                AudioCutter.Convert(sourceFilePath, destFilePath, pipeline, destinationWavFormat);
 
                 LogInformation($"Completed native pipeline convert '{sourceFilePath}' to '{destFilePath}'");
 
@@ -53,6 +58,11 @@ namespace EggEncoder
 
         public Task MixFiles(IReadOnlyList<MixInput> inputs, string destFilePath)
         {
+            return MixFiles(inputs, destFilePath, WavSampleFormat.Integer);
+        }
+
+        public Task MixFiles(IReadOnlyList<MixInput> inputs, string destFilePath, WavSampleFormat destinationWavFormat)
+        {
             ArgumentNullException.ThrowIfNull(inputs);
 
             try
@@ -60,7 +70,7 @@ namespace EggEncoder
                 LogInformation($"Start native mix of {inputs.Count} inputs to '{destFilePath}'");
 
                 EnsureDestinationDirectory(destFilePath);
-                AudioCutter.Mix(inputs, destFilePath);
+                AudioCutter.Mix(inputs, destFilePath, destinationWavFormat);
 
                 LogInformation($"Completed native mix to '{destFilePath}'");
 
@@ -75,6 +85,11 @@ namespace EggEncoder
 
         public Task ConcatenateFiles(IReadOnlyList<string> sourceFilePaths, string destFilePath)
         {
+            return ConcatenateFiles(sourceFilePaths, destFilePath, WavSampleFormat.Integer);
+        }
+
+        public Task ConcatenateFiles(IReadOnlyList<string> sourceFilePaths, string destFilePath, WavSampleFormat destinationWavFormat)
+        {
             ArgumentNullException.ThrowIfNull(sourceFilePaths);
 
             try
@@ -82,7 +97,7 @@ namespace EggEncoder
                 LogInformation($"Start native concatenate of {sourceFilePaths.Count} sources to '{destFilePath}'");
 
                 EnsureDestinationDirectory(destFilePath);
-                AudioCutter.Concatenate(sourceFilePaths, destFilePath);
+                AudioCutter.Concatenate(sourceFilePaths, destFilePath, destinationWavFormat);
 
                 LogInformation($"Completed native concatenate to '{destFilePath}'");
 

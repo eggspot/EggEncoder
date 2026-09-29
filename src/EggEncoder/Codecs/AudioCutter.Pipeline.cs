@@ -38,13 +38,19 @@ namespace EggEncoder.Codecs
         /// <summary>
         /// Same as <see cref="Convert(string, string)"/>, but runs every decoded block through
         /// <paramref name="pipeline"/> before it reaches the destination sink. The destination sink is opened
-        /// using the pipeline's final (channels, sample rate, bit depth), computed from the source's format
-        /// before the first block arrives.
+        /// lazily, after the first block successfully passes through <paramref name="pipeline"/>, using that
+        /// call's actual returned (channels, sample rate, bit depth) -- so a pipeline that rejects the source
+        /// format (e.g. a mismatched <see cref="EggEncoder.Pcm.ChannelRemixTransform"/>) never creates a
+        /// destination file at all.
         /// </summary>
         /// <remarks>
         /// <paramref name="pipeline"/> is intended for a single Convert/Cut call: transforms such as
-        /// <see cref="ResamplingTransform"/> and <see cref="FadeTransform"/> carry state across blocks, so
-        /// reusing one pipeline instance across multiple calls will carry that state over between them.
+        /// <see cref="ResamplingTransform"/> and <see cref="FadeTransform"/> carry state across blocks. Reusing
+        /// one pipeline instance across multiple calls doesn't just carry that state over -- since
+        /// <see cref="PcmTransformPipeline.Flush"/> now runs automatically at the end of each call, a second
+        /// call against a pipeline containing <see cref="ResamplingTransform"/> (or any transform overriding
+        /// <see cref="IPcmTransform.Flush"/>) throws <see cref="InvalidOperationException"/> instead of silently
+        /// producing wrong output. Build a fresh <see cref="PcmTransformPipeline"/> per call.
         /// </remarks>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
         {
@@ -215,31 +221,36 @@ namespace EggEncoder.Codecs
 
             // Each input is decoded independently (own reader, own local state), so this is safe to run
             // concurrently -- decoding N clip-length files one at a time paid for N files' worth of I/O
-            // and CPU serially for no reason. Task.WaitAll wraps a faulted task in AggregateException;
-            // re-throw the original exception (type and stack trace intact) instead, so a caller catching
-            // e.g. FileNotFoundException still sees exactly that, matching the sequential behavior this
-            // replaces.
-            var decodeTasks = new Task<(int[] Samples, int Channels, int SampleRate, int BitsPerSample)>[inputs.Count];
-            for (var i = 0; i < inputs.Count; i++)
-            {
-                var filePath = inputs[i].FilePath;
-                decodeTasks[i] = Task.Run(() => DecodeFully(filePath));
-            }
-
-            try
-            {
-                Task.WaitAll(decodeTasks);
-            }
-            catch (AggregateException ex)
-            {
-                ExceptionDispatchInfo.Capture(ex.Flatten().InnerExceptions[0]).Throw();
-                throw;
-            }
-
+            // and CPU serially for no reason. Parallel.For bounds concurrency to a sane degree (unlike
+            // firing one unbounded Task.Run per input) and still keeps every input fully in memory at
+            // once, same as the old sequential version's memory profile once all N are decoded.
+            //
+            // A per-index failure array (rather than letting an exception escape the loop body, which
+            // Parallel.For would wrap in AggregateException) lets the first *input-order* failure be
+            // re-thrown afterward with its original type and stack trace intact -- matching the
+            // sequential behavior this replaces (which always failed on the first bad input by index,
+            // not whichever one happened to fault first under concurrent execution).
             var decoded = new (int[] Samples, int Channels, int SampleRate, int BitsPerSample)[inputs.Count];
-            for (var i = 0; i < inputs.Count; i++)
+            var failures = new Exception?[inputs.Count];
+
+            Parallel.For(0, inputs.Count, i =>
             {
-                decoded[i] = decodeTasks[i].Result;
+                try
+                {
+                    decoded[i] = DecodeFully(inputs[i].FilePath);
+                }
+                catch (Exception ex)
+                {
+                    failures[i] = ex;
+                }
+            });
+
+            foreach (var failure in failures)
+            {
+                if (failure is not null)
+                {
+                    ExceptionDispatchInfo.Capture(failure).Throw();
+                }
             }
 
             var channels = decoded[0].Channels;

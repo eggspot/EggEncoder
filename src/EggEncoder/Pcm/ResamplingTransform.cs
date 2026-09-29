@@ -101,7 +101,10 @@ public sealed class ResamplingTransform : IPcmTransform
     /// <param name="filterHalfWidth">
     /// Filter half-width in source-sample taps at cutoff == 1 (no downsampling scale-up); see this
     /// type's doc comment. The default (<see cref="DefaultFilterHalfWidth"/>) is a reasonable
-    /// medium-quality choice for general-purpose resampling.
+    /// medium-quality choice for general-purpose resampling. Must be positive and no greater than
+    /// <see cref="MaxEffectiveHalfWidth"/> (256) -- the same bound downsampling ratios are scaled up
+    /// to and capped at, kept consistent here so this parameter alone can't demand a larger table or
+    /// per-sample cost than downsampling ever does.
     /// </param>
     public ResamplingTransform(int sourceRate, int targetRate, int channels, int filterHalfWidth = DefaultFilterHalfWidth)
     {
@@ -109,6 +112,11 @@ public sealed class ResamplingTransform : IPcmTransform
         if (targetRate <= 0) throw new ArgumentOutOfRangeException(nameof(targetRate), targetRate, "Sample rates must be positive");
         if (channels <= 0) throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channels must be positive");
         if (filterHalfWidth <= 0) throw new ArgumentOutOfRangeException(nameof(filterHalfWidth), filterHalfWidth, "Filter half-width must be positive");
+        // Upper-bounds the *unscaled* half-width so it can never itself overflow int math or force a
+        // pathological table allocation -- MaxEffectiveHalfWidth already caps the downsampling-scaled
+        // value below, but that scale-up only applies when downsampling (cutoff < 1.0); at cutoff >= 1.0
+        // (no downsampling) filterHalfWidth is used as-is, so it needs its own bound.
+        if (filterHalfWidth > MaxEffectiveHalfWidth) throw new ArgumentOutOfRangeException(nameof(filterHalfWidth), filterHalfWidth, $"Filter half-width must not exceed {MaxEffectiveHalfWidth}");
 
         _sourceRate = sourceRate;
         _targetRate = targetRate;
@@ -118,9 +126,21 @@ public sealed class ResamplingTransform : IPcmTransform
         if (_ratio != 1.0)
         {
             var cutoff = Math.Min(1.0, _ratio);
-            _halfWidth = cutoff < 1.0
-                ? Math.Min(MaxEffectiveHalfWidth, (int)Math.Ceiling(filterHalfWidth / cutoff))
-                : filterHalfWidth;
+            if (cutoff < 1.0)
+            {
+                // Compare in double *before* narrowing to int: for an extreme downsampling ratio (e.g.
+                // sourceRate near int.MaxValue with a tiny targetRate), filterHalfWidth / cutoff can
+                // exceed int range by orders of magnitude, and narrowing that huge double to int first
+                // (then clamping) is unchecked/unspecified -- it could produce a negative or otherwise
+                // garbage value that happens to compare as "less than" MaxEffectiveHalfWidth.
+                var scaledHalfWidth = Math.Ceiling(filterHalfWidth / cutoff);
+                _halfWidth = scaledHalfWidth >= MaxEffectiveHalfWidth ? MaxEffectiveHalfWidth : (int)scaledHalfWidth;
+            }
+            else
+            {
+                _halfWidth = filterHalfWidth;
+            }
+
             _kernelLength = 2 * _halfWidth;
             _polyphaseTable = BuildPolyphaseTable(_halfWidth, cutoff, ComputeKaiserBeta(TargetStopbandAttenuationDb));
         }

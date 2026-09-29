@@ -259,6 +259,31 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Constructor_FilterHalfWidthAboveMax_Should_Throw()
+        {
+            // Regression test: on the cutoff >= 1.0 (no downsampling scale-up) path, filterHalfWidth was
+            // previously used unclamped, so an arbitrarily large caller-supplied value flowed straight
+            // into the polyphase table allocation -- an extreme value could even overflow the internal
+            // int kernel-length computation. Must be rejected at the constructor boundary instead.
+            var act = () => new ResamplingTransform(44100, 48000, channels: 1, filterHalfWidth: 257);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
+        [Fact]
+        public void Constructor_ExtremeSourceToTargetRateRatio_Should_Cap_Without_Producing_A_Garbage_HalfWidth()
+        {
+            // Regression test: filterHalfWidth / cutoff can exceed int range by orders of magnitude for
+            // an extreme ratio (e.g. a near-int.MaxValue source rate downsampled to a tiny target rate),
+            // even at the *default* filterHalfWidth. Narrowing that huge double to int before clamping
+            // (instead of clamping in double first) risks an unchecked cast producing a negative or
+            // otherwise garbage value that could slip past the MaxEffectiveHalfWidth clamp.
+            var transform = new ResamplingTransform(sourceRate: int.MaxValue - 1, targetRate: 1, channels: 1);
+
+            transform.FilterHalfWidth.Should().Be(256);
+        }
+
+        [Fact]
         public void Constructor_ExtremeDownsamplingRatio_Should_Cap_The_Effective_Filter_HalfWidth()
         {
             // Without a cap, a 1000:1 downsampling ratio would ask for a half-width in the tens of

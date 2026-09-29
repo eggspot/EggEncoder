@@ -27,10 +27,11 @@ public static class FloatSampleConverter
     /// clamp to 1.0 (<see cref="int.MaxValue"/>), <see cref="float.NegativeInfinity"/> and any value
     /// below -1.0 clamp to -1.0 (-<see cref="int.MaxValue"/>). <see cref="float.NaN"/> -- not a valid
     /// sample under any convention, but not impossible to receive from a synthesized or third-party
-    /// source -- maps to 0 (digital silence) rather than propagating <see cref="double.NaN"/>'s
-    /// unspecified <see langword="int"/> conversion result (a plain <c>(int)double.NaN</c> cast is
-    /// undefined-ish by the C# spec and, in practice on .NET, evaluates to <see cref="int.MinValue"/> --
-    /// full-scale noise, not silence).
+    /// source -- is handled explicitly, mapping to 0 (digital silence), rather than falling through to
+    /// a plain <c>(int)double.NaN</c> cast: that conversion's result for an out-of-range value is
+    /// unspecified by the C# spec, and while it happens to already evaluate to 0 on the .NET runtimes
+    /// this was verified against, relying on unspecified behavior for a case this easy to special-case
+    /// explicitly would be fragile -- a different runtime or a future one could legally return anything.
     /// </para>
     /// </summary>
     public static int[] FromFloat(ReadOnlySpan<float> floatSamples)

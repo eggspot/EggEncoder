@@ -110,11 +110,12 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
-        public void Open_32BitFloat_NaN_Should_Decode_As_Silence_Not_IntMinValue()
+        public void Open_32BitFloat_NaN_Should_Decode_As_Silence()
         {
-            // A plain (int)double.NaN cast is unspecified by the C# spec and, in practice on .NET,
-            // evaluates to int.MinValue -- full-scale noise, not silence. A malformed or synthesized
-            // float WAV could still contain a NaN sample, so this is handled explicitly.
+            // A plain (int)double.NaN cast's result for an out-of-range value is unspecified by the C#
+            // spec, so relying on it (whatever it happens to evaluate to on a given runtime) would be
+            // fragile. A malformed or synthesized float WAV could still contain a NaN sample, so this is
+            // handled explicitly instead, mapping it to silence (0).
             var filePath = Path.GetTempFileName();
             try
             {

@@ -71,12 +71,12 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
-        public void FromFloat_NaN_Should_Map_To_Silence_Not_IntMinValue()
+        public void FromFloat_NaN_Should_Map_To_Silence()
         {
-            // A plain (int)double.NaN cast is unspecified by the C# spec and, in practice on .NET,
-            // evaluates to int.MinValue -- full-scale noise, not silence. NaN isn't a valid sample under
-            // any convention, but a synthesized or third-party float source could still produce one, so
-            // this is defined explicitly rather than left to fall through to that cast.
+            // A plain (int)double.NaN cast's result for an out-of-range value is unspecified by the C#
+            // spec, so relying on it would be fragile regardless of what it happens to evaluate to on a
+            // given runtime. NaN isn't a valid sample under any convention, but a synthesized or
+            // third-party float source could still produce one, so this is defined explicitly instead.
             var result = FloatSampleConverter.FromFloat([float.NaN]);
 
             result.Should().Equal(0);
