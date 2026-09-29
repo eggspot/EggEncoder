@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, and built-in waveform generation, all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, remix, fades, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -21,6 +21,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - 🎼 **Broad format coverage** — AAC, FLAC, MP3, WAV, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
+- 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
 - 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC)
 
@@ -65,6 +66,36 @@ IMediaEncoder encoder = new NativeEncoder(NullLogger<NativeEncoder>.Instance);
 var probeResult = await encoder.Probe("track.flac");
 ```
 
+## PCM Transform Pipeline
+
+`AddEggEncoder()` also registers `IPcmTransformEncoder` (same `NativeEncoder` instance as `IMediaEncoder`) — an opt-in `PcmTransformPipeline` of composable `IPcmTransform`s that runs between decode and the destination write:
+
+```csharp
+using EggEncoder.Codecs;
+using EggEncoder.Pcm;
+
+var pipeline = new PcmTransformPipeline(
+    new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 2),
+    new VolumeTransform(gain: 1.5));
+
+AudioCutter.Convert(sourcePath, destPath, pipeline);
+// or via DI: await pcmTransformEncoder.ConvertFile(sourcePath, destPath, pipeline);
+// (pcmTransformEncoder: IPcmTransformEncoder, injected the same way as IMediaEncoder above)
+
+// Float WAV destination (source stays a normal 32-bit int/float WAV; Float32 only changes the
+// on-disk encoding of the destination -- see "Important limits" below):
+AudioCutter.Convert(sourcePath, floatDestPath, WavSampleFormat.Float32);
+```
+
+Covers all six: **resampling** (`ResamplingTransform`), **gain / peak normalization** (`VolumeTransform` / `PeakNormalizationTransform`), **channel remix** (`ChannelRemixTransform`, mono↔stereo and general N↔M), **bit-depth and float conversion** (`BitDepthFormatTransform` for 8/16/24/32-bit, `FloatSampleConverter` for int↔IEEE-float), **fades on a cut** (`FadeTransform` via `CutOptions`), and **mixing / concatenation** (`AudioCutter.Mix`, `AudioCutter.Concatenate`). Full walkthrough and type reference: [Advanced Features](https://eggspot.github.io/EggEncoder/Advanced-Features.html#pcm-transform-pipeline) / [API Reference](https://eggspot.github.io/EggEncoder/API-Reference.html#pcm-transform-pipeline).
+
+**Important limits:**
+- A `PcmTransformPipeline` instance carries state across blocks (resampler history, fade position, measured peak gain) — build a fresh one per `Convert`/`Cut`/`Mix` call, don't reuse across calls.
+- A pipeline containing `ResamplingTransform` (or any stateful transform implementing `IPcmTransform.Flush`) needs `pipeline.Flush(...)` called once after the last block, to drain output the transform was still holding back — `AudioCutter.Convert(pipeline)`/`Cut(options)` already do this for you; only a driver written against `PcmTransformPipeline` directly needs to call it itself.
+- True whole-file peak normalization needs `AudioCutter.MeasurePeakAmplitude` followed by `PeakNormalizationTransform.MeasurePeak` *before* the pipeline runs — otherwise it silently normalizes against only the first decode block.
+- `Mix`/`Concatenate` require every source to share the same channels/sample rate/bit depth. `Mix` decodes all sources fully into memory (clip-length material, not multi-hour streams).
+- `ResamplingTransform` is a Kaiser-windowed-sinc polyphase filter (anti-aliasing on downsample, band-limited reconstruction on upsample) — call `Flush()` (see above) to get its last few frames, which it can't produce until it either sees more input or is told there isn't any.
+
 ## Supported Formats
 
 | Format | Probe | Decode | Encode |
@@ -79,6 +110,8 @@ var probeResult = await encoder.Probe("track.flac");
 ¹ MOV/MP4 decode is audio-only, mono AAC-LC tracks — video frames are never decoded. Files without a matching audio track still probe fine (metadata only).
 
 `IMediaEncoder.CutFile` decodes any supported source (WAV, FLAC, MP3, AAC, WMA, and MOV/MP4 files with a mono AAC-LC audio track) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
+
+WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (read and write). A float WAV *source* always decodes transparently into int PCM, the same as any other bit depth. For a float WAV *destination*, pass `WavSampleFormat.Float32` to `AudioCutter.Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate` — the default (`WavSampleFormat.Integer`) is unchanged, and `Float32` requires the destination's bit depth to already be 32 (widen a narrower source first with `BitDepthFormatTransform`). `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat`/`FloatSampleConverter` remain available for working with `float[]` directly instead of driving int PCM through a pipeline.
 
 ## License
 

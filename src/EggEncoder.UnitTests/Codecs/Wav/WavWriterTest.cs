@@ -56,6 +56,54 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void WriteInterleavedSamples_Float_Should_Round_Trip_Through_WavReader_As_Float()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // Values chosen to round-trip exactly through actual IEEE-float bytes on disk: 0 and
+                // +/-int.MaxValue map to +/-1.0f exactly (see WavWriter.Int32ToFloat32 / WavReader.Float32ToInt32).
+                // Arbitrary large magnitudes (e.g. int.MinValue) are not bit-exact through float32 storage --
+                // that's expected precision loss from the format, not tested here.
+                var samples = new[] { 0, int.MaxValue, -int.MaxValue };
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 32, totalFrames: samples.Length, isFloatFormat: true))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.IsFloatFormat.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(32);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_FloatFormat_With_NonThirtyTwoBit_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: 1, isFloatFormat: true);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void WriteInterleavedSamples_Called_Repeatedly_With_Varying_Sizes_Should_Not_Leak_Stale_Bytes()
         {
             var filePath = Path.GetTempFileName();

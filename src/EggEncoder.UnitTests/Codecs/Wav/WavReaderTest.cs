@@ -110,6 +110,52 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_32BitFloat_NaN_Should_Decode_As_Silence()
+        {
+            // A plain (int)double.NaN cast's result for an out-of-range value is unspecified by the C#
+            // spec, so relying on it (whatever it happens to evaluate to on a given runtime) would be
+            // fragile. A malformed or synthesized float WAV could still contain a NaN sample, so this is
+            // handled explicitly instead, mapping it to silence (0).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.CreateFloat32(filePath, channels: 1, sampleRate: 44100, [float.NaN]);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[1];
+                wavReader.ReadInterleavedSamples(buffer, maxSamplesPerChannel: 1);
+
+                buffer[0].Should().Be(0);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(float.PositiveInfinity, int.MaxValue)]
+        [InlineData(float.NegativeInfinity, -int.MaxValue)]
+        public void Open_32BitFloat_Infinity_Should_Clamp_To_FullScale(float input, int expected)
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.CreateFloat32(filePath, channels: 1, sampleRate: 44100, [input]);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[1];
+                wavReader.ReadInterleavedSamples(buffer, maxSamplesPerChannel: 1);
+
+                buffer[0].Should().Be(expected);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void ReadInterleavedSamples_Should_Return_Zero_At_End_Of_Stream()
         {
             var filePath = Path.GetTempFileName();

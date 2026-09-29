@@ -46,7 +46,7 @@
       <p>EggEncoder is fully native and has one optional setting: whether it logs. <code>AddEggEncoder()</code> takes an optional <code>enableLogging</code> parameter (default <code>true</code>):</p>
       <pre><code class="language-csharp">builder.Services.AddEggEncoder();                      // logs via ILogger&lt;NativeEncoder&gt; (default)
 builder.Services.AddEggEncoder(enableLogging: false);   // fully silent</code></pre>
-      <p>This registers <code>IMediaEncoder</code> &rarr; <code>NativeEncoder</code> (scoped). There's no engine to pick, no binary path to provide, and nothing that can fail to resolve at startup due to missing external tooling.</p>
+      <p>This registers one scoped <code>NativeEncoder</code> instance and maps both <code>IMediaEncoder</code> and <code>IPcmTransformEncoder</code> to it (see <a href="Dependency-Injection.html">Dependency Injection</a>) — <code>enableLogging</code> applies to both, since they share the same underlying instance. There's no engine to pick, no binary path to provide, and nothing that can fail to resolve at startup due to missing external tooling.</p>
       <p>Every <code>Probe</code>/<code>ConvertFile</code>/<code>CutFile</code> call logs a start and a completion message at <code>LogInformation</code>, and logs (then rethrows) any failure at <code>LogError</code> — set <code>enableLogging: false</code> to suppress all of it, or leave it on and control verbosity the standard way via your app's logging configuration (e.g. <code>"Logging:LogLevel:EggEncoder.NativeEncoder": "None"</code> in <code>appsettings.json</code>).</p>
 
       <h2>Native Binary Resolution</h2>

@@ -32,10 +32,11 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 | `Aac/` | Pure managed AAC decoder/encoder + scale-factor/Huffman tables (`AacDecoder`, `AacFrameDecoder`, `AacEncoder`, `AacFrameEncoder`, `AacEncoderSession`, `AacTables`). `AacFrameDecoder` decodes one raw_data_block into PCM independent of ADTS framing, shared by `AacDecoder` (ADTS) and `MovDecoder` (MP4) |
 | `Flac/` | `FlacDecoder`/`FlacEncoder` — thin wrappers over native `libFLAC` P/Invoke bindings |
 | `Mp3/` | `Mp3Decoder` (via the `NLayer` managed decoder), `Mp3Encoder` (native `libmp3lame` P/Invoke), `Mp3Probe` (manual frame-header parsing, no native call) |
-| `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to |
+| `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to. Both support 8/16/24/32-bit integer and 32-bit IEEE float (`WavWriter.Create(..., isFloatFormat: true)`) |
 | `Wma/` | Pure managed WMAv2 decoder/encoder (`WmaDecoder`, `WmaEncoder`, `WmaEncoderSession`, `WmaFrameEncoder`) + `AsfContainerReader`/`AsfContainerWriter` (ASF/WMA container I/O) + `WmaTables` |
 | `Mov/` | `MovProbe` — MOV/MP4 metadata (duration/dimensions/codec); `MovDecoder` — decodes a mono AAC-LC 'soun' track via `stsd`/`esds`/sample-table demuxing (`Mp4EsdsParser`, `Mp4SampleTable`) and the shared `AacFrameDecoder`; `MovAtomReader` — shared atom-tree walker used by both |
 | `AudioCutter.cs` | Format-dispatching `Convert`/`Cut` used by `NativeEncoder`; defines the internal `IAudioSink` interface implemented by each codec's writer/session type |
+| `AudioCutter.Pipeline.cs` | Pipeline-aware `Convert`/`Cut` overloads (take a `PcmTransformPipeline` / `CutOptions`), plus `Mix` and `Concatenate` — see [PCM transform pipeline](#pcm-transform-pipeline-srceggencoderpcm) below |
 
 ### Supporting infrastructure
 
@@ -43,7 +44,27 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 - **`Native/`** — `FlacNative.cs`/`Mp3Native.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
-- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `IMediaEncoder` → `NativeEncoder` (scoped). `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
+- **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `NativeEncoder` itself as scoped, then maps both `IMediaEncoder` and `IPcmTransformEncoder` to resolve that same scoped instance. `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
+
+### PCM transform pipeline (`src/EggEncoder/Pcm/`)
+
+A `PcmTransformPipeline` is an ordered list of `IPcmTransform`s run on each decoded `int[]` block, between decode and the `IAudioSink` write, wired in by `AudioCutter.Pipeline.cs`. It's opt-in: the original zero-pipeline `Convert`/`Cut` overloads are untouched and remain fully streaming. `IPcmTransform.Flush()` is a default interface method (existing implementers don't need to change) for a transform that holds output back across blocks (currently only `ResamplingTransform`); `PcmTransformPipeline.Flush(...)` cascades it through an entire pipeline — a flushed transform's tail is pushed through every later transform's own `Apply` before that transform's own `Flush` drains it in turn — and `AudioCutter.Pipeline.cs`'s `Convert`/`Cut` call it once after the last block, before finishing the destination sink.
+
+| Transform | Does |
+|-----------|------|
+| `ResamplingTransform` | Kaiser-windowed-sinc polyphase resampler (anti-aliasing on downsample, band-limited reconstruction on upsample), precomputed into a polyphase table so resampling is a table lookup plus a dot product. Holds a self-trimming window of source history across blocks and withholds a destination frame until its full tap window has genuinely arrived, rather than duplicating an edge sample at a block boundary; total output frame count is a cumulative `floor(sourceFramesSoFar * ratio)`, exact regardless of block splits. Because of that withholding, the last few frames of a stream need `Flush()` (see below) to drain — `AudioCutter`'s pipeline-aware `Convert`/`Cut` call it automatically |
+| `VolumeTransform` / `PeakNormalizationTransform` | Linear gain, and two-pass peak normalization to a target dBFS (`MeasurePeak` then `Apply`, or single-pass self-measuring) |
+| `ChannelRemixTransform` | Mono↔stereo and general N↔M remixing (equal-weight downmix, cyclic upmix) |
+| `BitDepthFormatTransform` | Rescales between the native ranges of 8/16/24/32-bit samples (this codebase has no separate "normalized" scale — every bit depth is signed and sign-extended to its own native range, e.g. 8-bit is -128..127; see `WavReader`/`WavWriter`) |
+| `FadeTransform` | Fade-in/out (linear or equal-power) over a fixed total frame count, tracked across blocks the same way as `ResamplingTransform` |
+
+`PcmTransformPipeline.ComputeOutputFormat` lets a caller learn the pipeline's final (channels, sample rate, bit depth) before the first block arrives, so the destination sink can be opened up front. Because `WavWriter` is the only sink that needs an exact frame count at open time (it writes a fixed-size RIFF header with no patch-up on `Finish()`), `AudioCutter.Pipeline.cs`'s `DeferredWavSink` buffers written blocks and only opens the real `WavWriter` in `Finish()`, once the true count (which a frame-count-changing transform like resampling can't predict up front) is known; every other destination format streams straight through since their encoder sessions don't take a frame count at all.
+
+`Mix` (2+ same-format sources, per-input gain, silence-padded to the longest) decodes every input fully into memory — clip-length material, not multi-hour streams. `Concatenate` (2+ same-format sources) is fully streaming.
+
+Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fractional position, `FadeTransform`'s frame position, `PeakNormalizationTransform`'s measured gain) — build a fresh `PcmTransformPipeline` per `Convert`/`Cut`/`Mix` call rather than reusing one across multiple calls.
+
+**Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O; `float.NaN` maps to 0 (silence) rather than the unspecified result of a raw `(int)double.NaN` cast, and `float.PositiveInfinity`/`NegativeInfinity` clamp to ±1.0. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. A float WAV *source* has always decoded transparently into int PCM through `Convert`/`Cut`/`Mix`/`Concatenate` (`WavReader.IsFloatFormat` handles this on read); for a float WAV *destination*, `WavSampleFormat.Float32` (`Codecs/WavSampleFormat.cs`) can be passed to those same entry points (`Convert`/`Cut` via `CutOptions.DestinationWavFormat`/`Mix`/`Concatenate`) — it requires the destination's bit depth to already be 32 and throws `NotSupportedException` against a non-WAV destination. The default, `WavSampleFormat.Integer`, is unchanged from before this option existed.
 
 ### Native binary packaging
 
