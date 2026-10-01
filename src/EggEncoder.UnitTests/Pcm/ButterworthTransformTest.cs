@@ -148,6 +148,39 @@ namespace EggEncoder.UnitTests.Pcm
             transform.CanChangeFrameCount.Should().BeFalse();
         }
 
+        [Fact]
+        public void Apply_MismatchedChannelCount_Should_Throw()
+        {
+            // Not validated by ButterworthTransform itself -- propagates from the first cascaded stage's
+            // own BiquadTransform.Apply() validation, same as the constructor-time propagation tests above.
+            var transform = new ButterworthTransform(BiquadFilterType.LowPass, order: 4, channels: 2, SampleRate, frequencyHz: 1000);
+            var act = () => transform.Apply([1, 2, 3], frameCount: 1, channels: 3, SampleRate, bitsPerSample: 16);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Apply_MismatchedSampleRate_Should_Throw()
+        {
+            var transform = new ButterworthTransform(BiquadFilterType.LowPass, order: 4, channels: 1, SampleRate, frequencyHz: 1000);
+            var act = () => transform.Apply([1, 2, 3], frameCount: 3, channels: 1, sampleRate: 22050, bitsPerSample: 16);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Theory]
+        [InlineData(2)]
+        [InlineData(8)]
+        public void Apply_ZeroFrameCount_Should_Return_Empty_Without_Throwing(int order)
+        {
+            var transform = new ButterworthTransform(BiquadFilterType.LowPass, order, channels: 1, SampleRate, frequencyHz: 1000);
+
+            var (outBuffer, frameCount) = transform.Apply([], frameCount: 0, channels: 1, SampleRate, bitsPerSample: 16);
+
+            frameCount.Should().Be(0);
+            outBuffer.Should().BeEmpty();
+        }
+
         // -------- Happy path --------
 
         [Theory]
@@ -189,6 +222,21 @@ namespace EggEncoder.UnitTests.Pcm
             // should compute bit-for-bit the same thing.
             var butterworth = new ButterworthTransform(BiquadFilterType.LowPass, order: 2, channels: 1, SampleRate, frequencyHz: 1000);
             var singleBiquad = new BiquadTransform(BiquadFilterType.LowPass, channels: 1, SampleRate, frequencyHz: 1000);
+
+            var buffer = BuildSine(1000, frequencyHz: 300, amplitude: 15000);
+
+            var (butterworthOutput, _) = butterworth.Apply((int[])buffer.Clone(), buffer.Length, channels: 1, SampleRate, bitsPerSample: 16);
+            var (biquadOutput, _) = singleBiquad.Apply((int[])buffer.Clone(), buffer.Length, channels: 1, SampleRate, bitsPerSample: 16);
+
+            butterworthOutput.Should().Equal(biquadOutput);
+        }
+
+        [Fact]
+        public void Apply_Order2_HighPass_Should_Produce_Identical_Output_To_A_Single_BiquadTransform_At_Default_Q()
+        {
+            // Same equivalence as the LowPass case above, for the other supported filter type.
+            var butterworth = new ButterworthTransform(BiquadFilterType.HighPass, order: 2, channels: 1, SampleRate, frequencyHz: 1000);
+            var singleBiquad = new BiquadTransform(BiquadFilterType.HighPass, channels: 1, SampleRate, frequencyHz: 1000);
 
             var buffer = BuildSine(1000, frequencyHz: 300, amplitude: 15000);
 
