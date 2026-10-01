@@ -122,6 +122,18 @@ public sealed class FirFilterTransform : IPcmTransform
                     sum += _taps[k] * extended[baseIndex - k];
                 }
 
+                // Every tap is validated finite at construction, but the running sum itself isn't: an
+                // extreme enough tap magnitude can still overflow an individual term to +-Infinity, and
+                // if two such terms land on opposite signs, Infinity + -Infinity = NaN. Math.Clamp passes
+                // NaN through unchanged (every comparison against it is false), so without this check a
+                // NaN sum would reach the (int) cast, whose result for NaN is unspecified by the C# spec.
+                // Infinity alone doesn't need this: Math.Clamp already saturates +-Infinity to max/min
+                // correctly, since those comparisons are well-defined.
+                if (double.IsNaN(sum))
+                {
+                    sum = 0.0;
+                }
+
                 buffer[(i * channels) + ch] = (int)Math.Clamp(Math.Round(sum), minValue, maxValue);
             }
 

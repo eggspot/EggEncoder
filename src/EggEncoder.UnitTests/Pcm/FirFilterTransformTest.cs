@@ -216,6 +216,27 @@ namespace EggEncoder.UnitTests.Pcm
             outBuffer.Should().Equal(32767, -32768);
         }
 
+        [Fact]
+        public void Apply_OpposingExtremeTaps_Should_Produce_Silence_Not_An_Unspecified_Value()
+        {
+            // Each tap individually is finite (passes construction validation), but tap0*x[1] overflows to
+            // +Infinity while tap1*x[0] overflows to -Infinity for a large enough sample, and their sum
+            // (computed for the second output sample, once x[0] is in play via the lag-1 tap) is
+            // Infinity + -Infinity = NaN. Math.Clamp passes NaN through unchanged, so without the explicit
+            // NaN guard in Apply(), this would reach an unspecified-by-spec (int) cast instead of the
+            // defined, intentional silence this codebase's other NaN-in-audio handling degrades to (see
+            // FloatSampleConverter). Asserting 0 here locks in that defined behavior; note this test can't
+            // actually distinguish "the guard ran" from "the unspecified cast happened to also produce 0"
+            // on any one .NET build/platform (verified: it still passes with the guard removed, on this
+            // SDK) -- the guard is worth keeping regardless, since spec-unspecified behavior isn't safe to
+            // depend on across .NET versions or architectures even where it's currently convenient.
+            var transform = new FirFilterTransform(channels: 1, [1e299, -1e299]);
+
+            var (outBuffer, _) = transform.Apply([2_000_000_000, 2_000_000_000], frameCount: 2, channels: 1, SampleRate, bitsPerSample: 32);
+
+            outBuffer[1].Should().Be(0);
+        }
+
         // -------- Reset --------
 
         [Fact]
