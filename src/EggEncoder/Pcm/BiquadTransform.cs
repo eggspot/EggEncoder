@@ -75,11 +75,35 @@ public sealed class BiquadTransform : IPcmTransform
         if (double.IsNaN(gainDb) || double.IsInfinity(gainDb))
             throw new ArgumentOutOfRangeException(nameof(gainDb), gainDb, "Gain must be a finite number");
 
+        var coefficients = ComputeCoefficients(filterType, sampleRate, frequencyHz, q, gainDb);
+
+        // An astronomically small (but still positive, per the checks above) q or shelf slope can push
+        // 1/q (or 1/s) past double's representable range, overflowing to Infinity partway through the
+        // formula; normalizing by a0 at the end then divides Infinity by Infinity, producing NaN. Every
+        // other parameter combination this type accepts produces finite coefficients, so rather than
+        // trying to carve out a principled "too small" lower bound on q/slope (there isn't a natural one
+        // -- it's purely a floating-point range question), just reject the actual computed outcome if
+        // it's ever non-finite.
+        if (!AreFinite(coefficients))
+        {
+            throw new ArgumentException(
+                $"The combination of frequency ({frequencyHz} Hz), q/slope ({q}), and gain ({gainDb} dB) produces non-finite filter coefficients", nameof(q));
+        }
+
         _channels = channels;
         _sampleRate = sampleRate;
-        (_b0, _b1, _b2, _a1, _a2) = ComputeCoefficients(filterType, sampleRate, frequencyHz, q, gainDb);
+        (_b0, _b1, _b2, _a1, _a2) = coefficients;
         _w1 = new double[channels];
         _w2 = new double[channels];
+    }
+
+    private static bool AreFinite((double b0, double b1, double b2, double a1, double a2) coefficients)
+    {
+        return double.IsFinite(coefficients.b0)
+            && double.IsFinite(coefficients.b1)
+            && double.IsFinite(coefficients.b2)
+            && double.IsFinite(coefficients.a1)
+            && double.IsFinite(coefficients.a2);
     }
 
     public int OutputSampleRate => 0;   // passthrough — preserves input rate

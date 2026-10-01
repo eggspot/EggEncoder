@@ -154,6 +154,60 @@ namespace EggEncoder.UnitTests.Pcm
             act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("gainDb");
         }
 
+        [Fact]
+        public void Constructor_NegativeInfiniteGain_Should_Throw()
+        {
+            var act = () => new BiquadTransform(BiquadFilterType.PeakingEq, channels: 1, SampleRate, frequencyHz: 1000, DefaultQ, gainDb: double.NegativeInfinity);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("gainDb");
+        }
+
+        [Fact]
+        public void Constructor_NaNQ_Should_Throw()
+        {
+            var act = () => new BiquadTransform(BiquadFilterType.LowPass, channels: 1, SampleRate, frequencyHz: 1000, q: double.NaN);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("q");
+        }
+
+        [Fact]
+        public void Constructor_NaNGain_OnGainBearingType_Should_Throw()
+        {
+            // For a non-gain type, a non-zero (including NaN, since NaN != 0 is true) gain is caught
+            // earlier by the gainDb-only-applies-to-gain-types check; this exercises the dedicated
+            // NaN/Infinity check specifically, which only a gain-bearing type's NaN gain can reach.
+            var act = () => new BiquadTransform(BiquadFilterType.PeakingEq, channels: 1, SampleRate, frequencyHz: 1000, DefaultQ, gainDb: double.NaN);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("gainDb");
+        }
+
+        [Fact]
+        public void Constructor_InvalidFilterTypeEnumValue_Should_Throw()
+        {
+            var act = () => new BiquadTransform((BiquadFilterType)99, channels: 1, SampleRate, frequencyHz: 1000);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
+        [Fact]
+        public void Constructor_PathologicallyTinyQ_Should_Throw_Rather_Than_Silently_Produce_NonFinite_Coefficients()
+        {
+            // 1/q can overflow double's representable range for a small enough positive q, which (after
+            // normalizing coefficients by a0) can divide Infinity by Infinity and produce NaN -- silently
+            // corrupting every sample Apply() ever processes afterward instead of failing fast here.
+            var act = () => new BiquadTransform(BiquadFilterType.BandPass, channels: 1, SampleRate, frequencyHz: 1000, q: double.Epsilon);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Constructor_PathologicallyTinyShelfSlope_Should_Throw_Rather_Than_Silently_Produce_NonFinite_Coefficients()
+        {
+            var act = () => new BiquadTransform(BiquadFilterType.LowShelf, channels: 1, SampleRate, frequencyHz: 1000, q: double.Epsilon, gainDb: 6.0);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
         // -------- IPcmTransform contract --------
 
         [Fact]
@@ -313,16 +367,19 @@ namespace EggEncoder.UnitTests.Pcm
         [Fact]
         public void Apply_ExtremelyHighQ_Should_Produce_Finite_InRange_Output_Without_Throwing()
         {
+            // (A single Apply() call, not two: this transform is stateful across calls, so calling it
+            // twice would check the second call's output -- built on the first call's leftover filter
+            // history -- rather than verifying one coherent pass through the signal.)
             var transform = new BiquadTransform(BiquadFilterType.BandPass, channels: 1, SampleRate, frequencyHz: 1000, q: 1000.0);
             var buffer = new int[2000];
             for (var i = 0; i < buffer.Length; i++)
                 buffer[i] = (int)Math.Round(20000 * Math.Sin(2 * Math.PI * 1000 * i / SampleRate));
 
-            var act = () => transform.Apply(buffer, buffer.Length, channels: 1, SampleRate, bitsPerSample: 16);
+            (int[] outBuffer, int frameCount) result = default;
+            var act = () => result = transform.Apply(buffer, buffer.Length, channels: 1, SampleRate, bitsPerSample: 16);
 
             act.Should().NotThrow();
-            var (outBuffer, _) = transform.Apply(buffer, buffer.Length, channels: 1, SampleRate, bitsPerSample: 16);
-            outBuffer.Should().OnlyContain(sample => sample >= -32768 && sample <= 32767);
+            result.outBuffer.Should().OnlyContain(sample => sample >= -32768 && sample <= 32767);
         }
 
         [Fact]
