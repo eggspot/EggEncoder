@@ -74,6 +74,33 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Constructor_OrderAtMax_Should_Not_Throw()
+        {
+            var act = () => new ButterworthTransform(BiquadFilterType.LowPass, order: 64, channels: 1, SampleRate, frequencyHz: 1000);
+
+            act.Should().NotThrow();
+        }
+
+        [Fact]
+        public void Constructor_OrderAboveMax_Should_Throw()
+        {
+            // Must fail validation immediately rather than attempting to allocate/construct an
+            // impractically large number of cascaded stages (also guards against this test itself
+            // hanging/OOMing if the cap were ever accidentally removed).
+            var act = () => new ButterworthTransform(BiquadFilterType.LowPass, order: 66, channels: 1, SampleRate, frequencyHz: 1000);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("order");
+        }
+
+        [Fact]
+        public void Constructor_PathologicallyLargeOrder_Should_Throw_Not_Hang_Or_OutOfMemory()
+        {
+            var act = () => new ButterworthTransform(BiquadFilterType.LowPass, order: 2_000_000_000, channels: 1, SampleRate, frequencyHz: 1000);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("order");
+        }
+
+        [Fact]
         public void Constructor_ChannelsNonPositive_Should_Propagate_BiquadTransforms_Validation()
         {
             // No try/catch wrapping: the underlying BiquadTransform's own exception (type, paramName, and

@@ -21,7 +21,10 @@ namespace EggEncoder.Pcm;
 ///
 /// Odd orders are not supported: an odd-order Butterworth filter needs one extra first-order (one-pole)
 /// section that doesn't fit this type's "cascade of biquads" structure, and ffmpeg's own filters only
-/// expose "poles" as 1 or 2 per stage (i.e. order is always a multiple of 2) for the same reason.
+/// expose "poles" as 1 or 2 per stage (i.e. order is always a multiple of 2) for the same reason. Order
+/// is also capped (see <see cref="MaxOrder"/>) well above anything a real filter needs, purely so an
+/// accidental or pathological huge value fails validation immediately instead of trying to allocate and
+/// construct that many cascaded stages.
 ///
 /// Each stage is a full <see cref="BiquadTransform"/>, so each stage rounds its output to an integer
 /// sample before the next stage sees it -- the same boundary every <see cref="IPcmTransform"/> in this
@@ -39,10 +42,18 @@ namespace EggEncoder.Pcm;
 /// </summary>
 public sealed class ButterworthTransform : IPcmTransform
 {
+    // No real audio use case needs anywhere near this many cascaded stages (even an extremely steep
+    // anti-aliasing filter rarely exceeds order ~16-24); this exists purely to turn an accidental or
+    // pathological huge order (e.g. a stray extra zero, or overflow from unrelated arithmetic upstream)
+    // into an immediate, clear ArgumentOutOfRangeException instead of attempting to allocate and
+    // construct that many BiquadTransform stages, which risks an OutOfMemoryException or multi-second
+    // hang instead of a clean validation failure.
+    private const int MaxOrder = 64;
+
     private readonly BiquadTransform[] _stages;
 
     /// <param name="filterType">Must be <see cref="BiquadFilterType.LowPass"/> or <see cref="BiquadFilterType.HighPass"/>.</param>
-    /// <param name="order">Filter order. Must be a positive even integer (2, 4, 6, 8, ...); produces <paramref name="order"/>/2 cascaded biquad stages.</param>
+    /// <param name="order">Filter order. Must be a positive even integer (2, 4, 6, 8, ..., up to <see cref="MaxOrder"/>); produces <paramref name="order"/>/2 cascaded biquad stages.</param>
     /// <param name="channels">Number of interleaved channels this transform will process (must match actual input).</param>
     /// <param name="sampleRate">Sample rate in Hz this transform will process (must match actual input).</param>
     /// <param name="frequencyHz">Cutoff frequency in Hz, shared by every cascaded stage. Must be in (0, Nyquist).</param>
@@ -54,6 +65,8 @@ public sealed class ButterworthTransform : IPcmTransform
             throw new ArgumentOutOfRangeException(nameof(order), order, "Order must be a positive even integer");
         if (order % 2 != 0)
             throw new ArgumentOutOfRangeException(nameof(order), order, $"Order must be even (a cascade of whole biquad sections can't realize an odd order); got {order}");
+        if (order > MaxOrder)
+            throw new ArgumentOutOfRangeException(nameof(order), order, $"Order must be {MaxOrder} or less ({MaxOrder / 2} cascaded stages); got {order}");
 
         var stageCount = order / 2;
         _stages = new BiquadTransform[stageCount];
