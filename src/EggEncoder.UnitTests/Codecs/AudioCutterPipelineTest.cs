@@ -7,10 +7,10 @@ using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs
 {
-    // WAV-only: MP3/FLAC round-trips depend on native win-x64 DLLs that can't load on this (non-Windows)
-    // dev machine -- see AudioCutterTest for that coverage, which runs in CI on Windows. These tests
-    // exercise the pipeline plumbing itself (format negotiation, DeferredWavSink, Mix, Concatenate),
-    // which is codec-agnostic.
+    // WAV/AIFF-only: MP3/FLAC round-trips depend on native win-x64 DLLs that can't load on this
+    // (non-Windows) dev machine -- see AudioCutterTest for that coverage, which runs in CI on Windows.
+    // These tests exercise the pipeline plumbing itself (format negotiation, DeferredFixedHeaderSink,
+    // Mix, Concatenate), which is codec-agnostic.
     public class AudioCutterPipelineTest
     {
         [Fact]
@@ -44,7 +44,7 @@ namespace EggEncoder.UnitTests.Codecs
         {
             // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this
             // exercises the direct-WavWriter path (opened once with the exact known total up front) across
-            // more than one WriteInterleavedSamples call, rather than DeferredWavSink's buffer-then-flush.
+            // more than one WriteInterleavedSamples call, rather than DeferredFixedHeaderSink's buffer-then-flush.
             var tempDirectory = CreateTempDirectory();
             try
             {

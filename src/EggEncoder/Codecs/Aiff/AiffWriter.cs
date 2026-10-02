@@ -7,7 +7,7 @@ namespace EggEncoder.Codecs.Aiff
     // Plain AIFF only (COMM/SSND, integer PCM) -- see AiffReader's doc comment for why AIFC isn't in
     // scope. Mirrors WavWriter structurally: same fixed-size-header-written-at-Create-time constraint
     // (so, like WavWriter, this needs an exact totalFrames up front -- AudioCutter.Pipeline.cs's
-    // DeferredWavSink pattern applies here too), same reused raw-byte scratch buffer, same per-bit-depth
+    // DeferredFixedHeaderSink pattern applies here too), same reused raw-byte scratch buffer, same per-bit-depth
     // write switch. The differences are AIFF's: big-endian throughout, an 80-bit extended-float sample
     // rate (see IeeeExtendedFloat), and signed (not WAV's unsigned) 8-bit samples.
     public sealed class AiffWriter : IAudioSink

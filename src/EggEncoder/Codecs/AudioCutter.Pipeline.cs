@@ -314,10 +314,11 @@ namespace EggEncoder.Codecs
         /// <summary>
         /// Concatenates two or more same-format (matching channels, sample rate, and bit depth) source files,
         /// in order, into one destination file. Sources are decoded and written one block at a time; for
-        /// every destination format except WAV that's fully streaming with nothing held fully in memory. A
-        /// WAV destination is the exception: since WavWriter needs an exact frame count when it's created and
-        /// Concatenate has no cheap way to learn the combined total before every source has been decoded, the
-        /// combined output is buffered in memory until the true total is known (see DeferredWavSink).
+        /// every destination format except WAV and AIFF that's fully streaming with nothing held fully in
+        /// memory. A WAV or AIFF destination is the exception: since WavWriter/AiffWriter need an exact
+        /// frame count when they're created and Concatenate has no cheap way to learn the combined total
+        /// before every source has been decoded, the combined output is buffered in memory until the true
+        /// total is known (see DeferredFixedHeaderSink).
         /// </summary>
         public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath)
         {
