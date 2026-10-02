@@ -2,13 +2,19 @@ using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.Alac
 {
-    // Decodes one ALAC packet's bytes (one CAF 'data' chunk packet) into PCM samples. Scoped to mono
-    // (single-channel SCE element) only -- stereo channel-pair elements use an additional mid/side-style
-    // decorrelation step this doesn't implement, matching this tick's deliberately narrowed scope (see
-    // AlacDecoder's doc comment).
+    // Decodes one ALAC packet's bytes (one CAF 'data' chunk packet) into interleaved PCM samples.
+    // Supports a single-channel SCE element (tag 0) and a two-channel CPE element (tag 1); anything
+    // else (CCE/LFE/PCE/multi-pair streams) is out of scope.
+    //
+    // A CPE shares one element-level header with SCE (hasSize/extraBits/isCompressed/sampleCount),
+    // adds an 8+8-bit decorrShift/decorrLeftWeight pair read once for the whole channel pair, then
+    // runs the exact same per-channel prediction-header + residual decode as SCE twice in a row (one
+    // call per channel, reusing DecodeCompressed/DecodeVerbatim unchanged). The two independently
+    // reconstructed channels are then un-mixed (decorrelated) and interleaved.
     internal static class AlacFrameDecoder
     {
         private const int ChannelElementSce = 0;
+        private const int ChannelElementCpe = 1;
         private const int ChannelElementEnd = 7;
         private const int PureDeltaPredictorOrder = 31;
 
@@ -17,9 +23,18 @@ namespace EggEncoder.Codecs.Alac
             var reader = new BitReader(packetBytes);
 
             var tag = reader.ReadBits(3);
-            if (tag != ChannelElementSce)
+            int channelCount;
+            if (tag == ChannelElementSce)
             {
-                throw new NotSupportedException($"ALAC channel element tag {tag} is not supported; only a single-channel (SCE, tag 0) element is supported");
+                channelCount = 1;
+            }
+            else if (tag == ChannelElementCpe)
+            {
+                channelCount = 2;
+            }
+            else
+            {
+                throw new NotSupportedException($"ALAC channel element tag {tag} is not supported; only single-channel (SCE, tag 0) and channel-pair (CPE, tag 1) elements are supported");
             }
 
             reader.SkipBits(4); // instance tag
@@ -36,13 +51,34 @@ namespace EggEncoder.Codecs.Alac
 
             var sampleCount = hasSize ? (int)reader.ReadBits(32) : config.FrameLength;
 
-            reader.SkipBits(8); // decorrShift -- unused for a single channel
-            reader.SkipBits(8); // decorrLeftWeight -- must be 0 for a single channel, unused either way
+            var decorrShift = (int)reader.ReadBits(8);
+            var decorrLeftWeight = (int)reader.ReadBits(8);
 
-            var bitsPerSample = config.BitDepth;
-            var samples = isCompressed
-                ? DecodeCompressed(reader, sampleCount, bitsPerSample, config)
-                : DecodeVerbatim(reader, sampleCount, bitsPerSample);
+            var rawBitsPerSample = config.BitDepth;
+            var predictionBitsPerSample = config.BitDepth + channelCount - 1;
+
+            int[] interleavedSamples;
+            if (channelCount == 1)
+            {
+                interleavedSamples = DecodeChannelBody(reader, sampleCount, rawBitsPerSample, predictionBitsPerSample, isCompressed, config);
+            }
+            else
+            {
+                var channel0 = DecodeChannelBody(reader, sampleCount, rawBitsPerSample, predictionBitsPerSample, isCompressed, config);
+                var channel1 = DecodeChannelBody(reader, sampleCount, rawBitsPerSample, predictionBitsPerSample, isCompressed, config);
+
+                if (decorrLeftWeight != 0)
+                {
+                    Decorrelate(channel0, channel1, sampleCount, decorrShift, decorrLeftWeight);
+                }
+
+                interleavedSamples = new int[sampleCount * 2];
+                for (var i = 0; i < sampleCount; i++)
+                {
+                    interleavedSamples[i * 2] = channel0[i];
+                    interleavedSamples[(i * 2) + 1] = channel1[i];
+                }
+            }
 
             var endTag = reader.ReadBits(3);
             if (endTag != ChannelElementEnd)
@@ -50,10 +86,34 @@ namespace EggEncoder.Codecs.Alac
                 throw new InvalidDataException($"ALAC packet is missing its terminating element tag (expected {ChannelElementEnd}, got {endTag})");
             }
 
-            return samples;
+            return interleavedSamples;
         }
 
-        private static int[] DecodeCompressed(BitReader reader, int sampleCount, int bitsPerSample, AlacSpecificConfig config)
+        // Reconstructs the true two channels from their independently-decoded forms in place.
+        // channel0/channel1 arrive holding each channel's own LPC-reconstructed stream; on return
+        // they hold the final (post-decorrelation) samples. Mirrors ffmpeg's decorrelate_stereo
+        // exactly, including the channel0<->channel1 swap on the way out.
+        private static void Decorrelate(int[] channel0, int[] channel1, int sampleCount, int decorrShift, int decorrLeftWeight)
+        {
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var a = channel0[i];
+                var b = channel1[i];
+                a -= (b * decorrLeftWeight) >> decorrShift;
+                b += a;
+                channel0[i] = b;
+                channel1[i] = a;
+            }
+        }
+
+        private static int[] DecodeChannelBody(BitReader reader, int sampleCount, int rawBitsPerSample, int predictionBitsPerSample, bool isCompressed, AlacSpecificConfig config)
+        {
+            return isCompressed
+                ? DecodeCompressed(reader, sampleCount, predictionBitsPerSample, config)
+                : DecodeVerbatim(reader, sampleCount, rawBitsPerSample);
+        }
+
+        private static int[] DecodeCompressed(BitReader reader, int sampleCount, int predictionBitsPerSample, AlacSpecificConfig config)
         {
             var predictionType = reader.ReadBits(4);
             if (predictionType != 0)
@@ -81,17 +141,17 @@ namespace EggEncoder.Codecs.Alac
                 coefficients[i] = ReadSigned(reader, 16);
             }
 
-            var residuals = AlacRiceCoder.DecodeResiduals(reader, sampleCount, bitsPerSample, config.Pb, config.Mb, config.Kb, riceHistoryMultiplier);
+            var residuals = AlacRiceCoder.DecodeResiduals(reader, sampleCount, predictionBitsPerSample, config.Pb, config.Mb, config.Kb, riceHistoryMultiplier);
 
             return AlacLpcPredictor.Reconstruct(residuals, sampleCount, order, quantization, coefficients);
         }
 
-        private static int[] DecodeVerbatim(BitReader reader, int sampleCount, int bitsPerSample)
+        private static int[] DecodeVerbatim(BitReader reader, int sampleCount, int rawBitsPerSample)
         {
             var samples = new int[sampleCount];
             for (var i = 0; i < sampleCount; i++)
             {
-                samples[i] = ReadSigned(reader, bitsPerSample);
+                samples[i] = ReadSigned(reader, rawBitsPerSample);
             }
 
             return samples;

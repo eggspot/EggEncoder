@@ -1,16 +1,18 @@
 namespace EggEncoder.Codecs.Alac
 {
-    // Encodes mono, 16-bit PCM into a CAF/ALAC file -- see AlacDecoder's doc comment for why this tick
-    // is scoped to mono/16-bit only. Samples are buffered per ALAC frame (nominally 4096 samples; the
-    // final frame may be shorter) and encoded into packets as each frame fills; the packets themselves
-    // (compressed, far smaller than the raw PCM Mix already buffers in full) are held in memory until
-    // Finish(), since CafWriter's 'pakt' chunk needs every packet's byte size up front.
+    // Encodes 1 or 2 channels of 16-bit PCM into a CAF/ALAC file -- see AlacDecoder's doc comment for
+    // why this is scoped to 16-bit only. Samples are de-interleaved and buffered per channel, per ALAC
+    // frame (nominally 4096 frames; the final frame may be shorter), and encoded into packets as each
+    // frame fills; the packets themselves (compressed, far smaller than the raw PCM Mix already
+    // buffers in full) are held in memory until Finish(), since CafWriter's 'pakt' chunk needs every
+    // packet's byte size up front.
     public sealed class AlacEncoderSession : IAudioSink
     {
         private readonly FileStream _destStream;
         private readonly AlacSpecificConfig _config;
+        private readonly int _channels;
         private readonly List<byte[]> _packets = [];
-        private readonly int[] _pendingSamples;
+        private readonly int[][] _pendingChannelSamples;
 
         private int _pendingCount;
         private long _totalFrames;
@@ -20,14 +22,20 @@ namespace EggEncoder.Codecs.Alac
         {
             _destStream = destStream;
             _config = config;
-            _pendingSamples = new int[config.FrameLength];
+            _channels = config.NumChannels;
+
+            _pendingChannelSamples = new int[_channels][];
+            for (var c = 0; c < _channels; c++)
+            {
+                _pendingChannelSamples[c] = new int[config.FrameLength];
+            }
         }
 
         public static AlacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample)
         {
-            if (channels != 1)
+            if (channels is not 1 and not 2)
             {
-                throw new NotSupportedException($"'{destFilePath}' requests {channels} channels; only mono ALAC encoding is supported");
+                throw new NotSupportedException($"'{destFilePath}' requests {channels} channels; only mono and stereo ALAC encoding is supported");
             }
 
             if (bitsPerSample != 16)
@@ -42,7 +50,7 @@ namespace EggEncoder.Codecs.Alac
                 Pb = 40,
                 Mb = 10,
                 Kb = 14,
-                NumChannels = 1,
+                NumChannels = channels,
                 MaxRun = 255,
                 SampleRate = sampleRate
             };
@@ -63,8 +71,12 @@ namespace EggEncoder.Codecs.Alac
         {
             for (var i = 0; i < frameCount; i++)
             {
-                _pendingSamples[_pendingCount++] = buffer[i];
+                for (var c = 0; c < _channels; c++)
+                {
+                    _pendingChannelSamples[c][_pendingCount] = buffer[(i * _channels) + c];
+                }
 
+                _pendingCount++;
                 if (_pendingCount == _config.FrameLength)
                 {
                     FlushPendingFrame();
@@ -97,7 +109,11 @@ namespace EggEncoder.Codecs.Alac
 
         private void FlushPendingFrame()
         {
-            _packets.Add(AlacFrameEncoder.EncodePacket(_pendingSamples, _pendingCount, _config));
+            // _pendingChannelSamples may be longer than _pendingCount for a short final frame; every
+            // downstream step (AlacLpcPredictor, AlacRiceCoder, the verbatim fallback) is bounded by
+            // the sampleCount argument, never the array length, so passing the live buffers directly
+            // is safe -- EncodePacket fully consumes them synchronously before this returns.
+            _packets.Add(AlacFrameEncoder.EncodePacket(_pendingChannelSamples, _pendingCount, _config));
             _pendingCount = 0;
         }
     }

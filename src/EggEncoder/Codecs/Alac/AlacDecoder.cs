@@ -1,11 +1,11 @@
 namespace EggEncoder.Codecs.Alac
 {
-    // Decodes a CAF file holding ALAC (Apple Lossless) audio. Scoped to mono (single-channel) and
-    // 16-bit integer PCM only: ALAC's stereo channel-pair element adds a mid/side-style decorrelation
-    // step on top of everything a mono single-channel element already needs, and 20/24-bit depths need
-    // an extra post-prediction rescale this tick didn't implement with confidence (no real-world ALAC
-    // fixture was available to verify either against) -- both are reasonable follow-up scope, not
-    // implemented here. See AlacFrameDecoder/AlacRiceCoder/AlacLpcPredictor for the actual codec.
+    // Decodes a CAF file holding ALAC (Apple Lossless) audio. Supports mono and stereo, 16-bit
+    // integer PCM only: 20/24-bit depths need an extra post-prediction rescale this hasn't
+    // implemented with confidence (no real-world ALAC fixture was available to verify either
+    // against) -- reasonable follow-up scope, not implemented here. See
+    // AlacFrameDecoder/AlacRiceCoder/AlacLpcPredictor for the actual codec, and AlacFrameDecoder's
+    // doc comment for the stereo channel-pair element specifically.
     public static class AlacDecoder
     {
         public static AlacStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
@@ -13,9 +13,9 @@ namespace EggEncoder.Codecs.Alac
             using var reader = CafReader.Open(filePath);
             var config = reader.Config;
 
-            if (config.NumChannels != 1)
+            if (config.NumChannels is not 1 and not 2)
             {
-                throw new NotSupportedException($"'{filePath}' has {config.NumChannels} channels; only mono ALAC is supported");
+                throw new NotSupportedException($"'{filePath}' has {config.NumChannels} channels; only mono and stereo ALAC are supported");
             }
 
             if (config.BitDepth != 16)

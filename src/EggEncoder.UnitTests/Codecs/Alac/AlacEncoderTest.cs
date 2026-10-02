@@ -38,13 +38,38 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
-        public void Encode_From_StereoWav_Should_Throw()
+        public void Encode_From_StereoWav_Should_Reproduce_Exact_Samples()
         {
+            var interleaved = new[] { 0, 0, 100, -50, -32768, 32767, 1, -1 };
             var sourceWavPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_stereo_{Guid.NewGuid():N}.wav");
             var destCafPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_stereo_dest_{Guid.NewGuid():N}.caf");
             try
             {
-                WavFileBuilder.Create(sourceWavPath, channels: 2, sampleRate: 44100, bitsPerSample: 16, [0, 0, 1, 1]);
+                WavFileBuilder.Create(sourceWavPath, channels: 2, sampleRate: 44100, bitsPerSample: 16, interleaved);
+
+                AlacEncoder.Encode(sourceWavPath, destCafPath);
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destCafPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                decoded.Should().Equal(interleaved);
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(destCafPath);
+            }
+        }
+
+        [Fact]
+        public void Encode_From_UnsupportedChannelCountWav_Should_Throw()
+        {
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_multichannel_{Guid.NewGuid():N}.wav");
+            var destCafPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_multichannel_dest_{Guid.NewGuid():N}.caf");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 3, sampleRate: 44100, bitsPerSample: 16, [0, 0, 0, 1, 1, 1]);
 
                 var act = () => AlacEncoder.Encode(sourceWavPath, destCafPath);
 
