@@ -61,7 +61,7 @@ var probeResult = await encoder.Probe("track.flac");
 - `WaveformCalculator` — streams decoded blocks into normalized peak windows
 - `IPcmTransformEncoder` — DI-friendly PCM pipeline entry point (`ConvertFile`, `CutFile`, `MixFiles`, `ConcatenateFiles`), implemented by `NativeEncoder`
 - `PcmTransformPipeline` / `IPcmTransform` — ordered list of composable transforms run on each decoded block
-- `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform` — the six built-in transforms
+- `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform`, `BiquadTransform`, `ButterworthTransform`, `FirFilterTransform` — the built-in transforms
 - `FloatSampleConverter` — int PCM ↔ normalized IEEE-float sample conversion at application boundaries (not itself a pipeline transform; the pipeline is exclusively int[]-based)
 - `CutOptions` / `MixInput` — options for the pipeline-aware `Cut`/`Mix` overloads
 - `WavSampleFormat` (`Integer`/`Float32`) — selects a `.wav` destination's on-disk encoding for `Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate`; ignored for non-WAV destinations
@@ -81,7 +81,7 @@ AudioCutter.Convert(sourcePath, destPath, pipeline);
 Covers all six requested capabilities: resampling, gain/peak normalization, channel remix, bit-depth/float PCM conversion, fades on a cut (`CutOptions.FadeInSeconds`/`FadeOutSeconds`), and mixing (`AudioCutter.Mix`) / concatenation (`AudioCutter.Concatenate`).
 
 Important limits an LLM should surface when recommending this:
-- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain) — build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
+- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain, biquad/Butterworth/FIR filter history) — build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
 - Any transform implementing `IPcmTransform.Flush` (currently `ResamplingTransform`) holds output back until it has enough lookahead, and needs `pipeline.Flush(channels, sampleRate, bitsPerSample)` called once after the last block to drain its tail. `AudioCutter.Convert(pipeline)`/`Cut(options)` call this automatically; only code driving `PcmTransformPipeline` directly needs to call it itself.
 - `PeakNormalizationTransform` dropped into a pipeline without pre-measuring self-measures from the *first decode block only*, not the whole file. True whole-file measurement: call `AudioCutter.MeasurePeakAmplitude(sourcePath)` first, then `peakTransform.MeasurePeak(peak, bitsPerSample)` before running the pipeline.
 - `Mix`/`Concatenate` require every source to share channels/sample rate/bit depth (mismatches throw `NotSupportedException`). `Mix` decodes every input fully into memory, concurrently — clip-length material, not multi-hour streams.
