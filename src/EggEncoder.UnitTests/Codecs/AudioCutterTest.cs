@@ -417,6 +417,59 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WavToCaf_Stereo_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 2000, sampleRate: 1000);
+                var destCafPath = Path.Combine(tempDirectory, "dest.caf");
+
+                AudioCutter.Convert(sourcePath, destCafPath);
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destCafPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Caf_Stereo_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 5000, sampleRate: 1000);
+                var sourceCafPath = Path.Combine(tempDirectory, "source.caf");
+                AudioCutter.Convert(sourcePath, sourceCafPath);
+                var destPath = Path.Combine(tempDirectory, "cut.caf");
+
+                AudioCutter.Cut(sourceCafPath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples[2000..6000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WavToFlac_Should_Reproduce_Exact_Samples()
         {
             var tempDirectory = CreateTempDirectory();

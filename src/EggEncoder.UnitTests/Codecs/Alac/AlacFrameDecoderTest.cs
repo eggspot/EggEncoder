@@ -48,10 +48,76 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
+        public void DecodePacket_Cpe_WithNonZeroDecorrLeftWeight_Should_Decorrelate()
+        {
+            // This encoder never produces a nonzero decorr_left_weight (see AlacFrameEncoder's doc
+            // comment), but a real-world encoder's files can, and the decoder must still un-mix them
+            // correctly. Channel 0/1's independently-decoded (pre-mix) streams here are [10,20,30] and
+            // [5,15,25]; with shift=2, weight=4, ffmpeg's decorrelate_stereo (a -= (b*weight)>>shift;
+            // b += a; swap outputs) hand-computes to final channel0=[10,20,30], channel1=[5,5,5] --
+            // verified by hand before writing this test, not reverse-engineered from the code under test.
+            var channel0 = new[] { 10, 20, 30 };
+            var channel1 = new[] { 5, 15, 25 };
+
+            var writer = new BitWriter();
+            writer.WriteBits(1, 3); // CPE tag
+            writer.WriteBits(0, 4); // instance tag
+            writer.WriteBits(0, 12); // unused
+            writer.WriteBits(1, 1); // hasSize
+            writer.WriteBits(0, 2); // extraBitsBytes
+            writer.WriteBits(1, 1); // "not compressed" bit -- verbatim, to isolate the decorrelation step
+            writer.WriteBits(3, 32); // sampleCount
+            writer.WriteBits(2, 8); // decorrShift
+            writer.WriteBits(4, 8); // decorrLeftWeight
+
+            foreach (var sample in channel0.Concat(channel1))
+            {
+                writer.WriteBits((uint)sample & 0xFFFF, 16);
+            }
+
+            writer.WriteBits(7, 3); // END tag
+            writer.ByteAlign();
+
+            var decoded = AlacFrameDecoder.DecodePacket(writer.ToArray(), Config);
+
+            decoded.Should().Equal(10, 5, 20, 5, 30, 5);
+        }
+
+        [Fact]
+        public void DecodePacket_Cpe_WithZeroDecorrLeftWeight_Should_SkipDecorrelation()
+        {
+            var channel0 = new[] { 10, 20, 30 };
+            var channel1 = new[] { 5, 15, 25 };
+
+            var writer = new BitWriter();
+            writer.WriteBits(1, 3); // CPE tag
+            writer.WriteBits(0, 4);
+            writer.WriteBits(0, 12);
+            writer.WriteBits(1, 1); // hasSize
+            writer.WriteBits(0, 2);
+            writer.WriteBits(1, 1); // verbatim
+            writer.WriteBits(3, 32); // sampleCount
+            writer.WriteBits(9, 8); // decorrShift -- irrelevant, since weight is 0
+            writer.WriteBits(0, 8); // decorrLeftWeight -- 0 means independent channels, no mixing at all
+
+            foreach (var sample in channel0.Concat(channel1))
+            {
+                writer.WriteBits((uint)sample & 0xFFFF, 16);
+            }
+
+            writer.WriteBits(7, 3);
+            writer.ByteAlign();
+
+            var decoded = AlacFrameDecoder.DecodePacket(writer.ToArray(), Config);
+
+            decoded.Should().Equal(10, 5, 20, 15, 30, 25);
+        }
+
+        [Fact]
         public void DecodePacket_With_UnsupportedChannelElementTag_Should_Throw()
         {
             var writer = new BitWriter();
-            writer.WriteBits(1, 3); // CPE tag -- not supported, only SCE (0)
+            writer.WriteBits(2, 3); // CCE tag -- not supported, only SCE (0) and CPE (1)
             writer.ByteAlign();
 
             var act = () => AlacFrameDecoder.DecodePacket(writer.ToArray(), Config);

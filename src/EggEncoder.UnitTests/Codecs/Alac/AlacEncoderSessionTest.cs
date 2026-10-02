@@ -6,12 +6,12 @@ namespace EggEncoder.UnitTests.Codecs.Alac
     public class AlacEncoderSessionTest
     {
         [Fact]
-        public void OpenSession_With_NonMonoChannels_Should_Throw()
+        public void OpenSession_With_UnsupportedChannelCount_Should_Throw()
         {
             var filePath = Path.GetTempFileName();
             try
             {
-                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16);
+                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 3, sampleRate: 44100, bitsPerSample: 16);
 
                 act.Should().ThrowExactly<NotSupportedException>();
             }
@@ -114,6 +114,86 @@ namespace EggEncoder.UnitTests.Codecs.Alac
 
                 var streamInfo = AlacDecoder.Decode(filePath, (_, _, _, _, _) => { });
                 streamInfo.TotalSamples.Should().Be(0);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_Stereo_AcrossMultipleFrames()
+        {
+            const int sampleRate = 44100;
+            const int frameCount = sampleRate * 2;
+
+            var interleaved = new int[frameCount * 2];
+            for (var i = 0; i < frameCount; i++)
+            {
+                interleaved[i * 2] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate)); // left
+                interleaved[(i * 2) + 1] = (int)(10000 * Math.Sin(2 * Math.PI * 220 * i / sampleRate)); // right, different tone
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_session_stereo_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(interleaved, frameCount);
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, channels, rate, bits, total) =>
+                {
+                    channels.Should().Be(2);
+                    rate.Should().Be(sampleRate);
+                    bits.Should().Be(16);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.TotalSamples.Should().Be(frameCount);
+                decoded.Should().Equal(interleaved);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Stereo_CalledInSmallChunks_Should_StillDeinterleaveCorrectly()
+        {
+            const int frameCount = 10000;
+            var interleaved = new int[frameCount * 2];
+            for (var i = 0; i < frameCount; i++)
+            {
+                interleaved[i * 2] = i % 50;
+                interleaved[(i * 2) + 1] = -(i % 70);
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_session_stereo_chunks_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16))
+                {
+                    const int chunkFrames = 13; // deliberately not a divisor of the ALAC frame length (4096)
+                    for (var frameOffset = 0; frameOffset < frameCount; frameOffset += chunkFrames)
+                    {
+                        var framesThisCall = Math.Min(chunkFrames, frameCount - frameOffset);
+                        var sampleOffset = frameOffset * 2;
+                        session.WriteInterleavedSamples(interleaved[sampleOffset..(sampleOffset + (framesThisCall * 2))], framesThisCall);
+                    }
+
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.TotalSamples.Should().Be(frameCount);
+                decoded.Should().Equal(interleaved);
             }
             finally
             {
