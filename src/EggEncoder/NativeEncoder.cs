@@ -1,5 +1,6 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
@@ -33,6 +34,7 @@ namespace EggEncoder
                 var result = extension switch
                 {
                     ".wav" => ProbeWav(filePath),
+                    ".aiff" or ".aif" => ProbeAiff(filePath),
                     ".flac" => ProbeFlac(filePath),
                     ".mp3" => ProbeMp3(filePath),
                     ".aac" => ProbeAac(filePath),
@@ -151,6 +153,42 @@ namespace EggEncoder
                 BitRate = wavReader.SampleRate * wavReader.BitsPerSample * wavReader.Channels,
                 DurationInSamples = wavReader.TotalSamples,
                 TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null,
+                Waveform = waveformCalculator.GetNormalizedWindows()
+            };
+        }
+
+        private static ProbeResult ProbeAiff(string filePath)
+        {
+            using var aiffReader = AiffReader.Open(filePath);
+            var waveformCalculator = new WaveformCalculator(aiffReader.TotalSamples, aiffReader.Channels, aiffReader.BitsPerSample);
+
+            var buffer = new int[FramesPerBlock * aiffReader.Channels];
+
+            int framesRead;
+            while ((framesRead = aiffReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+            {
+                waveformCalculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * aiffReader.Channels));
+            }
+
+            var durationSeconds = aiffReader.SampleRate > 0 ? (double)aiffReader.TotalSamples / aiffReader.SampleRate : 0;
+            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample);
+
+            return new ProbeResult
+            {
+                FormatName = "aiff",
+                FormatLongName = "AIFF (Audio Interchange File Format)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = aiffReader.SampleRate,
+                Channels = aiffReader.Channels,
+                ChannelLayout = DescribeChannelLayout(aiffReader.Channels),
+                BitsPerSample = aiffReader.BitsPerSample,
+                BitRate = aiffReader.SampleRate * aiffReader.BitsPerSample * aiffReader.Channels,
+                DurationInSamples = aiffReader.TotalSamples,
+                TimeBase = aiffReader.SampleRate > 0 ? $"1/{aiffReader.SampleRate}" : null,
                 Waveform = waveformCalculator.GetNormalizedWindows()
             };
         }
@@ -374,6 +412,18 @@ namespace EggEncoder
                 24 => ("pcm_s24le", "PCM signed 24-bit little-endian"),
                 32 => ("pcm_s32le", "PCM signed 32-bit little-endian"),
                 _ => ($"pcm_s{bitsPerSample}le", $"PCM signed {bitsPerSample}-bit little-endian")
+            };
+        }
+
+        private static (string CodecName, string CodecLongName) DescribeAiffCodec(int bitsPerSample)
+        {
+            return bitsPerSample switch
+            {
+                8 => ("pcm_s8", "PCM signed 8-bit"),
+                16 => ("pcm_s16be", "PCM signed 16-bit big-endian"),
+                24 => ("pcm_s24be", "PCM signed 24-bit big-endian"),
+                32 => ("pcm_s32be", "PCM signed 32-bit big-endian"),
+                _ => ($"pcm_s{bitsPerSample}be", $"PCM signed {bitsPerSample}-bit big-endian")
             };
         }
 

@@ -1,3 +1,4 @@
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
 using System.Runtime.ExceptionServices;
@@ -403,23 +404,31 @@ namespace EggEncoder.Codecs
             return transforms is null ? new PcmTransformPipeline() : new PcmTransformPipeline([.. transforms]);
         }
 
-        // Only WavWriter needs an exact frame count up front (it writes a fixed-size RIFF header at Create
-        // time with no patch-up on Finish). Every other sink format ignores the count, so it always streams
-        // straight through regardless of exactTotalFrames. For WAV: if the caller already knows the exact
-        // output frame count (exactTotalFrames has a value -- true whenever nothing in play can change frame
-        // count, e.g. a pipeline with no resampling, or no pipeline at all), open the real WavWriter directly
-        // instead of paying for DeferredWavSink's whole-file in-memory buffering.
+        // WavWriter and AiffWriter both need an exact frame count up front (each writes a fixed-size
+        // header -- RIFF for WAV, FORM/COMM/SSND for AIFF -- at Create time with no patch-up on Finish).
+        // Every other sink format ignores the count, so it always streams straight through regardless of
+        // exactTotalFrames. For either of those two: if the caller already knows the exact output frame
+        // count (exactTotalFrames has a value -- true whenever nothing in play can change frame count,
+        // e.g. a pipeline with no resampling, or no pipeline at all), open the real writer directly
+        // instead of paying for the deferred sink's whole-file in-memory buffering.
         private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer)
         {
-            if (destExtension != ".wav")
+            if (destExtension == ".wav")
             {
-                return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat);
+                var isFloatFormat = destinationWavFormat == WavSampleFormat.Float32;
+                return exactTotalFrames.HasValue
+                    ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, isFloatFormat)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, isFloatFormat));
             }
 
-            var isFloatFormat = destinationWavFormat == WavSampleFormat.Float32;
-            return exactTotalFrames.HasValue
-                ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, isFloatFormat)
-                : new DeferredWavSink(destFilePath, channels, sampleRate, bitsPerSample, isFloatFormat);
+            if (destExtension is ".aiff" or ".aif")
+            {
+                return exactTotalFrames.HasValue
+                    ? AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames));
+            }
+
+            return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat);
         }
 
         private static (int[] Samples, int Channels, int SampleRate, int BitsPerSample) DecodeFully(string filePath)
@@ -515,25 +524,22 @@ namespace EggEncoder.Codecs
             writer.Finish();
         }
 
-        // Buffers written samples in memory and only opens the real WavWriter (which needs an exact frame
-        // count up front) once Finish() reports the true total. See OpenSinkForPipeline.
-        private sealed class DeferredWavSink : IAudioSink
+        // Buffers written samples in memory and only opens the real sink -- for any format whose writer
+        // needs an exact frame count up front (WAV, AIFF) -- once Finish() reports the true total. See
+        // OpenSinkForPipeline. Parameterized by an "open the real writer" callback rather than one of
+        // these per format (there were briefly two, nearly identical save for which Create method they
+        // called) so a future third fixed-header format doesn't mean a third near-duplicate class.
+        private sealed class DeferredFixedHeaderSink : IAudioSink
         {
-            private readonly string _destFilePath;
             private readonly int _channels;
-            private readonly int _sampleRate;
-            private readonly int _bitsPerSample;
-            private readonly bool _isFloatFormat;
+            private readonly Func<long, IAudioSink> _openWriter;
             private readonly List<int[]> _chunks = [];
             private long _totalFrames;
 
-            public DeferredWavSink(string destFilePath, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat = false)
+            public DeferredFixedHeaderSink(int channels, Func<long, IAudioSink> openWriter)
             {
-                _destFilePath = destFilePath;
                 _channels = channels;
-                _sampleRate = sampleRate;
-                _bitsPerSample = bitsPerSample;
-                _isFloatFormat = isFloatFormat;
+                _openWriter = openWriter;
             }
 
             public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -552,7 +558,7 @@ namespace EggEncoder.Codecs
 
             public void Finish()
             {
-                using var writer = WavWriter.Create(_destFilePath, _channels, _sampleRate, _bitsPerSample, _totalFrames, _isFloatFormat);
+                using var writer = _openWriter(_totalFrames);
                 foreach (var chunk in _chunks)
                 {
                     writer.WriteInterleavedSamples(chunk, chunk.Length / _channels);

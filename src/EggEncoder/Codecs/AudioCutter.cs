@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
@@ -67,6 +68,20 @@ namespace EggEncoder.Codecs
                     }
 
                     break;
+                case ".aiff":
+                case ".aif":
+                    using (var aiffReader = AiffReader.Open(sourceFilePath))
+                    {
+                        var buffer = new int[FramesPerBlock * aiffReader.Channels];
+
+                        int framesRead;
+                        while ((framesRead = aiffReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+                        {
+                            onBlockDecoded(new ReadOnlySpan<int>(buffer, 0, framesRead * aiffReader.Channels), aiffReader.Channels, aiffReader.SampleRate, aiffReader.BitsPerSample, aiffReader.TotalSamples);
+                        }
+                    }
+
+                    break;
                 case ".flac":
                     FlacDecoder.Decode(sourceFilePath, onBlockDecoded);
                     break;
@@ -98,6 +113,7 @@ namespace EggEncoder.Codecs
             return destExtension switch
             {
                 ".wav" => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, isFloatFormat: destinationWavFormat == WavSampleFormat.Float32),
+                ".aiff" or ".aif" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames),
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
                 ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate),
