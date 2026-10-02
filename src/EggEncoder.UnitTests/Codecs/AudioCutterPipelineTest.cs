@@ -1,5 +1,6 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
@@ -7,7 +8,7 @@ using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs
 {
-    // WAV/AIFF-only: MP3/FLAC round-trips depend on native win-x64 DLLs that can't load on this
+    // WAV/AIFF/CAF-only: MP3/FLAC round-trips depend on native win-x64 DLLs that can't load on this
     // (non-Windows) dev machine -- see AudioCutterTest for that coverage, which runs in CI on Windows.
     // These tests exercise the pipeline plumbing itself (format negotiation, DeferredFixedHeaderSink,
     // Mix, Concatenate), which is codec-agnostic.
@@ -202,6 +203,39 @@ namespace EggEncoder.UnitTests.Codecs
                 reader.SampleRate.Should().Be(500);
                 reader.Channels.Should().Be(2);
                 reader.TotalSamples.Should().Be(100);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_CafDestination_Should_Scale_Every_Sample()
+        {
+            // Unlike WAV/AIFF, AlacEncoderSession needs no exact frame count up front (ALAC packets
+            // carry their own sample count), so a CAF destination always streams straight through
+            // OpenSinkForPipeline's fallback to OpenSink -- this just confirms that dispatch actually
+            // reaches AlacEncoderSession and the pipeline's transform is applied before encoding. ALAC
+            // in this codebase is mono-only (see AlacDecoder's doc comment), unlike the stereo ramp
+            // fixture most of the other tests in this file share.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = Enumerable.Range(0, 100).ToArray();
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.caf");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.TotalSamples.Should().Be(100);
+                decoded.Should().Equal(samples.Select(s => s * 2));
             }
             finally
             {
