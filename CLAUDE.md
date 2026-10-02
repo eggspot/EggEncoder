@@ -30,6 +30,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 | Folder | Contents |
 |--------|----------|
 | `Aac/` | Pure managed AAC decoder/encoder + scale-factor/Huffman tables (`AacDecoder`, `AacFrameDecoder`, `AacEncoder`, `AacFrameEncoder`, `AacEncoderSession`, `AacTables`). `AacFrameDecoder` decodes one raw_data_block into PCM independent of ADTS framing, shared by `AacDecoder` (ADTS) and `MovDecoder` (MP4) |
+| `Aiff/` | `AiffReader`/`AiffWriter` — FORM/COMM/SSND (plain AIFF, not AIFC) PCM I/O, the big-endian counterpart to `Wav/`. Supports 8/16/24/32-bit integer PCM (8-bit is signed, unlike WAV's unsigned convention); `IeeeExtendedFloat` converts COMM's 80-bit extended-precision sample-rate field, which .NET has no built-in support for |
 | `Flac/` | `FlacDecoder`/`FlacEncoder` — thin wrappers over native `libFLAC` P/Invoke bindings |
 | `Mp3/` | `Mp3Decoder` (via the `NLayer` managed decoder), `Mp3Encoder` (native `libmp3lame` P/Invoke), `Mp3Probe` (manual frame-header parsing, no native call) |
 | `Wav/` | `WavReader`/`WavWriter` — RIFF/WAVE PCM I/O, the common source/sink format all codecs read from or write to. Both support 8/16/24/32-bit integer and 32-bit IEEE float (`WavWriter.Create(..., isFloatFormat: true)`) |
