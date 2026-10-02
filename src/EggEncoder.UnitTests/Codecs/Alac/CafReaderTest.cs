@@ -35,6 +35,28 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
+        public void Open_With_TruncatedDescChunk_Should_Throw()
+        {
+            // The 'desc' chunk header declares a full 32-byte CAFAudioFormat, but the file ends partway
+            // through it -- BinaryReader.ReadChars silently returns a short array at EOF rather than
+            // throwing, so ParseDescChunk's own length check is what catches this, not an I/O exception.
+            var bytes = BuildFileHeader()
+                .Concat(BuildChunk("desc", new byte[8])) // only the 8-byte mSampleRate, nothing else
+                .ToArray();
+            var filePath = WriteBytes(bytes);
+
+            try
+            {
+                var act = () => CafReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*malformed*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_NonAlacDescFormat_Should_Throw()
         {
             var filePath = WriteBytes(BuildFileHeader()

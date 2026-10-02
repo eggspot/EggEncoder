@@ -128,12 +128,13 @@ namespace EggEncoder.Codecs.Alac
 
         private static void WriteDoubleBigEndian(BinaryWriter writer, double value)
         {
+            // BinaryPrimitives has no WriteDoubleBigEndian overload; every platform this project
+            // targets is little-endian (same assumption BinaryPrimitives' own big-endian helpers make
+            // for every other type here), so this always reverses rather than branching on
+            // BitConverter.IsLittleEndian for a case that can't occur on a supported platform.
             Span<byte> bytes = stackalloc byte[8];
             BitConverter.TryWriteBytes(bytes, value);
-            if (BitConverter.IsLittleEndian)
-            {
-                bytes.Reverse();
-            }
+            bytes.Reverse();
 
             writer.Write(bytes);
         }
