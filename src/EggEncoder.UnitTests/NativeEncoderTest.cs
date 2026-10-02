@@ -46,6 +46,40 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_AiffFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var aiffPath = Path.Combine(tempDirectory, "source.aiff");
+                var samples = Enumerable.Range(0, 44100 * 2).SelectMany(frame => new[] { frame % 1000, -(frame % 1000) }).ToArray();
+                AiffFileBuilder.Create(aiffPath, channels: 2, sampleRate: 44100, bitsPerSample: 16, samples);
+
+                var probeResult = await _nativeEncoder.Probe(aiffPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("aiff");
+                probeResult.SizeBytes.Should().Be(new FileInfo(aiffPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("pcm_s16be");
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(2);
+                probeResult.ChannelLayout.Should().Be("stereo");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be("1/44100");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public async Task Probe_FlacFile_Should_Return_Correct_Metadata_And_Waveform()
         {
             var tempDirectory = CreateTempDirectory();

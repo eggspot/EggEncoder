@@ -1,4 +1,5 @@
 using EggEncoder.Codecs;
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
@@ -121,6 +122,86 @@ namespace EggEncoder.UnitTests.Codecs
                 reader.SampleRate.Should().Be(2000);
                 reader.Channels.Should().Be(2);
                 reader.TotalSamples.Should().Be(200);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_AiffDestination_Should_Scale_Every_Sample()
+        {
+            // AIFF has the same exact-frame-count-up-front constraint as WAV (see AiffWriter.Create);
+            // volume never changes frame count, so this exercises AIFF's direct-writer path (the total
+            // is known before the first sample is written) rather than DeferredFixedHeaderSink.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, samples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.aiff");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var reader = AiffReader.Open(destPath);
+                reader.Channels.Should().Be(2);
+                reader.SampleRate.Should().Be(1000);
+                reader.TotalSamples.Should().Be(100);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, 100);
+                buffer.Should().Equal(samples.Select(s => s * 2));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithResamplingTransform_AiffDestination_Should_Produce_Exact_Frame_Count()
+        {
+            // Resampling changes the frame count unpredictably from the pipeline's perspective, so the
+            // AIFF destination must go through DeferredFixedHeaderSink (buffer everything, then open the
+            // real AiffWriter once the true total is known) exactly like the WAV destination case above.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.aiff");
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 2));
+                AudioCutter.Convert(sourcePath, destPath, pipeline);
+
+                using var reader = AiffReader.Open(destPath);
+                reader.SampleRate.Should().Be(2000);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(200);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_AiffSourceAndDestination_WithResamplingTransform_Should_Produce_Exact_Frame_Count()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.aiff");
+                var samples = Enumerable.Range(0, 200).SelectMany(frame => new[] { frame, -frame }).ToArray();
+                AiffFileBuilder.Create(sourcePath, channels: 2, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.aiff");
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 500, channels: 2));
+                AudioCutter.Convert(sourcePath, destPath, pipeline);
+
+                using var reader = AiffReader.Open(destPath);
+                reader.SampleRate.Should().Be(500);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(100);
             }
             finally
             {
