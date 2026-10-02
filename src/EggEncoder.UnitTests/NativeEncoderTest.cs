@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.UnitTests.TestUtilities;
@@ -70,6 +71,45 @@ namespace EggEncoder.UnitTests
                 probeResult.SampleRate.Should().Be(44100);
                 probeResult.Channels.Should().Be(2);
                 probeResult.ChannelLayout.Should().Be("stereo");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be("1/44100");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_CafFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var cafPath = Path.Combine(tempDirectory, "source.caf");
+                var samples = Enumerable.Range(0, 44100 * 2).Select(frame => frame % 1000).ToArray();
+
+                using (var session = AlacEncoderSession.OpenSession(cafPath, channels: 1, sampleRate: 44100, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(cafPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("caf");
+                probeResult.SizeBytes.Should().Be(new FileInfo(cafPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("alac");
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be("1/44100");
             }

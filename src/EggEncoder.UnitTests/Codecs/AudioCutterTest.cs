@@ -1,6 +1,7 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
@@ -330,6 +331,92 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Cut_Caf_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampCaf(tempDirectory, "source.caf", totalFrames: 5000, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "cut.caf");
+
+                AudioCutter.Cut(sourcePath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.BitsPerSample.Should().Be(16);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples[1000..3000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_CafToWav_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampCaf(tempDirectory, "source.caf", totalFrames: 2000, sampleRate: 1000);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(1000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToCaf_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var filePath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new int[2000];
+                for (var frame = 0; frame < interleavedSamples.Length; frame++)
+                {
+                    interleavedSamples[frame] = frame % 1000;
+                }
+
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples);
+                var destCafPath = Path.Combine(tempDirectory, "dest.caf");
+
+                AudioCutter.Convert(filePath, destCafPath);
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destCafPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WavToFlac_Should_Reproduce_Exact_Samples()
         {
             var tempDirectory = CreateTempDirectory();
@@ -614,6 +701,27 @@ namespace EggEncoder.UnitTests.Codecs
             }
 
             AiffFileBuilder.Create(filePath, channels: 2, sampleRate, bitsPerSample: 16, interleavedSamples);
+
+            return (filePath, interleavedSamples);
+        }
+
+        private static (string FilePath, int[] InterleavedSamples) CreateRampCaf(string tempDirectory, string fileName, int totalFrames, int sampleRate)
+        {
+            // ALAC in this codebase is mono-only (see AlacDecoder's doc comment), unlike the other
+            // ramp helpers above which build stereo fixtures.
+            var filePath = Path.Combine(tempDirectory, fileName);
+            var interleavedSamples = new int[totalFrames];
+
+            for (var frame = 0; frame < totalFrames; frame++)
+            {
+                interleavedSamples[frame] = frame % 1000;
+            }
+
+            using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16))
+            {
+                session.WriteInterleavedSamples(interleavedSamples, totalFrames);
+                session.Finish();
+            }
 
             return (filePath, interleavedSamples);
         }

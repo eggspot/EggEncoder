@@ -1,0 +1,174 @@
+using EggEncoder.Codecs.Alac;
+using FluentAssertions;
+
+namespace EggEncoder.UnitTests.Codecs.Alac
+{
+    public class AlacEncoderSessionTest
+    {
+        [Fact]
+        public void OpenSession_With_NonMonoChannels_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_With_NonSixteenBitDepth_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 24);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_AcrossMultipleFrames()
+        {
+            // 44100 * 2 samples spans more than ten 4096-sample ALAC frames, with a short final frame.
+            const int sampleRate = 44100;
+            const int sampleCount = sampleRate * 2;
+
+            var samples = new int[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                samples[i] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            AssertRoundTrips(samples, sampleRate);
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_ExactMultipleOfFrameLength()
+        {
+            var samples = new int[4096 * 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = i % 100;
+            }
+
+            AssertRoundTrips(samples, sampleRate: 44100);
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_CalledInSmallChunks_Should_StillAccumulateIntoFullFrames()
+        {
+            var samples = new int[10000];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = i % 50;
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_small_chunks_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16))
+                {
+                    const int chunkSize = 37; // deliberately not a divisor of the ALAC frame length (4096)
+                    for (var offset = 0; offset < samples.Length; offset += chunkSize)
+                    {
+                        var count = Math.Min(chunkSize, samples.Length - offset);
+                        session.WriteInterleavedSamples(samples[offset..(offset + count)], count);
+                    }
+
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, channels, rate, bits, total) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.TotalSamples.Should().Be(samples.Length);
+                decoded.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Finish_WithNoSamplesWritten_Should_Produce_An_EmptyButValidFile()
+        {
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_empty_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16))
+                {
+                    session.Finish();
+                }
+
+                var streamInfo = AlacDecoder.Decode(filePath, (_, _, _, _, _) => { });
+                streamInfo.TotalSamples.Should().Be(0);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Dispose_CalledTwice_Should_Not_Throw()
+        {
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_dispose_{Guid.NewGuid():N}.caf");
+            try
+            {
+                var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+                session.Dispose();
+
+                var act = session.Dispose;
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static void AssertRoundTrips(int[] samples, int sampleRate)
+        {
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_session_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, channels, rate, bits, total) =>
+                {
+                    channels.Should().Be(1);
+                    rate.Should().Be(sampleRate);
+                    bits.Should().Be(16);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.SampleRate.Should().Be(sampleRate);
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.BitsPerSample.Should().Be(16);
+                streamInfo.TotalSamples.Should().Be(samples.Length);
+                decoded.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+    }
+}
