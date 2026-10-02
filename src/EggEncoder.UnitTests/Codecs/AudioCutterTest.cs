@@ -1,5 +1,6 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
@@ -213,6 +214,114 @@ namespace EggEncoder.UnitTests.Codecs
                 var (_, samples) = Mp3TestDecoder.DecodeAll(destMp3Path);
                 var rootMeanSquare = Math.Sqrt(samples.Average(sample => (double)sample * sample));
                 rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Aiff_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampAiff(tempDirectory, "source.aiff", totalFrames: 5000, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "cut.aiff");
+
+                AudioCutter.Cut(sourcePath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                using var aiffReader = AiffReader.Open(destPath);
+                aiffReader.Channels.Should().Be(2);
+                aiffReader.SampleRate.Should().Be(1000);
+                aiffReader.BitsPerSample.Should().Be(16);
+                aiffReader.TotalSamples.Should().Be(2000);
+
+                var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+                var framesRead = aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples);
+
+                framesRead.Should().Be(2000);
+                buffer.Should().Equal(interleavedSamples[2000..6000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_AiffToWav_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampAiff(tempDirectory, "source.aiff", totalFrames: 2000, sampleRate: 1000);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(2);
+                wavReader.SampleRate.Should().Be(1000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToAiff_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 2000, sampleRate: 1000);
+                var destAiffPath = Path.Combine(tempDirectory, "dest.aiff");
+
+                AudioCutter.Convert(sourcePath, destAiffPath);
+
+                using var aiffReader = AiffReader.Open(destAiffPath);
+                aiffReader.Channels.Should().Be(2);
+                aiffReader.SampleRate.Should().Be(1000);
+
+                var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+                aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_AifExtension_Should_Be_Treated_The_Same_As_Aiff()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampAiff(tempDirectory, "source.aif", totalFrames: 100, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.aif");
+
+                AudioCutter.Convert(sourcePath, destPath);
+
+                using var aiffReader = AiffReader.Open(destPath);
+                var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+                aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
             }
             finally
             {
@@ -489,6 +598,22 @@ namespace EggEncoder.UnitTests.Codecs
             }
 
             WavFileBuilder.Create(filePath, channels: 2, sampleRate, bitsPerSample: 16, interleavedSamples);
+
+            return (filePath, interleavedSamples);
+        }
+
+        private static (string FilePath, int[] InterleavedSamples) CreateRampAiff(string tempDirectory, string fileName, int totalFrames, int sampleRate)
+        {
+            var filePath = Path.Combine(tempDirectory, fileName);
+            var interleavedSamples = new int[totalFrames * 2];
+
+            for (var frame = 0; frame < totalFrames; frame++)
+            {
+                interleavedSamples[frame * 2] = frame;
+                interleavedSamples[(frame * 2) + 1] = -frame;
+            }
+
+            AiffFileBuilder.Create(filePath, channels: 2, sampleRate, bitsPerSample: 16, interleavedSamples);
 
             return (filePath, interleavedSamples);
         }

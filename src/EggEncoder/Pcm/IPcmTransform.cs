@@ -16,7 +16,7 @@ public interface IPcmTransform
     /// True if this transform can return a different frame count than it was given (e.g. resampling).
     /// Lets a caller that already knows the exact input frame count (like AudioCutter.Cut, after
     /// trimming) decide whether it can still predict the exact output frame count up front, or must
-    /// wait to see actual output before it can open a sink that needs one (see DeferredWavSink).
+    /// wait to see actual output before it can open a sink that needs one (see DeferredFixedHeaderSink).
     /// </summary>
     bool CanChangeFrameCount { get; }
 
