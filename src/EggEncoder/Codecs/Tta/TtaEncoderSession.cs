@@ -44,7 +44,7 @@ namespace EggEncoder.Codecs.Tta
 
             if (sampleRate <= 0)
             {
-                throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; TTA encoding requires a positive sample rate");
+                throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; only positive sample rates are supported for TTA encoding");
             }
 
             var destStream = File.Create(destFilePath);
