@@ -41,7 +41,7 @@ namespace EggEncoder.Codecs.Alac
 
             if (bitsPerSample is not 16 and not 24)
             {
-                throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit and 24-bit ALAC encoding are supported");
+                throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit and 24-bit ALAC encoding is supported");
             }
 
             var config = new AlacSpecificConfig
