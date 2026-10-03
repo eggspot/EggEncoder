@@ -50,12 +50,14 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         [Fact]
         public void DecodePacket_Cpe_WithNonZeroDecorrLeftWeight_Should_Decorrelate()
         {
-            // This encoder never produces a nonzero decorr_left_weight (see AlacFrameEncoder's doc
-            // comment), but a real-world encoder's files can, and the decoder must still un-mix them
-            // correctly. Channel 0/1's independently-decoded (pre-mix) streams here are [10,20,30] and
-            // [5,15,25]; with shift=2, weight=4, ffmpeg's decorrelate_stereo (a -= (b*weight)>>shift;
-            // b += a; swap outputs) hand-computes to final channel0=[10,20,30], channel1=[5,5,5] --
-            // verified by hand before writing this test, not reverse-engineered from the code under test.
+            // This encoder only ever produces decorrShift=8/decorrLeftWeight=128 (its fixed mid/side
+            // mix) or weight=0 (its independent-channels fallback) -- see AlacFrameEncoder's doc
+            // comment -- but a real-world encoder's files can use any shift/weight, and the decoder
+            // must still un-mix them correctly. Channel 0/1's independently-decoded (pre-mix) streams
+            // here are [10,20,30] and [5,15,25]; with shift=2, weight=4, ffmpeg's decorrelate_stereo
+            // (a -= (b*weight)>>shift; b += a; swap outputs) hand-computes to final channel0=[10,20,30],
+            // channel1=[5,5,5] -- verified by hand before writing this test, not reverse-engineered
+            // from the code under test.
             var channel0 = new[] { 10, 20, 30 };
             var channel1 = new[] { 5, 15, 25 };
 
