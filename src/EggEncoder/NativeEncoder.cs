@@ -378,7 +378,7 @@ namespace EggEncoder
                 DurationSeconds = durationSeconds,
                 CodecType = "audio",
                 CodecName = "opus",
-                CodecLongName = "Opus",
+                CodecLongName = "Opus (Opus Interactive Audio Codec)",
                 SampleRate = streamInfo.SampleRate,
                 Channels = streamInfo.Channels,
                 ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
