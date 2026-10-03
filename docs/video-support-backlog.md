@@ -138,20 +138,29 @@ trusting a "confirmed" verdict, the same discipline already established for the 
   `NativeEncoder.ProbeVideo`), `Width`/`Height`, generic enough for video metadata without
   changes.
 - **`Codecs/Mov/`**: the existing MOV/MP4 groundwork, directly reusable:
-  - `MovAtomReader.cs` — generic ISO base media (box/atom) tree walker, format-agnostic, already
-    shared between audio decode and metadata probing. Reuse as-is for any new MOV/MP4 work.
+  - `MovAtomReader.cs` — generic ISO base media (box/atom) tree walker, format-agnostic, shared
+    between audio decode, metadata probing, and (since item 1) video demuxing. Also has
+    `FindTrackByHandlerType(stream, moov, handlerType)` — finds the first `trak` whose
+    `mdia`/`hdlr` component type matches (`"soun"` for audio, `"vide"` for video); use this
+    rather than writing a new track-lookup loop for anything else added here.
   - `Mp4SampleTable.cs` — resolves a `stbl` box's `stsz`/`stsc`/`stco`/`co64` into
-    `(offset, size)` pairs per sample. Already format-agnostic (doesn't know or care whether the
-    samples are audio or video) — reuse as-is; extend with a sibling method for `stss` (sync
-    samples / keyframes) rather than duplicating the box-reading logic elsewhere.
-  - `MovDecoder.cs` / `MovProbe.cs` — today audio-decode and metadata-probe respectively, both
-    built on the two readers above. A hypothetical `MovVideoDemuxer` should mirror this same
-    shape: find the track, resolve its sample table, return raw per-sample bytes (see backlog
-    item 1).
-  - `test.mov` / `test.mp4` in `src/EggEncoder.UnitTests/Codecs/Mov/`: **already real H.264-in-MP4
-    fixtures** (640x360, `avc1`, 125 frames @ 25fps, confirmed via `ffprobe` to have exactly one
-    keyframe at sample index 0) with zero audio track. These are immediately usable for container-
-    level work (item 1) without creating any new fixture.
+    `(offset, size)` pairs per sample via `ReadSamples` (format-agnostic — doesn't know or care
+    whether the samples are audio or video), plus `ReadSyncSamples` (since item 1) for the
+    optional `stss` (sync sample / keyframe) box — returns a 0-indexed `HashSet<int>?`, where
+    `null` specifically means "no `stss` box at all" (spec: every sample is a sync sample) and a
+    non-null empty set means "`stss` present but declares zero entries" (spec: no sample is ever
+    a sync sample) — a real distinction the two don't collapse into each other.
+  - `MovDecoder.cs` / `MovProbe.cs` / `MovVideoDemuxer.cs` — audio-decode, metadata-probe, and
+    (since item 1) video-sample-demuxing respectively, all three built on the two readers above
+    following the same shape: find the track, resolve its sample table, return raw per-sample
+    data. `MovVideoDemuxer.DemuxVideoTrack` returns raw bytes/keyframe-flags only, no codec
+    decode — a future codec item builds its decoder on top of this, not by re-deriving container
+    parsing.
+  - `test.mov` / `test.mp4` in `src/EggEncoder.UnitTests/Codecs/Mov/`: real H.264-in-MP4 fixtures
+    (640x360, `avc1`, 125 frames @ 25fps, confirmed via `ffprobe` to have exactly one keyframe at
+    sample index 0) with zero audio track — already used by item 1's own tests
+    (`MovVideoDemuxerTest.cs`) and immediately reusable by any future item needing a real
+    container-level (not yet decodable) video fixture.
 - **`Native/`**: `NativeLibraryLoader.cs`'s `[ModuleInitializer]`-registered `DllImportResolver`
   already generalizes to any additional library name added to its `_managedLibraryNames` array —
   adding `libvpx`/`dav1d`/etc. later is a one-line change there, not a new mechanism.
@@ -203,20 +212,25 @@ Ordered by priority/dependency/value. An item's "Depends on" line names a prereq
 
 - [ ] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
   already-encoded video sample byte arrays + keyframe flags + width/height/codec fourCC.
-  - **Feasibility**: pure C#, small-to-medium. Mirrors `Mp4FileBuilder`'s existing *test-only*
-    box-building helper, but promoted to real production code (`Codecs/Mov/MovVideoMuxer.cs` or
-    similar) covering `stsd`/`stsz`/`stsc`/`stco`/`stss`/`vmhd`/`tkhd` for a video track. Needed
-    before *any* encode item (item 3+) produces something end-to-end usable — an encoder that can
-    only emit raw elementary-stream bytes with nowhere valid to put them isn't shippable on its
-    own.
+  - **Feasibility**: pure C#, small-to-medium. `Mp4FileBuilder.CreateVideoOnly` (added for item 1,
+    test-only, in `src/EggEncoder.UnitTests/TestUtilities/`) already builds exactly this box
+    layout — `stsd`/`stts`/`stsc`/`stsz`/`stco`/`stss`/`vmhd`/`tkhd`/`hdlr` for a single video
+    track — and is a direct template for this item's real production code
+    (`Codecs/Mov/MovVideoMuxer.cs` or similar); don't re-derive the box layout from the ISO spec
+    from scratch when a working, already-tested example exists. Needed before *any* encode item
+    (item 3+) produces something end-to-end usable — an encoder that can only emit raw
+    elementary-stream bytes with nowhere valid to put them isn't shippable on its own.
   - **Depends on**: 1 (shares box-reading knowledge/round-trip testing, though muxing itself is a
     write-only concern).
   - **Test plan**: round-trip test — mux a few arbitrary (non-decodable, doesn't matter) sample
-    byte arrays with a known keyframe pattern, then demux with item 1's reader, assert the
-    offsets/sizes/keyframe-flags/width/height/fourCC all come back exactly as given. A real-codec
-    cross-check (write real VP9/AV1/H.264 bytes and confirm `ffprobe` can open the result) becomes
-    possible once a real codec exists (item 3+) — add that cross-check retroactively once one
-    does, don't block this item on it.
+    byte arrays with a known keyframe pattern, then demux with item 1's `MovVideoDemuxer`, assert
+    the offsets/sizes/keyframe-flags/fourCC all come back exactly as given. Note: item 1's reader
+    deliberately does *not* expose width/height (that stays `MovProbe`'s job, reading `tkhd`, to
+    avoid two independent sources of truth for the same metadata) — check width/height round-trip
+    via `MovProbe.Probe` instead, not by extending `MovVideoTrackInfo`. A real-codec cross-check
+    (write real VP9/AV1/H.264 bytes and confirm `ffprobe` can open the result) becomes possible
+    once a real codec exists (item 3+) — add that cross-check retroactively once one does, don't
+    block this item on it.
   - Status: not started.
 
 ### Phase 1 — First real codec: decode
