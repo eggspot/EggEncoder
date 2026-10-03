@@ -61,9 +61,11 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         [Fact]
         public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_TwentyFourBit_Stereo()
         {
-            // Correlated left/right content at 24-bit -- exercises the mid/side mixing path (not just
-            // the independent-channels fallback) at the wider bit depth, where predictionBitsPerSample
-            // for the mixed channels is 25 (BitDepth + channels - 1).
+            // Correlated left/right content at 24-bit, round-tripped through the real session and CAF
+            // container (not just EncodePacket/DecodePacket directly) -- whichever of EncodePacket's
+            // mixed/independent/verbatim candidates this data actually lands on (confirmed to be the
+            // mid/side mix by AlacFrameEncoderTest's own dedicated 24-bit bit-level check), this proves
+            // the full file-level pipeline round-trips correctly at the wider predictionBitsPerSample.
             const int sampleRate = 44100;
             const int frameCount = sampleRate * 2;
 
