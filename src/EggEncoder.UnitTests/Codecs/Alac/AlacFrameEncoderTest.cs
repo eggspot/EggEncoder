@@ -157,18 +157,64 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
-        public void EncodePacket_TwoChannels_Should_AlwaysWrite_Independent_ZeroMixing()
+        public void EncodePacket_TwoChannels_Should_UseMidSideMixing_ForCorrelatedSamples()
         {
-            // This encoder never produces a nonzero decorr_left_weight (see its doc comment) --
-            // confirmed here by checking the decoded channels never got mixed, i.e. channel 0 and
-            // channel 1 decode back to exactly what was given, not some affine combination of them.
+            // left and right move together (both +1000 per sample) -- exactly the case real-world
+            // stereo mixing exists for. Confirms the encoder actually chose the mid/side mix
+            // (decorrShift=8, decorrLeftWeight=128) rather than always writing independent channels.
             var left = new[] { 1000, 2000, 3000 };
             var right = new[] { -500, -1500, -2500 };
 
             var packet = AlacFrameEncoder.EncodePacket([left, right], left.Length, Config);
-            var decoded = AlacFrameDecoder.DecodePacket(packet, Config);
 
+            var reader = new BitReader(packet);
+            reader.SkipBits(3 + 4 + 12 + 1 + 2 + 1 + 32); // tag..sampleCount
+            var decorrShift = reader.ReadBits(8);
+            var decorrLeftWeight = reader.ReadBits(8);
+            decorrShift.Should().Be(8u);
+            decorrLeftWeight.Should().Be(128u);
+
+            var decoded = AlacFrameDecoder.DecodePacket(packet, Config);
             decoded.Should().Equal(1000, -500, 2000, -1500, 3000, -2500);
+        }
+
+        [Fact]
+        public void EncodePacket_TwoChannels_Should_FallBackToIndependentChannels_WhenMixedResidualsOverflow()
+        {
+            // 6 samples == the predictor order, so (as in the hand-computable escape-range test
+            // above) every residual comes from the simple delta warmup. Perfectly anti-correlated
+            // (opposite-phase) channels are the one case mixing makes *worse*, not better:
+            // left=+-20000, right=-+20000 (opposite phase) gives b0=left-right alternating +-40000,
+            // whose warmup delta hits +-80000 -- overflowing bps=17's 65535 limit -- while a0=right+
+            // (left-right)/2 collapses to a constant 0 (the "mid" of two equal-and-opposite signals,
+            // trivially fits). The *unmixed* channels' own warmup delta is only +-40000, which still
+            // fits -- so this should land on the independent-channels fallback (decorrLeftWeight=0),
+            // not skip straight to verbatim.
+            var left = new[] { 20000, -20000, 20000, -20000, 20000, -20000 };
+            var right = new[] { -20000, 20000, -20000, 20000, -20000, 20000 };
+
+            var packet = AlacFrameEncoder.EncodePacket([left, right], left.Length, Config);
+
+            var reader = new BitReader(packet);
+            reader.SkipBits(3 + 4 + 12 + 1 + 2); // tag..extraBitsBytes
+            var notCompressedBit = reader.ReadBits(1);
+            reader.SkipBits(32); // sampleCount
+            var decorrShift = reader.ReadBits(8);
+            var decorrLeftWeight = reader.ReadBits(8);
+
+            notCompressedBit.Should().Be(0u, "the unmixed residuals should still fit, so this shouldn't need verbatim");
+            decorrLeftWeight.Should().Be(0u, "the mixed residuals should overflow, forcing the independent-channels fallback");
+            decorrShift.Should().Be(0u);
+
+            var decoded = AlacFrameDecoder.DecodePacket(packet, Config);
+            var expectedInterleaved = new int[left.Length * 2];
+            for (var i = 0; i < left.Length; i++)
+            {
+                expectedInterleaved[i * 2] = left[i];
+                expectedInterleaved[(i * 2) + 1] = right[i];
+            }
+
+            decoded.Should().Equal(expectedInterleaved);
         }
     }
 }
