@@ -52,7 +52,7 @@ namespace EggEncoder.Codecs.Alac
             var order = Math.Min(PredictorOrder, sampleCount);
 
             var decorrShift = 0;
-            var decorrWeight = 0;
+            var decorrLeftWeight = 0;
             int[][] codingSamples;
             int[][] residuals;
             bool isCompressed;
@@ -68,7 +68,7 @@ namespace EggEncoder.Codecs.Alac
                     residuals = mixedResiduals;
                     isCompressed = true;
                     decorrShift = MixShift;
-                    decorrWeight = MixWeight;
+                    decorrLeftWeight = MixWeight;
                 }
                 else
                 {
@@ -92,7 +92,7 @@ namespace EggEncoder.Codecs.Alac
             writer.WriteBits(isCompressed ? 0u : 1u, 1); // "not compressed" bit -- 0 means compressed
             writer.WriteBits((uint)sampleCount, 32);
             writer.WriteBits((uint)decorrShift, 8);
-            writer.WriteBits((uint)decorrWeight, 8);
+            writer.WriteBits((uint)decorrLeftWeight, 8);
 
             var seedCoefficients = CoefficientSeed[..order];
             for (var c = 0; c < channelCount; c++)
