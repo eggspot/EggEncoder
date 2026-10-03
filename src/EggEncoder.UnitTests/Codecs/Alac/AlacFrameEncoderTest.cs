@@ -105,7 +105,10 @@ namespace EggEncoder.UnitTests.Codecs.Alac
             // warmup (no main LPC loop runs), making the exact residuals hand-computable rather than
             // dependent on uncertain long-run adaptive drift: left alternates +-32760, giving residuals
             // [32760, -65520, 65520, -65520, 65520, -65520] -- each overflows the mono (bps=16, max
-            // 32767) escape range but fits the stereo (bps=17, max 65535) one exactly. Round-tripping
+            // 32767) escape range but fits the stereo (bps=17, max 65535) one exactly. With right all
+            // zero, the mixed "side" stream (b0=left-right) is numerically identical to left, so this
+            // holds whichever of EncodePacket's mixed/independent candidates ends up chosen -- the
+            // point here is specifically the bps=17 range, not which one that is. Round-tripping
             // correctly isn't enough to prove EncodePacket actually used the wider range (verbatim
             // round-trips fine too), so this reads the "not compressed" bit directly out of the packet.
             var left = new[] { 32760, -32760, 32760, -32760, 32760, -32760 };
