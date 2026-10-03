@@ -22,14 +22,81 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
-        public void OpenSession_With_NonSixteenBitDepth_Should_Throw()
+        public void OpenSession_With_UnsupportedBitDepth_Should_Throw()
         {
             var filePath = Path.GetTempFileName();
             try
             {
-                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 24);
+                var act = () => AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 20);
 
                 act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_TwentyFourBit_FullScale()
+        {
+            // Full 24-bit signed range (-8388608..8388607), not just 16-bit-scale values -- confirms
+            // the Rice coder's escape width (predictionBitsPerSample = BitDepth + channels - 1 = 24
+            // for mono) genuinely widens rather than silently truncating/overflowing at 16-bit scale.
+            const int sampleRate = 44100;
+            const int sampleCount = sampleRate * 2;
+
+            var samples = new int[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                samples[i] = (int)(8_000_000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            samples[0] = -8_388_608;
+            samples[1] = 8_388_607;
+
+            AssertRoundTrips(samples, sampleRate, bitsPerSample: 24);
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_TwentyFourBit_Stereo()
+        {
+            // Correlated left/right content at 24-bit -- exercises the mid/side mixing path (not just
+            // the independent-channels fallback) at the wider bit depth, where predictionBitsPerSample
+            // for the mixed channels is 25 (BitDepth + channels - 1).
+            const int sampleRate = 44100;
+            const int frameCount = sampleRate * 2;
+
+            var interleaved = new int[frameCount * 2];
+            for (var i = 0; i < frameCount; i++)
+            {
+                var value = (int)(8_000_000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                interleaved[i * 2] = value; // left
+                interleaved[(i * 2) + 1] = value + 1000; // right, highly correlated with left
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_session_24bit_stereo_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate, bitsPerSample: 24))
+                {
+                    session.WriteInterleavedSamples(interleaved, frameCount);
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, channels, rate, bits, total) =>
+                {
+                    channels.Should().Be(2);
+                    rate.Should().Be(sampleRate);
+                    bits.Should().Be(24);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.BitsPerSample.Should().Be(24);
+                streamInfo.TotalSamples.Should().Be(frameCount);
+                decoded.Should().Equal(interleaved);
             }
             finally
             {
@@ -219,12 +286,12 @@ namespace EggEncoder.UnitTests.Codecs.Alac
             }
         }
 
-        private static void AssertRoundTrips(int[] samples, int sampleRate)
+        private static void AssertRoundTrips(int[] samples, int sampleRate, int bitsPerSample = 16)
         {
             var filePath = Path.Combine(Path.GetTempPath(), $"alac_session_{Guid.NewGuid():N}.caf");
             try
             {
-                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16))
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample))
                 {
                     session.WriteInterleavedSamples(samples, samples.Length);
                     session.Finish();
@@ -235,13 +302,13 @@ namespace EggEncoder.UnitTests.Codecs.Alac
                 {
                     channels.Should().Be(1);
                     rate.Should().Be(sampleRate);
-                    bits.Should().Be(16);
+                    bits.Should().Be(bitsPerSample);
                     decoded.AddRange(block.ToArray());
                 });
 
                 streamInfo.SampleRate.Should().Be(sampleRate);
                 streamInfo.Channels.Should().Be(1);
-                streamInfo.BitsPerSample.Should().Be(16);
+                streamInfo.BitsPerSample.Should().Be(bitsPerSample);
                 streamInfo.TotalSamples.Should().Be(samples.Length);
                 decoded.Should().Equal(samples);
             }

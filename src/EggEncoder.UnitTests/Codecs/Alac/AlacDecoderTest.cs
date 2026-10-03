@@ -53,14 +53,47 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
-        public void Decode_NonSixteenBitFile_Should_Throw()
+        public void Decode_UnsupportedBitDepthFile_Should_Throw()
         {
-            var filePath = WriteMinimalCafFile(numChannels: 1, bitDepth: 24);
+            var filePath = WriteMinimalCafFile(numChannels: 1, bitDepth: 20);
             try
             {
                 var act = () => AlacDecoder.Decode(filePath, (_, _, _, _, _) => { });
 
                 act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_TwentyFourBitStereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()
+        {
+            var interleaved = new[] { 1_000_000, -2_000_000, 3_000_000, -4_000_000, 8_388_607, -8_388_608 };
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"alac_decoder_24bit_stereo_{Guid.NewGuid():N}.caf");
+            try
+            {
+                using (var session = AlacEncoderSession.OpenSession(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 24))
+                {
+                    session.WriteInterleavedSamples(interleaved, frameCount: 3);
+                    session.Finish();
+                }
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                {
+                    channels.Should().Be(2);
+                    bitsPerSample.Should().Be(24);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.BitsPerSample.Should().Be(24);
+                streamInfo.TotalSamples.Should().Be(3);
+                decoded.Should().Equal(interleaved);
             }
             finally
             {
