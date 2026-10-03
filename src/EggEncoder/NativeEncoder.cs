@@ -5,6 +5,7 @@ using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.Results;
@@ -41,6 +42,7 @@ namespace EggEncoder
                     ".aac" => ProbeAac(filePath),
                     ".wma" => ProbeWma(filePath),
                     ".caf" => ProbeAlac(filePath),
+                    ".tta" => ProbeTta(filePath),
                     ".mov" or ".mp4" => ProbeVideo(filePath),
                     _ => throw new NotSupportedException($"Probing '{extension}' files is not supported by the native audio encoder")
                 };
@@ -311,6 +313,38 @@ namespace EggEncoder
                 CodecType = "audio",
                 CodecName = "alac",
                 CodecLongName = "ALAC (Apple Lossless Audio Codec)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? []
+            };
+        }
+
+        private static ProbeResult ProbeTta(string filePath)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = TtaDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "tta",
+                FormatLongName = "TTA (True Audio)",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "tta",
+                CodecLongName = "TTA (True Audio) lossless",
                 SampleRate = streamInfo.SampleRate,
                 Channels = streamInfo.Channels,
                 ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
