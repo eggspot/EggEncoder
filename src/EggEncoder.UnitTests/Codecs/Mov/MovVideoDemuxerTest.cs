@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Text;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -197,6 +199,59 @@ namespace EggEncoder.UnitTests.Codecs.Mov
             {
                 File.Delete(filePath);
             }
+        }
+
+        [Fact]
+        public void DemuxVideoTrack_WithTruncatedSyncSampleTable_Should_Throw()
+        {
+            // Corrupt the 'stss' box's declared entry count to claim far more entries than the
+            // file actually has after it (stss is stbl's last child here, so overclaiming reads
+            // straight past the real end of the file) -- ReadSyncSamples must fail cleanly via
+            // Stream.ReadExactly's own EndOfStreamException rather than read garbage or hang.
+            var filePath = Path.Combine(Path.GetTempPath(), $"mov_video_demuxer_truncated_stss_{Guid.NewGuid():N}.mp4");
+            try
+            {
+                var samples = new[] { new byte[] { 1 }, new byte[] { 2 }, new byte[] { 3 } };
+                Mp4FileBuilder.CreateVideoOnly(filePath, "avc1", samples, keyframeSampleIndices: [0]);
+
+                var bytes = File.ReadAllBytes(filePath);
+                var stssTypeOffset = FindAsciiOffset(bytes, "stss");
+                var countFieldOffset = stssTypeOffset + 4 + 4; // past the 4-byte type + 4-byte version/flags
+                BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(countFieldOffset), 999);
+                File.WriteAllBytes(filePath, bytes);
+
+                var act = () => MovVideoDemuxer.DemuxVideoTrack(filePath);
+
+                act.Should().Throw<EndOfStreamException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static int FindAsciiOffset(byte[] bytes, string ascii)
+        {
+            var needle = Encoding.ASCII.GetBytes(ascii);
+            for (var i = 0; i <= bytes.Length - needle.Length; i++)
+            {
+                var isMatch = true;
+                for (var j = 0; j < needle.Length; j++)
+                {
+                    if (bytes[i + j] != needle[j])
+                    {
+                        isMatch = false;
+                        break;
+                    }
+                }
+
+                if (isMatch)
+                {
+                    return i;
+                }
+            }
+
+            throw new InvalidOperationException($"'{ascii}' not found in test fixture bytes");
         }
     }
 }

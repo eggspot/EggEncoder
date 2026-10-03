@@ -194,8 +194,12 @@ Ordered by priority/dependency/value. An item's "Depends on" line names a prereq
     Verified against the real `test.mp4`/`test.mov` fixtures (matches `ffprobe` ground truth
     exactly: `avc1`, 125 samples, keyframe only at index 0, offset=48/size=6162 for sample 0,
     size=60 for the last sample). Full branch coverage including the `stss`-absent vs.
-    `stss`-present-but-empty distinction, missing video track, missing `moov`, and zero `stsd`
-    entries. PR: (filled in once opened).
+    `stss`-present-but-empty distinction, a truncated sync-sample table, missing video track,
+    missing `moov`, and zero `stsd` entries. PR:
+    [#25](https://github.com/eggspot/EggEncoder/pull/25) (merged, released as `v4.14.2`). A later
+    self-review pass added the truncated-sync-sample-table test and fixed this status note's own
+    then-missing PR link -- a reminder to actually fill this field in, not leave the placeholder
+    the way the first draft of this entry did.
 
 - [ ] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
   already-encoded video sample byte arrays + keyframe flags + width/height/codec fourCC.
