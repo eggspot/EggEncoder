@@ -34,6 +34,21 @@ binary files under `Native/win-x64/`. Their licenses apply to those files indepe
 - **How it's used**: Referenced as a standard NuGet `PackageReference` for MP3 decoding
   (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored.
 
+## Concentus — managed Opus encoder/decoder
+
+- **Project**: [Concentus](https://github.com/lostromb/concentus)
+- **License**: BSD-style license (copyright Xiph.Org Foundation, Skype Limited, CSIRO,
+  Microsoft Corporation, and other contributors) — full text at
+  https://github.com/lostromb/concentus/blob/master/LICENSE
+- **How it's used**: Referenced as a standard NuGet `PackageReference` for Opus encoding and
+  decoding (`Codecs/Opus/OpusEncoderSession.cs`, `Codecs/Opus/OpusDecoder.cs`); no source is
+  vendored. `Concentus.Native`/`Concentus.Native.NetCore` (optional sibling packages providing a
+  P/Invoke adapter to a native `libopus`) are deliberately **not** referenced — this project
+  relies specifically on Concentus's own pure managed implementation, and
+  `OpusRuntimeConfiguration` pins `OpusCodecFactory.AttemptToUseNativeLibrary = false` so it never
+  silently falls back to an unrelated native `opus`/`libopus` library that happens to be present
+  on a given host.
+
 ---
 
 *Before the first public release, verify the license text links above still resolve and

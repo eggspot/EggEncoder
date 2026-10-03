@@ -2,6 +2,7 @@ using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -152,6 +153,50 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be("1/44100");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_OpusFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var opusPath = Path.Combine(tempDirectory, "source.opus");
+                const int sampleRate = 48000;
+                var samples = new int[sampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                using (var session = OpusEncoderSession.OpenSession(opusPath, channels: 1, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(opusPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("ogg");
+                probeResult.SizeBytes.Should().Be(new FileInfo(opusPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("opus");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be($"1/{sampleRate}");
             }
             finally
             {
