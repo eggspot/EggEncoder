@@ -42,6 +42,11 @@ namespace EggEncoder.Codecs.Tta
                 throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit TTA encoding is supported");
             }
 
+            if (sampleRate <= 0)
+            {
+                throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; TTA encoding requires a positive sample rate");
+            }
+
             var destStream = File.Create(destFilePath);
             try
             {
