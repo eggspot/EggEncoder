@@ -6,6 +6,7 @@ using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.Pcm;
@@ -110,6 +111,9 @@ namespace EggEncoder.Codecs
                 case ".opus":
                     OpusDecoder.Decode(sourceFilePath, onBlockDecoded);
                     break;
+                case ".ogg":
+                    VorbisDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
                 default:
                     throw new NotSupportedException($"Decoding '{sourceExtension}' files is not supported by the native audio encoder");
             }
@@ -133,6 +137,7 @@ namespace EggEncoder.Codecs
                 ".caf" => AlacEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".tta" => TtaEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".opus" => OpusEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
+                ".ogg" => VorbisEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 _ => throw new NotSupportedException($"Converting to '{destExtension}' files is not supported by the native audio encoder")
             };
         }
