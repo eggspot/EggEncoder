@@ -2,6 +2,7 @@ using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -107,6 +108,45 @@ namespace EggEncoder.UnitTests
 
                 probeResult.CodecType.Should().Be("audio");
                 probeResult.CodecName.Should().Be("alac");
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be("1/44100");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_TtaFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var ttaPath = Path.Combine(tempDirectory, "source.tta");
+                var samples = Enumerable.Range(0, 44100 * 2).Select(frame => frame % 1000).ToArray();
+
+                using (var session = TtaEncoderSession.OpenSession(ttaPath, channels: 1, sampleRate: 44100, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(ttaPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("tta");
+                probeResult.SizeBytes.Should().Be(new FileInfo(ttaPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("tta");
                 probeResult.SampleRate.Should().Be(44100);
                 probeResult.Channels.Should().Be(1);
                 probeResult.ChannelLayout.Should().Be("mono");
