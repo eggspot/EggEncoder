@@ -46,6 +46,40 @@ namespace EggEncoder.Codecs.Mov
             return samples;
         }
 
+        // Reads the 'stbl' sample table's optional 'stss' (sync sample) box: a list of 1-indexed
+        // sample numbers that are random-access points (keyframes, for a video track). Returns a
+        // 0-indexed set for direct lookup against ReadSamples's own 0-indexed sample list, or null
+        // if no 'stss' box is present -- per ISO/IEC 14496-12, that absence specifically means
+        // every sample is a sync sample (there is no ambiguity to resolve here; a track with no
+        // 'stss' box has no non-random-access samples at all). An 'stss' box that IS present but
+        // has zero entries is a different, valid state (no sample is ever a sync sample) and is
+        // returned as a non-null, empty set, not folded into the "absent" case.
+        public static HashSet<int>? ReadSyncSamples(Stream stream, MovAtom stbl)
+        {
+            var stss = MovAtomReader.FindAtom(stream, "stss", stbl.ContentStart, stbl.ContentEnd);
+            if (stss is null)
+            {
+                return null;
+            }
+
+            stream.Position = stss.Value.ContentStart + 4; // version+flags
+            Span<byte> countBuffer = stackalloc byte[4];
+            stream.ReadExactly(countBuffer);
+            var count = (int)BinaryPrimitives.ReadUInt32BigEndian(countBuffer);
+
+            var buffer = new byte[count * 4];
+            stream.ReadExactly(buffer);
+
+            var syncSamples = new HashSet<int>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var oneIndexedSampleNumber = (int)BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(i * 4, 4));
+                syncSamples.Add(oneIndexedSampleNumber - 1);
+            }
+
+            return syncSamples;
+        }
+
         private static int SamplesPerChunk(List<(int FirstChunk, int SamplesPerChunk, int SampleDescriptionIndex)> entries, int chunkNumber)
         {
             var samplesPerChunk = entries[0].SamplesPerChunk;

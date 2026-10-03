@@ -20,6 +20,43 @@ namespace EggEncoder.Codecs.Mov
             return null;
         }
 
+        // Finds the first 'trak' atom within 'moov' whose 'mdia'/'hdlr' component type matches
+        // (e.g. "soun" for audio, "vide" for video) -- shared by MovDecoder (audio) and
+        // MovVideoDemuxer (video) so this handler-type lookup isn't duplicated between them,
+        // mirroring why this file exists at all.
+        public static MovAtom? FindTrackByHandlerType(Stream stream, MovAtom moov, string handlerType)
+        {
+            foreach (var trak in EnumerateAtoms(stream, moov.ContentStart, moov.ContentEnd))
+            {
+                if (trak.Type != "trak")
+                {
+                    continue;
+                }
+
+                var mdia = FindAtom(stream, "mdia", trak.ContentStart, trak.ContentEnd);
+                var hdlr = mdia is null ? null : FindAtom(stream, "hdlr", mdia.Value.ContentStart, mdia.Value.ContentEnd);
+                if (hdlr is null)
+                {
+                    continue;
+                }
+
+                if (ReadHandlerComponentType(stream, hdlr.Value) == handlerType)
+                {
+                    return trak;
+                }
+            }
+
+            return null;
+        }
+
+        private static string ReadHandlerComponentType(Stream stream, MovAtom hdlr)
+        {
+            stream.Position = hdlr.ContentStart + 8; // version+flags(4) + pre_defined(4)
+            Span<byte> buffer = stackalloc byte[4];
+            stream.ReadExactly(buffer);
+            return Encoding.ASCII.GetString(buffer);
+        }
+
         public static List<MovAtom> EnumerateAtoms(Stream stream, long rangeStart, long rangeEnd)
         {
             var atoms = new List<MovAtom>();

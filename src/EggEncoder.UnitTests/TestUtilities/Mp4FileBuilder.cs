@@ -5,10 +5,12 @@ using EggEncoder.Transform;
 
 namespace EggEncoder.UnitTests.TestUtilities
 {
-    // Builds a minimal but valid MP4 file containing a single mono AAC-LC audio track, for testing
-    // MovDecoder against real AAC content. Not a general-purpose muxer: one sample per chunk, one
-    // sample description entry, no edit lists/fragmentation -- just enough structure to round-trip
-    // through MovDecoder's demuxing (stsd/esds/stsc/stsz/stco) with real, decodable AAC frames.
+    // Builds a minimal but valid MP4 file containing either a single mono AAC-LC audio track
+    // (Create) or a single video track of arbitrary (not necessarily decodable -- this is for
+    // exercising MovVideoDemuxer's container-level demuxing, not any codec) sample bytes
+    // (CreateVideoOnly). Not a general-purpose muxer: one sample per chunk, one sample description
+    // entry, no edit lists/fragmentation -- just enough structure to round-trip through
+    // MovDecoder's/MovVideoDemuxer's demuxing.
     public static class Mp4FileBuilder
     {
         public static void Create(string filePath, int sampleRate, IReadOnlyList<byte[]> rawAacFrames)
@@ -75,6 +77,127 @@ namespace EggEncoder.UnitTests.TestUtilities
             }
 
             return frames;
+        }
+
+        // sampleEntryCount lets a test force 'stsd' to declare zero sample description entries
+        // (the real demuxer must reject that, even though real-world files always have at least
+        // one) without having to hand-build the rest of the box tree just for that one case.
+        public static void CreateVideoOnly(string filePath, string codecFourCc, IReadOnlyList<byte[]> samples, IReadOnlyList<int>? keyframeSampleIndices, int sampleEntryCount = 1)
+        {
+            var mdatContent = Concat(samples);
+            var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("isom"), UInt32Bytes(0x200), Encoding.ASCII.GetBytes("isom"), Encoding.ASCII.GetBytes("iso2"), Encoding.ASCII.GetBytes("mp41"));
+            var mdat = Box("mdat", mdatContent);
+
+            var mdatContentStart = ftyp.Length + 8;
+            var chunkOffsets = new List<uint>(samples.Count);
+            var runningOffset = (uint)mdatContentStart;
+            foreach (var sample in samples)
+            {
+                chunkOffsets.Add(runningOffset);
+                runningOffset += (uint)sample.Length;
+            }
+
+            var moov = BuildVideoMoov(codecFourCc, samples, chunkOffsets, keyframeSampleIndices, sampleEntryCount);
+
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            stream.Write(ftyp);
+            stream.Write(mdat);
+            stream.Write(moov);
+        }
+
+        private static byte[] BuildVideoMoov(string codecFourCc, IReadOnlyList<byte[]> samples, List<uint> chunkOffsets, IReadOnlyList<int>? keyframeSampleIndices, int sampleEntryCount)
+        {
+            var sampleCount = samples.Count;
+
+            var mvhd = Box("mvhd",
+                new byte[4],
+                UInt32Bytes(0), UInt32Bytes(0),
+                UInt32Bytes(600), UInt32Bytes((uint)sampleCount),
+                UInt32Bytes(0x00010000),
+                UInt16Bytes(0x0100), UInt16Bytes(0),
+                new byte[8],
+                IdentityMatrix(),
+                new byte[24],
+                UInt32Bytes(2));
+
+            var tkhd = Box("tkhd",
+                new byte[] { 0, 0, 0, 7 },
+                UInt32Bytes(0), UInt32Bytes(0),
+                UInt32Bytes(1),
+                new byte[4],
+                UInt32Bytes((uint)sampleCount),
+                new byte[8],
+                UInt16Bytes(0), UInt16Bytes(0),
+                UInt16Bytes(0), UInt16Bytes(0),
+                IdentityMatrix(),
+                UInt32Bytes(640 << 16), UInt32Bytes(360 << 16));
+
+            var mdhd = Box("mdhd",
+                new byte[4],
+                UInt32Bytes(0), UInt32Bytes(0),
+                UInt32Bytes(600), UInt32Bytes((uint)sampleCount),
+                UInt16Bytes(0x55C4), UInt16Bytes(0));
+
+            var hdlr = Box("hdlr",
+                new byte[4],
+                UInt32Bytes(0),
+                Encoding.ASCII.GetBytes("vide"),
+                new byte[12],
+                [(byte)0]);
+
+            var vmhd = Box("vmhd", new byte[] { 0, 0, 0, 1 }, new byte[8]);
+            var url = Box("url ", new byte[] { 0, 0, 0, 1 });
+            var dref = Box("dref", new byte[4], UInt32Bytes(1), url);
+            var dinf = Box("dinf", dref);
+
+            var sampleEntries = new List<byte[]>(sampleEntryCount);
+            for (var i = 0; i < sampleEntryCount; i++)
+            {
+                var sampleEntryContent = Concat(
+                [
+                    new byte[6], UInt16Bytes(1), // reserved, data_reference_index
+                    new byte[16], // pre_defined/reserved (QuickTime-era fields)
+                    UInt16Bytes(640), UInt16Bytes(360), // width, height
+                    UInt32Bytes(0x00480000), UInt32Bytes(0x00480000), // horiz/vert resolution, 72dpi
+                    UInt32Bytes(0), // reserved
+                    UInt16Bytes(1), // frame_count
+                    new byte[32], // compressorname (Pascal string)
+                    UInt16Bytes(0x0018), // depth
+                    UInt16Bytes(0xFFFF) // pre_defined = -1
+                ]);
+                sampleEntries.Add(Box(codecFourCc, sampleEntryContent));
+            }
+
+            var stsd = Box("stsd", Concat([new byte[4], UInt32Bytes((uint)sampleEntryCount), .. sampleEntries]));
+            var stts = Box("stts", new byte[4], UInt32Bytes(1), UInt32Bytes((uint)sampleCount), UInt32Bytes(1));
+            var stsc = Box("stsc", new byte[4], UInt32Bytes(1), UInt32Bytes(1), UInt32Bytes(1), UInt32Bytes(1));
+
+            var stszEntries = new List<byte[]> { new byte[4], UInt32Bytes(0), UInt32Bytes((uint)sampleCount) };
+            foreach (var sample in samples)
+            {
+                stszEntries.Add(UInt32Bytes((uint)sample.Length));
+            }
+
+            var stsz = Box("stsz", stszEntries.ToArray());
+
+            var stcoEntries = new List<byte[]> { new byte[4], UInt32Bytes((uint)chunkOffsets.Count) };
+            stcoEntries.AddRange(chunkOffsets.Select(UInt32Bytes));
+            var stco = Box("stco", stcoEntries.ToArray());
+
+            var stblParts = new List<byte[]> { stsd, stts, stsc, stsz, stco };
+            if (keyframeSampleIndices is not null)
+            {
+                var stssEntries = new List<byte[]> { new byte[4], UInt32Bytes((uint)keyframeSampleIndices.Count) };
+                stssEntries.AddRange(keyframeSampleIndices.Select(index => UInt32Bytes((uint)(index + 1))));
+                stblParts.Add(Box("stss", stssEntries.ToArray()));
+            }
+
+            var stbl = Box("stbl", stblParts.ToArray());
+            var minf = Box("minf", vmhd, dinf, stbl);
+            var mdia = Box("mdia", mdhd, hdlr, minf);
+            var trak = Box("trak", tkhd, mdia);
+
+            return Box("moov", mvhd, trak);
         }
 
         private static byte[] BuildMoov(int sampleRate, IReadOnlyList<byte[]> rawAacFrames, List<uint> chunkOffsets, long totalSamples)
