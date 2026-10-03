@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using EggEncoder.Codecs.Opus;
 using FluentAssertions;
 
@@ -115,13 +116,10 @@ namespace EggEncoder.UnitTests.Codecs.Opus
             writer.WritePacket([2], granulePosition: 0, isEndOfStream: true);
 
             var bytes = stream.ToArray();
-            BitConverterLittleEndianUInt32(bytes, 18).Should().Be(0u);
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(18, 4)).Should().Be(0u);
 
             var secondPageStart = 27 + 1 + 1;
-            BitConverterLittleEndianUInt32(bytes, secondPageStart + 18).Should().Be(1u);
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(secondPageStart + 18, 4)).Should().Be(1u);
         }
-
-        private static uint BitConverterLittleEndianUInt32(byte[] bytes, int offset) =>
-            (uint)(bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24));
     }
 }

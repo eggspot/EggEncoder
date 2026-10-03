@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using EggEncoder.Codecs.Opus;
 using FluentAssertions;
 
@@ -132,9 +133,9 @@ namespace EggEncoder.UnitTests.Codecs.Opus
 
             header[4] = 0;
             header[5] = headerTypeFlag;
-            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(6, 8), granulePosition);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(14, 4), serialNumber);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(18, 4), sequenceNumber);
+            BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(6, 8), granulePosition);
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(14, 4), serialNumber);
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(18, 4), sequenceNumber);
             header[26] = (byte)lacingValues.Length;
 
             var lacingBytes = new byte[lacingValues.Length];
@@ -149,7 +150,7 @@ namespace EggEncoder.UnitTests.Codecs.Opus
                 crc ^= 0xFFFFFFFFu;
             }
 
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(22, 4), crc);
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(22, 4), crc);
 
             stream.Write(header);
             stream.Write(lacingBytes);
