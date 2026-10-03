@@ -38,6 +38,41 @@ namespace EggEncoder.UnitTests.Codecs.Tta
         }
 
         [Fact]
+        public void OpenSession_With_ZeroSampleRate_Should_Throw()
+        {
+            // A zero sample rate would otherwise make _frameLength compute to 0, which turns
+            // WriteInterleavedSamples' chunking loop into an infinite loop the moment any samples
+            // are written (every iteration copies 0 samples, so bufferOffset never advances).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => TtaEncoderSession.OpenSession(filePath, channels: 1, sampleRate: 0, bitsPerSample: 16);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_With_NegativeSampleRate_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => TtaEncoderSession.OpenSession(filePath, channels: 1, sampleRate: -1, bitsPerSample: 16);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void WriteInterleavedSamples_Then_Finish_Should_RoundTrip_AcrossMultipleFrames()
         {
             const int sampleRate = 44100;
