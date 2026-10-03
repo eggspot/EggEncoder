@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
@@ -944,6 +945,120 @@ namespace EggEncoder.UnitTests.Codecs
                 streamInfo.Channels.Should().Be(2);
                 streamInfo.TotalSamples.Should().Be(2000);
                 decoded.Should().Equal(interleavedSamples[2000..6000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToOpus_Should_Produce_DecodableFile()
+        {
+            // Opus is lossy and fixed at 48kHz (see OpusEncoderSession's own doc comment) -- unlike
+            // the lossless CAF/TTA conversions above, this only confirms the dispatch/plumbing
+            // reaches OpusEncoderSession and produces a structurally valid, decodable file; actual
+            // encode fidelity (signal-to-noise ratio) is already covered by OpusEncoderSessionTest.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 48000;
+                var samples = new int[sampleRate];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var destOpusPath = Path.Combine(tempDirectory, "dest.opus");
+
+                AudioCutter.Convert(sourcePath, destOpusPath);
+
+                var decoded = new List<int>();
+                var streamInfo = OpusDecoder.Decode(destOpusPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+                decoded.Should().NotBeEmpty();
+                decoded.Count.Should().BeGreaterThanOrEqualTo(samples.Length);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_OpusToWav_Should_Reproduce_RecognizableSignal()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 48000;
+                var samples = new int[sampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var sourceOpusPath = Path.Combine(tempDirectory, "source.opus");
+                OpusEncoder.Encode(sourceWavPath, sourceOpusPath);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourceOpusPath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(sampleRate);
+
+                var buffer = new int[wavReader.TotalSamples];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().NotBeEmpty();
+                var rootMeanSquare = Math.Sqrt(buffer.Average(s => (double)s * s));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Opus_Should_Extract_ApproximateSampleRange()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 48000;
+                var samples = new int[sampleRate * 5];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var sourceOpusPath = Path.Combine(tempDirectory, "source.opus");
+                OpusEncoder.Encode(sourceWavPath, sourceOpusPath);
+                var destPath = Path.Combine(tempDirectory, "cut.opus");
+
+                AudioCutter.Cut(sourceOpusPath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = OpusDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                // Opus's fixed 960-sample frame size means a cut's exact boundary can't land on an
+                // arbitrary sample the way a lossless codec's can -- approximately 2 seconds
+                // (96000 samples), within a couple of frames' worth of slack either way.
+                decoded.Count.Should().BeInRange(96000 - 2000, 96000 + 2000);
             }
             finally
             {

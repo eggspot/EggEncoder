@@ -1,6 +1,7 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
@@ -268,6 +269,55 @@ namespace EggEncoder.UnitTests.Codecs
                 streamInfo.SampleRate.Should().Be(1000);
                 streamInfo.TotalSamples.Should().Be(100);
                 decoded.Should().Equal(samples.Select(s => s * 2));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_OpusDestination_Should_Scale_The_Signal()
+        {
+            // Opus is lossy and fixed at 48kHz (see OpusEncoderSession's own doc comment), so this
+            // can't check exact sample equality the way the CAF/TTA versions above do -- instead it
+            // fits a best-fit scale factor between the decoded signal and the *original, unscaled*
+            // tone (the same technique OpusEncoderSessionTest uses for its own SNR checks) and
+            // confirms that scale comes out close to the VolumeTransform's own 2.0, proving the
+            // transform was genuinely applied before encoding rather than skipped.
+            const int sampleRate = 48000;
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var samples = new int[sampleRate];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.opus");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                var decoded = new List<int>();
+                var streamInfo = OpusDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+
+                var compareLength = Math.Min(decoded.Count, samples.Length);
+                double dotProduct = 0;
+                double originalEnergy = 0;
+                for (var i = 0; i < compareLength; i++)
+                {
+                    dotProduct += decoded[i] * (double)samples[i];
+                    originalEnergy += (double)samples[i] * samples[i];
+                }
+
+                var scale = dotProduct / originalEnergy;
+                scale.Should().BeApproximately(2.0, 0.2, $"VolumeTransform(2.0) should have doubled the signal before encoding, got fitted scale {scale}");
             }
             finally
             {
