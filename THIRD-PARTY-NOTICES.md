@@ -49,6 +49,25 @@ binary files under `Native/win-x64/`. Their licenses apply to those files indepe
   silently falls back to an unrelated native `opus`/`libopus` library that happens to be present
   on a given host.
 
+## NVorbis — managed Ogg Vorbis decoder
+
+- **Project**: [NVorbis](https://github.com/NVorbis/NVorbis)
+- **License**: MIT (copyright Andrew Ward) — full text at
+  https://github.com/NVorbis/NVorbis/blob/master/LICENSE
+- **How it's used**: Referenced as a standard NuGet `PackageReference` for Ogg Vorbis decoding
+  (`Codecs/Vorbis/VorbisDecoder.cs`); no source is vendored. Unlike Concentus, there is no sibling
+  native-adapter package to guard against — NVorbis has no native `libvorbis` fallback option at
+  all, pure managed is its only mode.
+
+## OggVorbisEncoder — managed Ogg Vorbis encoder
+
+- **Project**: [.NET-Ogg-Vorbis-Encoder](https://github.com/SteveLillis/.NET-Ogg-Vorbis-Encoder)
+- **License**: MIT (copyright Steve Lillis) — full text at
+  https://github.com/SteveLillis/.NET-Ogg-Vorbis-Encoder/blob/master/LICENSE
+- **How it's used**: Referenced as a standard NuGet `PackageReference` for Ogg Vorbis encoding
+  (`Codecs/Vorbis/VorbisEncoderSession.cs`); no source is vendored. As with NVorbis, there is no
+  native `libvorbisenc` fallback option to guard against — it's pure managed only.
+
 ---
 
 *Before the first public release, verify the license text links above still resolve and
