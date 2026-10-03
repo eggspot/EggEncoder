@@ -219,5 +219,40 @@ namespace EggEncoder.UnitTests.Codecs.Alac
 
             decoded.Should().Equal(expectedInterleaved);
         }
+
+        [Fact]
+        public void EncodePacket_TwoChannels_Should_UseMidSideMixing_ForCorrelatedSamples_AtTwentyFourBit()
+        {
+            // Same intent as the 16-bit EncodePacket_TwoChannels_Should_UseMidSideMixing_ForCorrelatedSamples
+            // above, at the wider bit depth -- a 24-bit AlacEncoderSessionTest round trip passing isn't
+            // enough to prove mixing (not independent channels) was actually chosen, for the same reason
+            // that test's own comment gives, so this reads the bit directly out of the packet too.
+            var config = new AlacSpecificConfig
+            {
+                FrameLength = 4096,
+                BitDepth = 24,
+                Pb = 40,
+                Mb = 10,
+                Kb = 14,
+                NumChannels = 2,
+                MaxRun = 255,
+                SampleRate = 44100
+            };
+
+            var left = new[] { 100_000, 200_000, 300_000 };
+            var right = new[] { -50_000, -150_000, -250_000 };
+
+            var packet = AlacFrameEncoder.EncodePacket([left, right], left.Length, config);
+
+            var reader = new BitReader(packet);
+            reader.SkipBits(3 + 4 + 12 + 1 + 2 + 1 + 32); // tag..sampleCount
+            var decorrShift = reader.ReadBits(8);
+            var decorrLeftWeight = reader.ReadBits(8);
+            decorrShift.Should().Be(8u);
+            decorrLeftWeight.Should().Be(128u);
+
+            var decoded = AlacFrameDecoder.DecodePacket(packet, config);
+            decoded.Should().Equal(100_000, -50_000, 200_000, -150_000, 300_000, -250_000);
+        }
     }
 }
