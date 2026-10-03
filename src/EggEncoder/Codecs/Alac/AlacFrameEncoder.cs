@@ -183,9 +183,9 @@ namespace EggEncoder.Codecs.Alac
 
         private static void WriteSigned(BitWriter writer, int value, int bitCount)
         {
-            // Only ever called with bitCount=16 (coefficients) or config.BitDepth, which this tick
-            // always validates to 16 -- so a plain (1u<<bitCount)-1u mask is safe (it would overflow
-            // at bitCount=32, but nothing here ever passes that).
+            // Only ever called with bitCount=16 (coefficients) or config.BitDepth, which
+            // AlacEncoderSession validates to 16 or 24 -- so a plain (1u<<bitCount)-1u mask is safe
+            // (it would overflow at bitCount=32, but nothing here ever passes that).
             var mask = (1u << bitCount) - 1u;
             writer.WriteBits((uint)value & mask, bitCount);
         }

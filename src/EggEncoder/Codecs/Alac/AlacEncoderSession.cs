@@ -1,7 +1,8 @@
 namespace EggEncoder.Codecs.Alac
 {
-    // Encodes 1 or 2 channels of 16-bit PCM into a CAF/ALAC file -- see AlacDecoder's doc comment for
-    // why this is scoped to 16-bit only. Samples are de-interleaved and buffered per channel, per ALAC
+    // Encodes 1 or 2 channels of 16-bit or 24-bit PCM into a CAF/ALAC file -- see AlacDecoder's doc
+    // comment for why 20-bit is excluded and why always writing extraBitsBytes=0 is spec-valid, not
+    // just a self-referential simplification. Samples are de-interleaved and buffered per channel, per ALAC
     // frame (nominally 4096 frames; the final frame may be shorter), and encoded into packets as each
     // frame fills; the packets themselves (compressed, far smaller than the raw PCM Mix already
     // buffers in full) are held in memory until Finish(), since CafWriter's 'pakt' chunk needs every
@@ -38,15 +39,15 @@ namespace EggEncoder.Codecs.Alac
                 throw new NotSupportedException($"'{destFilePath}' requests {channels} channels; only mono and stereo ALAC encoding is supported");
             }
 
-            if (bitsPerSample != 16)
+            if (bitsPerSample is not 16 and not 24)
             {
-                throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit ALAC encoding is supported");
+                throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit and 24-bit ALAC encoding are supported");
             }
 
             var config = new AlacSpecificConfig
             {
                 FrameLength = 4096,
-                BitDepth = 16,
+                BitDepth = bitsPerSample,
                 Pb = 40,
                 Mb = 10,
                 Kb = 14,

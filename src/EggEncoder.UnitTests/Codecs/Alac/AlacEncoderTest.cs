@@ -63,6 +63,35 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
+        public void Encode_From_TwentyFourBitWav_Should_Reproduce_Exact_Samples()
+        {
+            var samples = new[] { 0, 8_388_607, -8_388_608, 1_000_000, -1_000_000 };
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_24bit_{Guid.NewGuid():N}.wav");
+            var destCafPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_24bit_dest_{Guid.NewGuid():N}.caf");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate: 44100, bitsPerSample: 24, samples);
+
+                AlacEncoder.Encode(sourceWavPath, destCafPath);
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destCafPath, (block, _, _, bitsPerSample, _) =>
+                {
+                    bitsPerSample.Should().Be(24);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.BitsPerSample.Should().Be(24);
+                decoded.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(destCafPath);
+            }
+        }
+
+        [Fact]
         public void Encode_From_UnsupportedChannelCountWav_Should_Throw()
         {
             var sourceWavPath = Path.Combine(Path.GetTempPath(), $"alac_encoder_multichannel_{Guid.NewGuid():N}.wav");

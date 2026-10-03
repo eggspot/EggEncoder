@@ -444,6 +444,38 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WavToCaf_TwentyFourBit_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var filePath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new[] { 0, 8_388_607, -8_388_608, 1_000_000, -1_000_000, 42 };
+
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 24, interleavedSamples);
+                var destCafPath = Path.Combine(tempDirectory, "dest.caf");
+
+                AudioCutter.Convert(filePath, destCafPath);
+
+                var decoded = new List<int>();
+                var streamInfo = AlacDecoder.Decode(destCafPath, (block, _, _, bitsPerSample, _) =>
+                {
+                    bitsPerSample.Should().Be(24);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.BitsPerSample.Should().Be(24);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Cut_Caf_Stereo_Should_Extract_Exact_Sample_Range()
         {
             var tempDirectory = CreateTempDirectory();
