@@ -221,7 +221,7 @@ namespace EggEncoder.UnitTests.Codecs.Alac
         }
 
         [Fact]
-        public void EncodePacket_TwoChannels_Should_UseMidSideMixing_ForCorrelatedSamples_AtTwentyFourBit()
+        public void EncodePacket_TwoChannels_TwentyFourBit_Should_UseMidSideMixing_ForCorrelatedSamples()
         {
             // Same intent as the 16-bit EncodePacket_TwoChannels_Should_UseMidSideMixing_ForCorrelatedSamples
             // above, at the wider bit depth -- a 24-bit AlacEncoderSessionTest round trip passing isn't
