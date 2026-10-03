@@ -23,7 +23,7 @@ namespace EggEncoder.Codecs.Mov
             var moov = MovAtomReader.FindAtom(stream, "moov", 0, stream.Length)
                 ?? throw new InvalidDataException($"'{filePath}' is not a valid MOV/MP4 file: missing 'moov' atom");
 
-            var audioTrak = FindAudioTrack(stream, moov)
+            var audioTrak = MovAtomReader.FindTrackByHandlerType(stream, moov, "soun")
                 ?? throw new InvalidDataException($"'{filePath}' does not contain an audio track");
 
             var mdia = MovAtomReader.FindAtom(stream, "mdia", audioTrak.ContentStart, audioTrak.ContentEnd)!.Value;
@@ -70,39 +70,6 @@ namespace EggEncoder.Codecs.Mov
                 BitsPerSample = 16,
                 TotalSamples = totalSamplesPerChannel
             };
-        }
-
-        private static MovAtom? FindAudioTrack(Stream stream, MovAtom moov)
-        {
-            foreach (var trak in MovAtomReader.EnumerateAtoms(stream, moov.ContentStart, moov.ContentEnd))
-            {
-                if (trak.Type != "trak")
-                {
-                    continue;
-                }
-
-                var mdia = MovAtomReader.FindAtom(stream, "mdia", trak.ContentStart, trak.ContentEnd);
-                var hdlr = mdia is null ? null : MovAtomReader.FindAtom(stream, "hdlr", mdia.Value.ContentStart, mdia.Value.ContentEnd);
-                if (hdlr is null)
-                {
-                    continue;
-                }
-
-                if (ReadHandlerComponentType(stream, hdlr.Value) == "soun")
-                {
-                    return trak;
-                }
-            }
-
-            return null;
-        }
-
-        private static string ReadHandlerComponentType(Stream stream, MovAtom hdlr)
-        {
-            stream.Position = hdlr.ContentStart + 8; // version+flags(4) + pre_defined(4)
-            Span<byte> buffer = stackalloc byte[4];
-            stream.ReadExactly(buffer);
-            return Encoding.ASCII.GetString(buffer);
         }
 
         private static Mp4AudioConfig ReadAudioConfig(Stream stream, MovAtom stsd, string filePath)

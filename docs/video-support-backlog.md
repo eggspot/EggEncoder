@@ -172,13 +172,13 @@ Ordered by priority/dependency/value. An item's "Depends on" line names a prereq
 
 ### Phase 0 — Container infrastructure (pure C#, zero patent/licensing risk)
 
-- [ ] **1. MP4/MOV video sample demuxing** — extract each video sample's raw bytes, byte offset,
+- [x] **1. MP4/MOV video sample demuxing** — extract each video sample's raw bytes, byte offset,
   and keyframe (sync-sample) flag from an existing MP4/MOV file, with no codec decode at all.
   - **Feasibility**: pure C#, small. `Mp4SampleTable` already resolves `stsz`/`stsc`/`stco` into
     `(offset, size)` pairs; this item adds reading the `stss` box (sync sample table — a simple
     fixed list of 1-indexed sample numbers; its *absence* means "every sample is a sync sample"
     per the ISO/IEC 14496-12 spec) and a new `MovVideoDemuxer` that finds the video (`vide`
-    handler) track the same way `MovDecoder.FindAudioTrack` finds the `soun` track today.
+    handler) track the same way `MovDecoder` finds the `soun` track today.
   - **Depends on**: nothing — builds directly on existing `MovAtomReader`/`Mp4SampleTable`.
   - **Test plan**: the existing `test.mov`/`test.mp4` fixtures already have verified ground truth
     (125 samples, exactly one keyframe at index 0, specific per-sample sizes/offsets — dumped via
@@ -188,7 +188,14 @@ Ordered by priority/dependency/value. An item's "Depends on" line names a prereq
   - **Not in scope for this item**: `edts`/`elst` (edit lists) and `ctts` (composition-time
     offsets) are not read — matches the existing audio demuxer's same limitation, documented
     there as "not handled." Fragmented MP4 (`moof`/`mvex`) also stays out of scope, same as audio.
-  - Status: not started.
+  - **Status: DONE.** `MovVideoDemuxer.DemuxVideoTrack` + `Mp4SampleTable.ReadSyncSamples` +
+    `MovAtomReader.FindTrackByHandlerType` (the latter extracted from, and now shared with,
+    `MovDecoder`'s pre-existing audio-track lookup — a pure refactor, no behavior change).
+    Verified against the real `test.mp4`/`test.mov` fixtures (matches `ffprobe` ground truth
+    exactly: `avc1`, 125 samples, keyframe only at index 0, offset=48/size=6162 for sample 0,
+    size=60 for the last sample). Full branch coverage including the `stss`-absent vs.
+    `stss`-present-but-empty distinction, missing video track, missing `moov`, and zero `stsd`
+    entries. PR: (filled in once opened).
 
 - [ ] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
   already-encoded video sample byte arrays + keyframe flags + width/height/codec fourCC.
