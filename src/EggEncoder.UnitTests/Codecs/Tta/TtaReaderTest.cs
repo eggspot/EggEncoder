@@ -70,6 +70,24 @@ namespace EggEncoder.UnitTests.Codecs.Tta
         }
 
         [Fact]
+        public void Open_With_ZeroSampleRate_Should_Throw()
+        {
+            // frameLength = sampleRate*256/245 computes to 0 when sampleRate is 0, which Open must
+            // reject outright rather than deriving a 0-entry seek table from it (see the mirroring
+            // fix on the encode side, where an unvalidated 0 sample rate hangs TtaEncoderSession).
+            var filePath = WriteBytes(BuildValidHeaderWithCrc(format: 1, channels: 1, bitsPerSample: 16, sampleRate: 0, totalSamples: 0));
+            try
+            {
+                var act = () => TtaReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_TruncatedSeekTable_Should_Throw()
         {
             // totalSamples=700 at sampleRate=245 (frameLength=256) needs 3 seek-table entries (12
