@@ -3,6 +3,7 @@ using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
@@ -318,6 +319,75 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var scale = dotProduct / originalEnergy;
                 scale.Should().BeApproximately(2.0, 0.2, $"VolumeTransform(2.0) should have doubled the signal before encoding, got fitted scale {scale}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_VorbisDestination_Should_Scale_The_Signal()
+        {
+            // Mirrors Convert_WithVolumeTransform_OpusDestination_Should_Scale_The_Signal's technique,
+            // but Vorbis has no pre_skip-equivalent field (see VorbisEncoderSessionTest's remarks), so
+            // decoded[0] does not line up with original[0] -- this finds the true alignment via
+            // normalized cross-correlation first, then fits the scale at that offset.
+            const int sampleRate = 44100;
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var samples = new int[sampleRate];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.ogg");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                var decoded = new List<int>();
+                var streamInfo = VorbisDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+                decoded.Should().NotBeEmpty();
+
+                var compareLength = Math.Min(2000, samples.Length);
+                var bestOffset = 0;
+                var bestCorrelation = double.MinValue;
+                for (var offset = 0; offset <= sampleRate / 4 && offset + compareLength <= decoded.Count; offset++)
+                {
+                    double dot = 0, originalEnergy = 0, decodedEnergy = 0;
+                    for (var i = 0; i < compareLength; i++)
+                    {
+                        dot += decoded[offset + i] * (double)samples[i];
+                        originalEnergy += (double)samples[i] * samples[i];
+                        decodedEnergy += (double)decoded[offset + i] * decoded[offset + i];
+                    }
+
+                    var normalized = originalEnergy > 0 && decodedEnergy > 0 ? dot / Math.Sqrt(originalEnergy * decodedEnergy) : 0;
+                    if (normalized > bestCorrelation)
+                    {
+                        bestCorrelation = normalized;
+                        bestOffset = offset;
+                    }
+                }
+
+                var fitLength = Math.Min(decoded.Count - bestOffset, samples.Length);
+                double fitDotProduct = 0;
+                double fitOriginalEnergy = 0;
+                for (var i = 0; i < fitLength; i++)
+                {
+                    fitDotProduct += decoded[bestOffset + i] * (double)samples[i];
+                    fitOriginalEnergy += (double)samples[i] * samples[i];
+                }
+
+                var scale = fitDotProduct / fitOriginalEnergy;
+                scale.Should().BeApproximately(2.0, 0.2, $"VolumeTransform(2.0) should have doubled the signal before encoding, got fitted scale {scale} at offset {bestOffset}");
             }
             finally
             {
@@ -910,7 +980,7 @@ namespace EggEncoder.UnitTests.Codecs
                 var existingPath = Path.Combine(tempDirectory, "first.wav");
                 WavFileBuilder.Create(existingPath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples: [1, 2]);
                 var missingPath = Path.Combine(tempDirectory, "missing.wav"); // index 1: FileNotFoundException
-                var unsupportedExtensionPath = Path.Combine(tempDirectory, "third.ogg"); // index 2: NotSupportedException
+                var unsupportedExtensionPath = Path.Combine(tempDirectory, "third.xyz"); // index 2: NotSupportedException
 
                 var act = () => AudioCutter.Mix(
                     [new MixInput(existingPath), new MixInput(missingPath), new MixInput(unsupportedExtensionPath)],

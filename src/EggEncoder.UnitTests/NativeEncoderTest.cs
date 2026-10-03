@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Vorbis;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -205,6 +206,50 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_VorbisFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var oggPath = Path.Combine(tempDirectory, "source.ogg");
+                const int sampleRate = 44100;
+                var samples = new int[sampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                using (var session = VorbisEncoderSession.OpenSession(oggPath, channels: 1, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(oggPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("ogg");
+                probeResult.SizeBytes.Should().Be(new FileInfo(oggPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("vorbis");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public async Task Probe_FlacFile_Should_Return_Correct_Metadata_And_Waveform()
         {
             var tempDirectory = CreateTempDirectory();
@@ -350,7 +395,7 @@ namespace EggEncoder.UnitTests
         [Fact]
         public async Task Probe_UnsupportedExtension_Should_Throw()
         {
-            var act = () => _nativeEncoder.Probe("file.ogg");
+            var act = () => _nativeEncoder.Probe("file.xyz");
             await act.Should().ThrowExactlyAsync<NotSupportedException>();
         }
 
@@ -455,7 +500,7 @@ namespace EggEncoder.UnitTests
             var logger = new Mock<ILogger<NativeEncoder>>();
             var encoder = new NativeEncoder(logger.Object, enableLogging: false);
 
-            var act = () => encoder.Probe("file.ogg");
+            var act = () => encoder.Probe("file.xyz");
 
             await act.Should().ThrowExactlyAsync<NotSupportedException>();
             logger.Invocations.Should().BeEmpty();

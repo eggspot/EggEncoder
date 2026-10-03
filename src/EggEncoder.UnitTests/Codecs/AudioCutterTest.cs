@@ -6,6 +6,7 @@ using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.UnitTests.TestUtilities;
@@ -194,7 +195,7 @@ namespace EggEncoder.UnitTests.Codecs
         [Fact]
         public void Cut_UnsupportedExtension_Should_Throw()
         {
-            var act = () => AudioCutter.Cut("source.ogg", "dest.ogg", 0, 10);
+            var act = () => AudioCutter.Cut("source.xyz", "dest.xyz", 0, 10);
             act.Should().ThrowExactly<NotSupportedException>();
         }
 
@@ -667,7 +668,7 @@ namespace EggEncoder.UnitTests.Codecs
         [Fact]
         public void Convert_UnsupportedExtension_Should_Throw()
         {
-            var act = () => AudioCutter.Convert("source.ogg", "dest.wav");
+            var act = () => AudioCutter.Convert("source.xyz", "dest.wav");
             act.Should().ThrowExactly<NotSupportedException>();
         }
 
@@ -1059,6 +1060,119 @@ namespace EggEncoder.UnitTests.Codecs
                 // arbitrary sample the way a lossless codec's can -- approximately 2 seconds
                 // (96000 samples), within a couple of frames' worth of slack either way.
                 decoded.Count.Should().BeInRange(96000 - 2000, 96000 + 2000);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToOgg_Should_Produce_DecodableFile()
+        {
+            // Vorbis is lossy, like Opus above -- this confirms the dispatch/plumbing reaches
+            // VorbisEncoderSession and produces a structurally valid, decodable file; actual encode
+            // fidelity (signal-to-noise ratio) is already covered by VorbisEncoderSessionTest.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 44100;
+                var samples = new int[sampleRate];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var destOggPath = Path.Combine(tempDirectory, "dest.ogg");
+
+                AudioCutter.Convert(sourcePath, destOggPath);
+
+                var decoded = new List<int>();
+                var streamInfo = VorbisDecoder.Decode(destOggPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+                decoded.Should().NotBeEmpty();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_OggToWav_Should_Reproduce_RecognizableSignal()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 44100;
+                var samples = new int[sampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var sourceOggPath = Path.Combine(tempDirectory, "source.ogg");
+                VorbisEncoder.Encode(sourceWavPath, sourceOggPath);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourceOggPath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(sampleRate);
+
+                var buffer = new int[wavReader.TotalSamples];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().NotBeEmpty();
+                var rootMeanSquare = Math.Sqrt(buffer.Average(s => (double)s * s));
+                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Vorbis_Should_Extract_ApproximateSampleRange()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 44100;
+                var samples = new int[sampleRate * 5];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var sourceOggPath = Path.Combine(tempDirectory, "source.ogg");
+                VorbisEncoder.Encode(sourceWavPath, sourceOggPath);
+                var destPath = Path.Combine(tempDirectory, "cut.ogg");
+
+                AudioCutter.Cut(sourceOggPath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = VorbisDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                // Vorbis has no fixed frame size the way Opus does, but its own encoder lookahead
+                // (see VorbisEncoderSessionTest's remarks) means a cut's exact boundary still can't
+                // land on an arbitrary sample the way a lossless codec's can -- approximately
+                // 2 seconds (88200 samples), within generous slack either way.
+                decoded.Count.Should().BeInRange(88200 - 8000, 88200 + 8000);
             }
             finally
             {
