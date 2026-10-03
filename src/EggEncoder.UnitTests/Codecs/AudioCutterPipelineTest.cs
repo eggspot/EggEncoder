@@ -1,6 +1,7 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
@@ -231,6 +232,37 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var decoded = new List<int>();
                 var streamInfo = AlacDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.TotalSamples.Should().Be(100);
+                decoded.Should().Equal(samples.Select(s => s * 2));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_TtaDestination_Should_Scale_Every_Sample()
+        {
+            // Like CAF, a TTA destination streams straight through OpenSinkForPipeline's fallback to
+            // OpenSink -- TtaEncoderSession also needs no exact frame count up front. This confirms
+            // the dispatch reaches TtaEncoderSession and the pipeline's transform is applied before
+            // encoding.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = Enumerable.Range(0, 100).ToArray();
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.tta");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                var decoded = new List<int>();
+                var streamInfo = TtaDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
 
                 streamInfo.Channels.Should().Be(1);
                 streamInfo.SampleRate.Should().Be(1000);

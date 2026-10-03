@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.Pcm;
@@ -102,6 +103,9 @@ namespace EggEncoder.Codecs
                 case ".caf":
                     AlacDecoder.Decode(sourceFilePath, onBlockDecoded);
                     break;
+                case ".tta":
+                    TtaDecoder.Decode(sourceFilePath, onBlockDecoded);
+                    break;
                 default:
                     throw new NotSupportedException($"Decoding '{sourceExtension}' files is not supported by the native audio encoder");
             }
@@ -123,6 +127,7 @@ namespace EggEncoder.Codecs
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate),
                 ".wma" => WmaEncoderSession.OpenSession(destFilePath, channels, sampleRate),
                 ".caf" => AlacEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
+                ".tta" => TtaEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 _ => throw new NotSupportedException($"Converting to '{destExtension}' files is not supported by the native audio encoder")
             };
         }

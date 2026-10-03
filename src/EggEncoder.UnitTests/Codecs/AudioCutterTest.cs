@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.UnitTests.TestUtilities;
@@ -771,6 +772,164 @@ namespace EggEncoder.UnitTests.Codecs
             }
 
             using (var session = AlacEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16))
+            {
+                session.WriteInterleavedSamples(interleavedSamples, totalFrames);
+                session.Finish();
+            }
+
+            return (filePath, interleavedSamples);
+        }
+
+        [Fact]
+        public void Cut_Tta_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampTta(tempDirectory, "source.tta", totalFrames: 5000, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "cut.tta");
+
+                AudioCutter.Cut(sourcePath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = TtaDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.BitsPerSample.Should().Be(16);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples[1000..3000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_TtaToWav_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampTta(tempDirectory, "source.tta", totalFrames: 2000, sampleRate: 1000);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(1000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToTta_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var filePath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new int[2000];
+                for (var frame = 0; frame < interleavedSamples.Length; frame++)
+                {
+                    interleavedSamples[frame] = frame % 1000;
+                }
+
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples);
+                var destTtaPath = Path.Combine(tempDirectory, "dest.tta");
+
+                AudioCutter.Convert(filePath, destTtaPath);
+
+                var decoded = new List<int>();
+                var streamInfo = TtaDecoder.Decode(destTtaPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToTta_Stereo_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 2000, sampleRate: 1000);
+                var destTtaPath = Path.Combine(tempDirectory, "dest.tta");
+
+                AudioCutter.Convert(sourcePath, destTtaPath);
+
+                var decoded = new List<int>();
+                var streamInfo = TtaDecoder.Decode(destTtaPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Tta_Stereo_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 5000, sampleRate: 1000);
+                var sourceTtaPath = Path.Combine(tempDirectory, "source.tta");
+                AudioCutter.Convert(sourcePath, sourceTtaPath);
+                var destPath = Path.Combine(tempDirectory, "cut.tta");
+
+                AudioCutter.Cut(sourceTtaPath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = TtaDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples[2000..6000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        private static (string FilePath, int[] InterleavedSamples) CreateRampTta(string tempDirectory, string fileName, int totalFrames, int sampleRate)
+        {
+            var filePath = Path.Combine(tempDirectory, fileName);
+            var interleavedSamples = new int[totalFrames];
+
+            for (var frame = 0; frame < totalFrames; frame++)
+            {
+                interleavedSamples[frame] = frame % 1000;
+            }
+
+            using (var session = TtaEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16))
             {
                 session.WriteInterleavedSamples(interleavedSamples, totalFrames);
                 session.Finish();
