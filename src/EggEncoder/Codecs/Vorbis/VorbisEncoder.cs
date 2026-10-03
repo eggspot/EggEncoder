@@ -6,10 +6,10 @@ namespace EggEncoder.Codecs.Vorbis
     {
         private const int FramesPerBlock = 4096;
 
-        public static void Encode(string sourceWavFilePath, string destOggFilePath)
+        public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = VorbisEncoderSession.DefaultQuality)
         {
             using var wavReader = WavReader.Open(sourceWavFilePath);
-            using var session = VorbisEncoderSession.OpenSession(destOggFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample);
+            using var session = VorbisEncoderSession.OpenSession(destOggFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, quality);
 
             var interleavedBuffer = new int[FramesPerBlock * wavReader.Channels];
 

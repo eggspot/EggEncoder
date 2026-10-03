@@ -77,6 +77,44 @@ namespace EggEncoder.UnitTests.Codecs.Vorbis
         }
 
         [Fact]
+        public void Encode_WithLowerQuality_Should_Produce_Smaller_File()
+        {
+            // Mirrors Mp3EncoderTest's Encode_WithLowerBitRate_Should_Produce_Smaller_File:
+            // confirms the quality parameter is actually wired through VorbisEncoder.Encode into
+            // VorbisEncoderSession.OpenSession, not silently ignored -- the convenience wrapper
+            // exposes it as an optional parameter the same way FlacEncoder/Mp3Encoder expose their
+            // own compressionLevel/bitRateKbps knobs, so it needs the same pass-through coverage.
+            var frameCount = SampleRate * 2;
+            var samples = new int[frameCount];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / SampleRate));
+            }
+
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_quality_src_{Guid.NewGuid():N}.wav");
+            var highQualityPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_quality_high_{Guid.NewGuid():N}.ogg");
+            var lowQualityPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_quality_low_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, SampleRate, bitsPerSample: 16, samples);
+
+                VorbisEncoder.Encode(sourceWavPath, highQualityPath, quality: 0.9f);
+                VorbisEncoder.Encode(sourceWavPath, lowQualityPath, quality: -0.1f);
+
+                var highQualitySize = new FileInfo(highQualityPath).Length;
+                var lowQualitySize = new FileInfo(lowQualityPath).Length;
+
+                lowQualitySize.Should().BeLessThan(highQualitySize, $"expected quality=-0.1 ({lowQualitySize} bytes) to be smaller than quality=0.9 ({highQualitySize} bytes)");
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(highQualityPath);
+                File.Delete(lowQualityPath);
+            }
+        }
+
+        [Fact]
         public void Encode_From_UnsupportedChannelCountWav_Should_Throw()
         {
             var sourceWavPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_bad_channels_{Guid.NewGuid():N}.wav");
