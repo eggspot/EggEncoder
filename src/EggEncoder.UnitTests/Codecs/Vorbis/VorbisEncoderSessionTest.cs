@@ -258,6 +258,47 @@ namespace EggEncoder.UnitTests.Codecs.Vorbis
             AssertRoundTripSnr(samples, channels: 1, minimumSnrDb: 15);
         }
 
+        [Fact]
+        public void WriteInterleavedSamples_WithExtremeInt16Values_Should_RoundTrip_WithoutOverflow()
+        {
+            // short.MinValue divided by short.MaxValue (the scale WriteInterleavedSamples uses to
+            // reach Vorbis's own normalized float convention) overshoots -1.0f by about 0.003% --
+            // the same accepted asymmetry FloatSampleConverter.ToFloat already has for the most
+            // negative sample of any bit depth, not a bug specific to this codec. This confirms that
+            // tiny overshoot doesn't crash the encoder or corrupt the decode, since no earlier test
+            // here reaches either int16 extreme (GenerateTone tops out at 8000).
+            const int sampleRate = 44100;
+            var samples = new int[sampleRate];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = i % 2 == 0 ? short.MinValue : short.MaxValue;
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"vorbis_extreme_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                var act = () =>
+                {
+                    using var session = VorbisEncoderSession.OpenSession(filePath, channels: 1, sampleRate, bitsPerSample: 16);
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                };
+
+                act.Should().NotThrow();
+
+                var decoded = new List<int>();
+                var decodeAct = () => VorbisDecoder.Decode(filePath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+                decodeAct.Should().NotThrow();
+
+                decoded.Should().NotBeEmpty();
+                decoded.Should().OnlyContain(s => s >= short.MinValue && s <= short.MaxValue, "decoded samples must stay within the 16-bit range this decoder reports");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         private static int[] GenerateTone(int seconds, int channels)
         {
             var frameCount = SampleRate * seconds;
