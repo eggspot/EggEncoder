@@ -125,6 +125,51 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         [Theory]
         [InlineData(WavSampleFormat.MuLaw)]
         [InlineData(WavSampleFormat.ALaw)]
+        public void WriteInterleavedSamples_G711_With_FiveChannels_Should_Round_Trip_Without_ChannelCount_Restriction(WavSampleFormat sampleFormat)
+        {
+            // Deliberately NOT restricted to mono/stereo, unlike every other codec in this project --
+            // G.711 has no block/frame structure or adaptive state, so any channel count decodes and
+            // encodes correctly. Confirms this actually works end to end, not just that neither
+            // WavWriter.Create nor WavReader.Open happens to contain a channel-count check for it.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                const int channels = 5;
+                const int frameCount = 3;
+                var samples = new int[frameCount * channels];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (i * 1000) - 7000; // spread across the range, including negative values
+                }
+
+                var expected = samples.Select(sample => sampleFormat == WavSampleFormat.MuLaw
+                    ? G711Codec.DecodeMuLaw(G711Codec.EncodeMuLaw(sample))
+                    : G711Codec.DecodeALaw(G711Codec.EncodeALaw(sample))).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels, sampleRate: 8000, bitsPerSample: 16, totalFrames: frameCount, sampleFormat))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Channels.Should().Be(channels);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[samples.Length];
+                var framesRead = reader.ReadInterleavedSamples(buffer, frameCount);
+
+                framesRead.Should().Be(frameCount);
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
         public void WriteInterleavedSamples_G711_Should_Round_Trip_Through_WavReader(WavSampleFormat sampleFormat)
         {
             var filePath = Path.GetTempFileName();
