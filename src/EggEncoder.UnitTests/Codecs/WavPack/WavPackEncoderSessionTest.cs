@@ -164,18 +164,36 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
-        public void Finish_WithNoSamplesWritten_Should_Produce_An_EmptyButValidFile()
+        public void OpenSession_With_ZeroTotalSamples_Should_Throw()
         {
-            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_empty_{Guid.NewGuid():N}.wv");
+            // Unlike FLAC/TTA/Opus/Vorbis, WavPack genuinely cannot represent an empty/zero-sample
+            // stream -- confirmed from WavPack's own reference CLI (cli/wavpack.c), which refuses to
+            // encode one outright ("no raw PCM data to encode!"), and independently reconfirmed via a
+            // real CI failure: WavpackSetConfiguration64 itself rejects total_samples == 0, and
+            // substituting -1 ("unknown") produces a file WavpackOpenFileInput then refuses to read
+            // back. See OpenSession's own doc comment for the full chain of evidence.
+            var filePath = Path.GetTempFileName();
             try
             {
-                using (var session = WavPackEncoderSession.OpenSession(filePath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 0))
-                {
-                    session.Finish();
-                }
+                var act = () => WavPackEncoderSession.OpenSession(filePath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 0);
 
-                var streamInfo = WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
-                streamInfo.TotalSamples.Should().Be(0);
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_With_NegativeTotalSamples_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavPackEncoderSession.OpenSession(filePath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: -5);
+
+                act.Should().ThrowExactly<NotSupportedException>();
             }
             finally
             {
@@ -189,7 +207,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_dispose_{Guid.NewGuid():N}.wv");
             try
             {
-                var session = WavPackEncoderSession.OpenSession(filePath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 0);
+                var session = WavPackEncoderSession.OpenSession(filePath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 1);
                 session.Dispose();
 
                 var act = session.Dispose;
@@ -209,7 +227,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             // exception (e.g. from disposing a never-created native handle).
             var invalidPath = Path.Combine(Path.GetTempPath(), $"wavpack_missing_dir_{Guid.NewGuid():N}", "dest.wv");
 
-            var act = () => WavPackEncoderSession.OpenSession(invalidPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 0);
+            var act = () => WavPackEncoderSession.OpenSession(invalidPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 1);
 
             act.Should().ThrowExactly<DirectoryNotFoundException>();
         }

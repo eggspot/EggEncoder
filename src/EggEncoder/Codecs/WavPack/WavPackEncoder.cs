@@ -23,6 +23,15 @@ namespace EggEncoder.Codecs.WavPack
     // DeferredFixedHeaderSink (built for exactly this "defer until the true count is known" need) can
     // be reused unchanged rather than this project needing to reimplement that native seek-and-patch
     // sequence itself.
+    //
+    // Unlike FLAC/TTA/Opus/Vorbis, WavPack genuinely cannot represent an empty/zero-sample stream --
+    // confirmed from WavPack's own reference CLI (cli/wavpack.c), which refuses to encode one outright
+    // ("no raw PCM data to encode!"), and independently reconfirmed via a real CI failure here:
+    // WavpackSetConfiguration64 itself rejects total_samples == 0 ("invalid total sample count!"), and
+    // substituting -1 ("unknown") instead produces a file that WavpackOpenFileInput then refuses to
+    // read back ("can't read all of WavPack file!") since no data block is ever flushed for it to find.
+    // OpenSession rejects totalSamples <= 0 outright rather than letting either failure surface
+    // confusingly later.
     public static class WavPackEncoder
     {
         private const int FramesPerBlock = 4096;
@@ -78,6 +87,21 @@ namespace EggEncoder.Codecs.WavPack
                 throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; only positive sample rates are supported for WavPack encoding");
             }
 
+            if (totalSamples <= 0)
+            {
+                // Confirmed via WavPack's own reference CLI source (cli/wavpack.c), not assumed: it
+                // refuses to encode a zero-sample input outright ("no raw PCM data to encode!") --
+                // this isn't a gap in this project's own encoder, WavPack genuinely has no
+                // representation for an empty/zero-sample stream the way FLAC/TTA/Opus/Vorbis do.
+                // A real CI run confirmed this directly: passing 0 makes WavpackSetConfiguration64
+                // itself reject it ("invalid total sample count!"), and substituting -1 ("unknown")
+                // instead produces a file WavpackOpenFileInput then refuses to read back
+                // ("can't read all of WavPack file!") since no data block is ever flushed for it to
+                // find. Reject clearly here rather than letting either failure surface confusingly
+                // later, at Finish() or at decode time.
+                throw new NotSupportedException($"'{destFilePath}' requests {totalSamples} total samples; WavPack cannot encode an empty/zero-sample stream");
+            }
+
             var destStream = File.Create(destFilePath);
             var state = new EncodeState(destStream);
             var stateHandle = GCHandle.Alloc(state);
@@ -103,16 +127,7 @@ namespace EggEncoder.Codecs.WavPack
                     BytesPerSample = bitsPerSample / 8
                 };
 
-                // WavpackSetConfiguration64 rejects a literal 0 as "invalid total sample count!"
-                // (confirmed via a real CI failure on Windows, not assumed) -- it only accepts a
-                // positive count or -1 ("unknown", the same sentinel WavPack's own reference CLI
-                // uses for stdin input). A genuinely empty session has nothing to lose by reporting
-                // "unknown" instead of zero: WriteInterleavedSamples is never called, so the actual
-                // written total still comes out to zero once Finish() flushes, and that's what
-                // decoding the file back reports.
-                var configuredTotalSamples = totalSamples == 0 ? -1 : totalSamples;
-
-                if (WavPackNative.WavpackSetConfiguration64(wpc, ref config, configuredTotalSamples, IntPtr.Zero) == 0)
+                if (WavPackNative.WavpackSetConfiguration64(wpc, ref config, totalSamples, IntPtr.Zero) == 0)
                 {
                     throw new InvalidOperationException($"Failed to configure WavPack encoder for '{destFilePath}': {GetErrorMessage(wpc)}");
                 }
