@@ -139,7 +139,7 @@ namespace EggEncoder.UnitTests.TestUtilities
             writer.Write((ushort)1024);
             writer.Write((ushort)4);
             writer.Write((ushort)6); // cbSize: samplesPerBlock(2) + numCoef(2) + only 1 coefficient pair's worth (4)... declared short
-            writer.Write((ushort)2041);
+            writer.Write((ushort)2036);
             writer.Write((ushort)7); // claims 7 coefficient pairs, but the chunk has no room for them
             writer.Write(_standardCoeff1[0]);
             writer.Write(_standardCoeff2[0]);
@@ -149,9 +149,36 @@ namespace EggEncoder.UnitTests.TestUtilities
             writer.Write(new byte[dataSize]);
         }
 
+        // Declares a real chunkSize with plenty of physical room (22 bytes, enough for cbSize +
+        // wSamplesPerBlock + wNumCoef), but a cbSize field that itself claims fewer than the 4 bytes
+        // needed for wSamplesPerBlock/wNumCoef -- a mismatch between the chunk's own declared size and
+        // its own cbSize sub-field that CreateWithTruncatedFmtChunk (no extension at all) and
+        // CreateWithTruncatedCoefficientTable (chunkSize too short) don't exercise.
+        public static void CreateWithCbSizeTooShort(string filePath)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int declaredFmtChunkSize = 22;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)0); // not validated by WavReader; Open() throws before any chunk after this is read
+            writer.Write("WAVE"u8);
+
+            writer.Write("fmt "u8);
+            writer.Write((uint)declaredFmtChunkSize);
+            writer.Write((ushort)MsAdpcmFormatTag);
+            writer.Write((ushort)1);
+            writer.Write((uint)44100);
+            writer.Write((uint)22050);
+            writer.Write((ushort)1024);
+            writer.Write((ushort)4);
+            writer.Write((ushort)2); // cbSize=2, below the 4-byte minimum for wSamplesPerBlock+wNumCoef
+        }
+
         public static void CreateWithZeroCoefficients(string filePath)
         {
-            CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2041, totalSamples: 1, numCoef: 0);
+            CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2036, totalSamples: 1, numCoef: 0);
         }
     }
 }

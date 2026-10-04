@@ -599,6 +599,28 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_MsAdpcm_With_CbSizeTooShort_Should_Throw()
+        {
+            // Distinct from FmtChunkTooShortForExtension: here the chunk itself declares plenty of
+            // physical room (22 bytes), but its own cbSize sub-field claims fewer than the 4 bytes
+            // wSamplesPerBlock/wNumCoef need -- a declared-size-vs-declared-cbSize mismatch, not a
+            // declared-size-vs-actual-room one.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateWithCbSizeTooShort(filePath);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_MsAdpcm_With_ZeroCoefficients_Should_Throw()
         {
             var filePath = Path.GetTempFileName();
