@@ -1190,6 +1190,43 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Fact]
+        public void Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // MS ADPCM is decode-only (like IMA ADPCM), so it can only ever be the pipeline's SOURCE,
+            // never its destination -- this proves a PcmTransform genuinely runs on its decoded
+            // output, not just that an MS ADPCM source happens to be readable at all (already proven
+            // by AudioCutterTest's own bit-exact decode coverage).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = WavReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                // Compare against the source doubled directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail. Clamp the same way
+                // VolumeTransform itself does (int16 native range, since the source decodes to 16-bit).
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

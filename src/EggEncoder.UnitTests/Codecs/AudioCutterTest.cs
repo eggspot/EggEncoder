@@ -20,6 +20,8 @@ namespace EggEncoder.UnitTests.Codecs
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _imaAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono_expected.pcm");
+        private static readonly string _msAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
+        private static readonly string _msAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono_expected.pcm");
         private static readonly string _muLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
         private static readonly string _muLawMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono_expected.pcm");
         private static readonly string _aLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
@@ -1339,6 +1341,62 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var expected = ReadGroundTruthPcm16(_imaAdpcmMonoExpectedPcmPath);
                 buffer.Should().Equal(expected[0..44100]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_MsAdpcmWavToWav_Should_Reproduce_BitExact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(_msAdpcmMonoFixturePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(22050);
+                wavReader.TotalSamples.Should().Be(44100);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var expected = ReadGroundTruthPcm16(_msAdpcmMonoExpectedPcmPath).Take((int)wavReader.TotalSamples).ToArray();
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_MsAdpcmWav_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "cut.wav");
+
+                AudioCutter.Cut(_msAdpcmMonoFixturePath, destWavPath, startInSeconds: 0, endInSeconds: 1).Should().BeTrue();
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(22050);
+                wavReader.TotalSamples.Should().Be(22050);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var expected = ReadGroundTruthPcm16(_msAdpcmMonoExpectedPcmPath);
+                buffer.Should().Equal(expected[0..22050]);
             }
             finally
             {

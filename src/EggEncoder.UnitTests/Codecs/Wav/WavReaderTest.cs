@@ -480,16 +480,255 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
         }
 
-        [Fact]
-        public void Open_WithUnsupportedFormatTag_Should_Throw()
+        [Theory]
+        [InlineData("sample_ms_adpcm_mono.wav", "sample_ms_adpcm_mono_expected.pcm", 1)]
+        [InlineData("sample_ms_adpcm_stereo.wav", "sample_ms_adpcm_stereo_expected.pcm", 2)]
+        public void Open_MsAdpcm_Should_Decode_BitExact_Against_FfmpegAndCoreAudio_GroundTruth(string fixtureFileName, string expectedFileName, int expectedChannels)
         {
-            // Format tag 2 (MS ADPCM) is a real, legitimately different, still-unsupported format --
-            // confirms the validation that lets PCM/float/G.711/IMA-ADPCM through continues to reject
-            // everything else, now that G.711's own tags (6/7) have been added to that allow-list.
+            // Ground truth generated once by decoding a real ffmpeg-produced MS ADPCM file via
+            // ffmpeg's own adpcm_ms decoder, cross-checked separately (during development, not
+            // re-asserted per test run) against macOS's own afconvert/CoreAudio decode of the same
+            // mono file, which agreed bit-exact. Both real files share blockAlign=1024, but
+            // wSamplesPerBlock differs per the format's own channel-dependent formula: 2036 for mono,
+            // 1012 for stereo (verified directly from each file's own fmt chunk bytes). Both happen
+            // to make every block's own remainingSamplesPerChannel exactly even -- the "odd trailing
+            // sample" branch is covered separately by MsAdpcmDecoderTest's own hand-crafted block,
+            // not by a real fixture.
+            var fixturePath = Path.GetFullPath($"Codecs/Wav/{fixtureFileName}");
+            var expectedPath = Path.GetFullPath($"Codecs/Wav/{expectedFileName}");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.IsMsAdpcm.Should().BeTrue();
+            wavReader.Channels.Should().Be(expectedChannels);
+            wavReader.SampleRate.Should().Be(22050);
+            wavReader.BitsPerSample.Should().Be(16, "MS ADPCM decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            wavReader.TotalSamples.Should().Be(44100);
+
+            var decoded = DecodeAll(wavReader);
+            var expected = ReadGroundTruthPcm16(expectedPath);
+            var expectedTrimmed = expected.Take(decoded.Count).ToArray();
+
+            decoded.Should().Equal(expectedTrimmed);
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37]; // deliberately not a divisor of the real block's own samplesPerBlock
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            var expected = ReadGroundTruthPcm16(expectedPath).Take(decoded.Count).ToArray();
+
+            decoded.Should().Equal(expected);
+        }
+
+        [Fact]
+        public void Open_MsAdpcmWav_IsMsAdpcm_Should_Be_True_And_OtherFormatFlags_Should_Be_False()
+        {
+            using var wavReader = WavReader.Open(Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav"));
+
+            wavReader.IsMsAdpcm.Should().BeTrue();
+            wavReader.IsImaAdpcm.Should().BeFalse();
+            wavReader.IsALaw.Should().BeFalse();
+            wavReader.IsMuLaw.Should().BeFalse();
+            wavReader.IsFloatFormat.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_UnsupportedChannelCount_Should_Throw()
+        {
             var filePath = Path.GetTempFileName();
             try
             {
-                CreateWavWithFormatTag(filePath, formatTag: 2);
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 3, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2036, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_FmtChunkTooShortForExtension_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateWithTruncatedFmtChunk(filePath);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_FmtChunkTooShortForCoefficientTable_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateWithTruncatedCoefficientTable(filePath);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_ZeroCoefficients_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateWithZeroCoefficients(filePath);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_SamplesPerBlockTooSmall_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_BlockAlignTooSmallForHeader_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1 needs a 7-byte header alone; blockAlign=5 can't even hold that.
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 5, samplesPerBlock: 3, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_With_SamplesPerBlockExceedingBlockAlignCapacity_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1, blockAlign=8 -> 7 header bytes + 1 data byte (2 nibbles) can hold at
+                // most 2 (header) + 2 = 4 samples; declaring 5 claims more than the block can supply.
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 8, samplesPerBlock: 5, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_WithoutFactChunk_Should_FallBack_To_BlockCountDerivedTotal()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2036, totalSamples: null, blockCount: 2);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.TotalSamples.Should().Be(2 * 2036);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_MsAdpcm_WithTruncatedFinalBlock_Should_Stop_Without_Throwing()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavMsAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2036, totalSamples: 4072, blockCount: 2, truncateLastBlockBytes: 10);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[4096];
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                    }
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithUnsupportedFormatTag_Should_Throw()
+        {
+            // Format tag 20 (ITU G.723 ADPCM) is a real, legitimately different, still-unsupported
+            // format -- confirms the validation that lets PCM/float/G.711/IMA-ADPCM/MS-ADPCM through
+            // continues to reject everything else, now that MS ADPCM's own tag (2) has been added to
+            // that allow-list (format tag 2 was this test's own example before MS ADPCM landed).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithFormatTag(filePath, formatTag: 20);
 
                 var act = () => WavReader.Open(filePath).Dispose();
 

@@ -49,6 +49,10 @@
     <None Include="Codecs\Wav\sample_g711_alaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_g711_alaw_stereo.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_g711_alaw_stereo_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ms_adpcm_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ms_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ms_adpcm_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ms_adpcm_stereo_expected.pcm" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>
