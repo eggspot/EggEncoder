@@ -126,5 +126,29 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
                 File.Delete(destWvPath);
             }
         }
+
+        [Fact]
+        public void Encode_From_EmptyWav_Should_Throw()
+        {
+            // Unlike FLAC/TTA/Opus/Vorbis, WavPack genuinely cannot represent an empty/zero-sample
+            // stream (see WavPackEncoderSession's own doc comment) -- this confirms that rejection
+            // propagates correctly through the real WAV-source convenience path, not just through a
+            // direct unit-level OpenSession call.
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"wavpack_encoder_empty_{Guid.NewGuid():N}.wav");
+            var destWvPath = Path.Combine(Path.GetTempPath(), $"wavpack_encoder_empty_dest_{Guid.NewGuid():N}.wv");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, SampleRate, bitsPerSample: 16, []);
+
+                var act = () => WavPackEncoder.Encode(sourceWavPath, destWvPath);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(destWvPath);
+            }
+        }
     }
 }

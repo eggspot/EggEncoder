@@ -85,7 +85,13 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
                 var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
 
-                act.Should().ThrowExactly<InvalidDataException>();
+                // Asserting only the exception type would leave the native error-buffer round trip
+                // (WavpackOpenFileInput's byte[] error out-parameter, decoded by DecodeErrorBuffer)
+                // completely unverified -- a marshaling bug that silently left the buffer all-zero
+                // would still pass a type-only check. "as WavPack: " with nothing after it is exactly
+                // what the message would look like if DecodeErrorBuffer returned an empty string.
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().NotEndWith("as WavPack: ", "the native error buffer should have decoded to a real, non-empty message");
             }
             finally
             {
@@ -100,7 +106,8 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
             var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
 
-            act.Should().ThrowExactly<InvalidDataException>();
+            act.Should().ThrowExactly<InvalidDataException>()
+                .Which.Message.Should().NotEndWith("as WavPack: ", "the native error buffer should have decoded to a real, non-empty message");
         }
     }
 }
