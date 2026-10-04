@@ -57,6 +57,9 @@
     <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll" PackageCopyToOutput="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="Native\win-x64\wavpackdll.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\wavpackdll.dll" PackageCopyToOutput="true">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
