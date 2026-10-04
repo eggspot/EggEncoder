@@ -50,7 +50,7 @@
       <p>Targets <code>net8.0</code>, <code>net9.0</code>, and <code>net10.0</code>. The native codec binaries (<code>libmp3lame.dll</code>, <code>libFLAC.dll</code>, <code>wavpackdll.dll</code>) for <code>win-x64</code> are bundled inside the package and copied to your output directory automatically — no separate install step.</p>
 
       <h2>One Interface, Fully Native</h2>
-      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, implemented by <code>NativeEncoder</code> — pure .NET codecs plus P/Invoke bindings to LAME and libFLAC. No external process, no ffmpeg install.</p>
+      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, implemented by <code>NativeEncoder</code> — pure .NET codecs plus P/Invoke bindings to LAME, libFLAC, and WavPack. No external process, no ffmpeg install.</p>
 
       <h2>Register with DI</h2>
       <pre><code class="language-csharp">using EggEncoder;
