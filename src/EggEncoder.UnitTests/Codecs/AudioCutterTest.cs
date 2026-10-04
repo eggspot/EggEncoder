@@ -343,6 +343,121 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_AifcExtension_Should_Be_Treated_The_Same_As_Aiff()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampAiff(tempDirectory, "source.aifc", totalFrames: 100, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.aifc");
+
+                AudioCutter.Convert(sourcePath, destPath);
+
+                using var aiffReader = AiffReader.Open(destPath);
+                var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+                aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_RealAifcFixture_Should_Decode_BitExact_Samples()
+        {
+            // Decode-only direction against a real, ffmpeg-produced AIFC fixture (not one this project's
+            // own AiffWriter helped produce) -- CreateRampAiff above already covers plain-AIFF-shaped
+            // self-consistency; this is the independent cross-check for AIFC specifically, mirroring
+            // every other codec's own real-fixture convention in this test suite.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Aiff/fixture_fl32_mono.aifc");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath);
+
+                using var wavReader = WavReader.Open(destPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.BitsPerSample.Should().Be(32);
+                wavReader.TotalSamples.Should().Be(4410);
+
+                using var aiffReader = AiffReader.Open(sourcePath);
+                var expected = new int[aiffReader.TotalSamples];
+                aiffReader.ReadInterleavedSamples(expected, (int)aiffReader.TotalSamples);
+
+                var buffer = new int[wavReader.TotalSamples];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithAifcDestinationFormat_Should_Write_RequestedCompressionType()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampAiff(tempDirectory, "source.aiff", totalFrames: 100, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.aifc");
+
+                AudioCutter.Convert(sourcePath, destPath, AiffSampleFormat.LittleEndianInteger);
+
+                using var aiffReader = AiffReader.Open(destPath);
+                aiffReader.IsLittleEndian.Should().BeTrue();
+
+                var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+                aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithAifcDestinationFormat_ToNonAiffExtension_Should_Throw()
+        {
+            // .flac (not .wav): OpenSinkForPipeline has its own dedicated .wav branch that calls
+            // WavWriter.Create directly without ever consulting destinationAiffFormat at all --
+            // exactly mirroring how that same branch never consults destinationWavFormat for an
+            // .aiff/.aifc destination either, a pre-existing characteristic of the pipeline-aware
+            // sink-opening path, not something this feature changes. Only a destination extension
+            // with no dedicated branch (falling through to the generic OpenSink, which is where the
+            // actual validation lives) reaches this check -- the same reason the analogous WAV test
+            // (Convert_WithG711Destination_ToNonWavExtension_Should_Throw) also targets .flac.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, _) = CreateRampAiff(tempDirectory, "source.aiff", totalFrames: 10, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.flac");
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, AiffSampleFormat.Float32);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Cut_Caf_Should_Extract_Exact_Sample_Range()
         {
             var tempDirectory = CreateTempDirectory();

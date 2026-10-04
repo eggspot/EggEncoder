@@ -462,7 +462,7 @@ namespace EggEncoder.Codecs
                     : new DeferredFixedHeaderSink(channels, totalFrames => WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, totalFrames));
             }
 
-            return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat);
+            return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat, destinationAiffFormat);
         }
 
         private static (int[] Samples, int Channels, int SampleRate, int BitsPerSample) DecodeFully(string filePath)

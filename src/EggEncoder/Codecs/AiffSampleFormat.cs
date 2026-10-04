@@ -2,7 +2,7 @@ namespace EggEncoder.Codecs
 {
     /// <summary>
     /// Selects the on-disk sample representation for an AIFF/AIFC destination written by
-    /// <see cref="AiffWriter.Create(string, int, int, int, long, AiffSampleFormat)"/> and
+    /// <see cref="EggEncoder.Codecs.Aiff.AiffWriter.Create(string, int, int, int, long, AiffSampleFormat)"/> and
     /// <see cref="AudioCutter.Convert(string, string, AiffSampleFormat)"/>/<see cref="CutOptions.DestinationAiffFormat"/>.
     ///
     /// <see cref="Integer"/> (the default) writes a plain FORM/AIFF container -- byte-for-byte what
