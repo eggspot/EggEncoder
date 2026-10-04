@@ -139,7 +139,7 @@ var steepLowPass = new ButterworthTransform(BiquadFilterType.LowPass, order: 4, 
 var pipeline = new PcmTransformPipeline(steepLowPass);</code></pre>
       <p>For a filter shape neither of those covers, <code>FirFilterTransform</code> applies a caller-supplied tap array identically to every channel — general FIR convolution, matching ffmpeg's <code>afir</code>/general-FIR filters. It has no filter-design code of its own; accepting arbitrary taps (e.g. designed by an external tool) is the whole point:</p>
       <pre><code class="language-csharp">double[] taps = ...; // from an external filter-design tool, or a hand-rolled window-based design
-var pipeline = new PcmTransformPipeline(new FirFilterTransform(channels: 2, taps));</code></pre>
+var pipeline = new PcmTransformPipeline(new FirFilterTransform(channels: 2, taps: taps));</code></pre>
       <p>All three keep per-channel filter history across blocks (two state values per channel per biquad stage; the last <code>taps.Length - 1</code> samples per channel for <code>FirFilterTransform</code>) — build a fresh instance per <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call, same as every other stateful transform, or call <code>Reset()</code> to restart that state without discarding the instance.</p>
 
       <h3>Float PCM</h3>
