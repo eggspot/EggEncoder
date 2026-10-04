@@ -1166,6 +1166,30 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Convert_WithG711Destination_ToNonWavExtension_Should_Throw(WavSampleFormat sampleFormat)
+        {
+            // OpenSink's own validation widened from "== Float32" to "!= Integer" to cover G.711 too
+            // -- confirms MuLaw/ALaw actually trigger it (not just Float32, the only value the
+            // pre-existing test for this line exercised) before ever reaching a destination encoder.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 4, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.flac");
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, sampleFormat);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
