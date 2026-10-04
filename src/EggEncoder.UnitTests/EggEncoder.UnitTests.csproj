@@ -32,6 +32,10 @@
     <None Include="Codecs\Wma\tone_mono.wma" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wma\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wma\tone_stereo.wma" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_ffmpeg.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_3channel.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_float.wv" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>

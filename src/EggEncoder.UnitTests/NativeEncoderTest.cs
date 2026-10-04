@@ -5,6 +5,7 @@ using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
+using EggEncoder.Codecs.WavPack;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -237,6 +238,48 @@ namespace EggEncoder.UnitTests
 
                 probeResult.CodecType.Should().Be("audio");
                 probeResult.CodecName.Should().Be("vorbis");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_WavPackFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                const int sampleRate = 44100;
+                var samples = new int[sampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate, bitsPerSample: 16, samples);
+                var wvPath = Path.Combine(tempDirectory, "source.wv");
+                WavPackEncoder.Encode(sourceWavPath, wvPath);
+
+                var probeResult = await _nativeEncoder.Probe(wvPath);
+
+                AssertNonEmptyWaveform(probeResult.Waveform);
+
+                probeResult.FormatName.Should().Be("wv");
+                probeResult.SizeBytes.Should().Be(new FileInfo(wvPath).Length);
+                probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+                probeResult.CodecType.Should().Be("audio");
+                probeResult.CodecName.Should().Be("wavpack");
                 probeResult.SampleRate.Should().Be(sampleRate);
                 probeResult.Channels.Should().Be(1);
                 probeResult.ChannelLayout.Should().Be("mono");

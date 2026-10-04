@@ -8,6 +8,7 @@ using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.WavPack;
 using EggEncoder.Codecs.Wma;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -1173,6 +1174,110 @@ namespace EggEncoder.UnitTests.Codecs
                 // land on an arbitrary sample the way a lossless codec's can -- approximately
                 // 2 seconds (88200 samples), within generous slack either way.
                 decoded.Count.Should().BeInRange(88200 - 8000, 88200 + 8000);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToWavPack_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var filePath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new int[2000];
+                for (var frame = 0; frame < interleavedSamples.Length; frame++)
+                {
+                    interleavedSamples[frame] = frame % 1000;
+                }
+
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples);
+                var destWvPath = Path.Combine(tempDirectory, "dest.wv");
+
+                AudioCutter.Convert(filePath, destWvPath);
+
+                var decoded = new List<int>();
+                var streamInfo = WavPackDecoder.Decode(destWvPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                decoded.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavPackToWav_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new int[2000];
+                for (var frame = 0; frame < interleavedSamples.Length; frame++)
+                {
+                    interleavedSamples[frame] = frame % 1000;
+                }
+
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples);
+                var sourceWvPath = Path.Combine(tempDirectory, "source.wv");
+                WavPackEncoder.Encode(sourceWavPath, sourceWvPath);
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourceWvPath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(1000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WavPack_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                var interleavedSamples = new int[5000];
+                for (var frame = 0; frame < interleavedSamples.Length; frame++)
+                {
+                    interleavedSamples[frame] = frame % 1000;
+                }
+
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate: 1000, bitsPerSample: 16, interleavedSamples);
+                var sourceWvPath = Path.Combine(tempDirectory, "source.wv");
+                WavPackEncoder.Encode(sourceWavPath, sourceWvPath);
+                var destPath = Path.Combine(tempDirectory, "cut.wv");
+
+                AudioCutter.Cut(sourceWvPath, destPath, startInSeconds: 1, endInSeconds: 3).Should().BeTrue();
+
+                var decoded = new List<int>();
+                var streamInfo = WavPackDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.BitsPerSample.Should().Be(16);
+                streamInfo.TotalSamples.Should().Be(2000);
+                decoded.Should().Equal(interleavedSamples[1000..3000]);
             }
             finally
             {

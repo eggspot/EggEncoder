@@ -5,6 +5,7 @@ using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.WavPack;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -189,6 +190,34 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithResamplingTransform_WavPackDestination_Should_Produce_Exact_Frame_Count()
+        {
+            // Same rationale as the AIFF case above: resampling changes the frame count
+            // unpredictably from the pipeline's perspective, so the WavPack destination must go
+            // through DeferredFixedHeaderSink too, since WavpackSetConfiguration64 needs an exact
+            // total sample count up front just like WavWriter/AiffWriter do.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wv");
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 1000, targetRate: 2000, channels: 2));
+                AudioCutter.Convert(sourcePath, destPath, pipeline);
+
+                var streamInfo = WavPackDecoder.Decode(destPath, (_, _, _, _, _) => { });
+
+                streamInfo.SampleRate.Should().Be(2000);
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.TotalSamples.Should().Be(200);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_AiffSourceAndDestination_WithResamplingTransform_Should_Produce_Exact_Frame_Count()
         {
             var tempDirectory = CreateTempDirectory();
@@ -265,6 +294,39 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var decoded = new List<int>();
                 var streamInfo = TtaDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(1000);
+                streamInfo.TotalSamples.Should().Be(100);
+                decoded.Should().Equal(samples.Select(s => s * 2));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithVolumeTransform_WavPackDestination_Should_Scale_Every_Sample()
+        {
+            // Unlike TTA/CAF above, a WavPack destination is NOT a generic-fallback case --
+            // OpenSinkForPipeline special-cases ".wv" the same way it does ".wav"/".aiff", since
+            // WavpackSetConfiguration64 needs an exact total sample count up front. With no
+            // frame-count-changing transform in this pipeline, exactTotalFrames is known, so this
+            // exercises that special-case's "open WavPackEncoderSession directly" branch (not its
+            // DeferredFixedHeaderSink fallback) and confirms the transform is applied before encoding.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = Enumerable.Range(0, 100).ToArray();
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wv");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                var decoded = new List<int>();
+                var streamInfo = WavPackDecoder.Decode(destPath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
 
                 streamInfo.Channels.Should().Be(1);
                 streamInfo.SampleRate.Should().Be(1000);
