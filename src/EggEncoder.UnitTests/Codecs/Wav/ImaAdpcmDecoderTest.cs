@@ -121,5 +121,35 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             states[1].Predictor.Should().NotBe(1000);
             states[1].Predictor.Should().NotBe(states[0].Predictor, "the two channels started from different predictors/step indices and must not have become coupled");
         }
+
+        [Fact]
+        public void DecodeBlock_WithOddTrailingSampleCount_Should_Waste_The_Final_Nibble()
+        {
+            // samplesPerBlock=4 -> remainingSamplesPerChannel=3 (odd): every real ffmpeg-produced
+            // fixture this project has happens to land on a remainingSamplesPerChannel that's an
+            // exact multiple of 8, so this is the one branch no bit-exact fixture test ever
+            // exercises -- the data loop must decode exactly 3 more samples from 2 data bytes,
+            // using only the lower nibble of the final byte and discarding its upper nibble
+            // (0xF) entirely, rather than overrunning into a 4th, nonexistent sample slot.
+            byte[] block = [0, 0, 8, 0, 0x00, 0xF7];
+            var states = new ImaAdpcmDecoder.ChannelState[1];
+            var output = new int[4];
+
+            ImaAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 4, states, output);
+
+            // Ground truth via the same nibble sequence (0, 0, 7) driven independently through
+            // ExpandNibble -- if the wasted upper nibble (0xF) were decoded instead, this
+            // wouldn't match (and a true overrun would have already thrown above).
+            var expectedState = new ImaAdpcmDecoder.ChannelState { Predictor = 0, StepIndex = 8 };
+            var sample1 = ImaAdpcmDecoder.ExpandNibble(ref expectedState, nibble: 0);
+            var sample2 = ImaAdpcmDecoder.ExpandNibble(ref expectedState, nibble: 0);
+            var sample3 = ImaAdpcmDecoder.ExpandNibble(ref expectedState, nibble: 7);
+
+            output[0].Should().Be(0, "frame 0 is the raw header predictor");
+            output[1].Should().Be(sample1);
+            output[2].Should().Be(sample2);
+            output[3].Should().Be(sample3);
+            states[0].Predictor.Should().Be(expectedState.Predictor, "the wasted upper nibble (0xF) must never be decoded");
+        }
     }
 }
