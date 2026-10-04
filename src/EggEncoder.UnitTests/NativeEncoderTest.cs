@@ -16,6 +16,7 @@ namespace EggEncoder.UnitTests
     public class NativeEncoderTest
     {
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
+        private static readonly string _imaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _movFixturePath = Path.GetFullPath("Codecs/Mov/test.mov");
         private static readonly string _mp4FixturePath = Path.GetFullPath("Codecs/Mov/test.mp4");
         private static readonly string _aacFixturePath = Path.GetFullPath("Codecs/Aac/tone_mono.aac");
@@ -47,6 +48,28 @@ namespace EggEncoder.UnitTests
             probeResult.Channels.Should().Be(2);
             probeResult.ChannelLayout.Should().Be("stereo");
             probeResult.BitsPerSample.Should().Be(16);
+            probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
+        public async Task Probe_ImaAdpcmWavFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var probeResult = await _nativeEncoder.Probe(_imaAdpcmWavFixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_imaAdpcmWavFixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("adpcm_ima_wav");
+            probeResult.CodecLongName.Should().Be("ADPCM IMA WAV");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(88200);
             probeResult.TimeBase.Should().Be("1/44100");
         }
 

@@ -145,7 +145,7 @@ namespace EggEncoder
             }
 
             var durationSeconds = wavReader.SampleRate > 0 ? (double)wavReader.TotalSamples / wavReader.SampleRate : 0;
-            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat);
+            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat, wavReader.IsImaAdpcm);
 
             return new ProbeResult
             {
@@ -568,8 +568,13 @@ namespace EggEncoder
             public required IReadOnlyList<double> Waveform { get; init; }
         }
 
-        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat)
+        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm)
         {
+            if (isImaAdpcm)
+            {
+                return ("adpcm_ima_wav", "ADPCM IMA WAV");
+            }
+
             if (isFloatFormat)
             {
                 return ("pcm_f32le", "PCM 32-bit floating-point little-endian");

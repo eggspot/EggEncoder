@@ -193,5 +193,249 @@ namespace EggEncoder.UnitTests.Codecs.Wav
                 File.Delete(filePath);
             }
         }
+
+        [Fact]
+        public void Open_ImaAdpcmMono_Should_Decode_BitExact_Against_FfmpegAndCoreAudio_GroundTruth()
+        {
+            // The ground-truth .pcm was generated once by decoding a real ffmpeg-produced IMA ADPCM
+            // file via two independent, real-world decoders (ffmpeg's own adpcm_ima_wav, and macOS's
+            // afconvert/CoreAudio) that agreed on every one of 88200 samples -- this is a from-scratch
+            // implementation of a well-standardized algorithm, not a third-party dependency, so
+            // nothing here is "assumed correct" the way a native library's own behavior would be.
+            //
+            // This cross-check is exactly how a real, subtle bug was caught during development: an
+            // earlier version of ImaAdpcmDecoder.ExpandNibble used a single-shift formula that looked
+            // "algebraically identical" to the correct, separately-truncated one on paper, but wasn't
+            // whenever step wasn't a multiple of 8 -- seeded obviously-wrong output almost immediately
+            // (sample 2 of 88200 was already off by 2) once checked against real, independent decoders,
+            // rather than trusting a hand-derived equivalence proof alone.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(1);
+            wavReader.SampleRate.Should().Be(44100);
+            wavReader.BitsPerSample.Should().Be(16, "IMA ADPCM decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            wavReader.TotalSamples.Should().Be(88200, "the file's own 'fact' chunk is the authoritative total, trimming the last block's trailing padding");
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_ImaAdpcmStereo_Should_Decode_BitExact_Against_FfmpegGroundTruth()
+        {
+            // Same rationale as the mono case, but this is the one real file that exercises the
+            // 4-byte-group-per-channel interleaving specifically (two different source tones, so a
+            // channel-swap or cross-contamination bug would be immediately visible as wrong pitch/
+            // phase in one channel, not just a subtly-off sample value).
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_stereo.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_stereo_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(2);
+            wavReader.TotalSamples.Should().Be(88200);
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            // Each real block here decodes to far more samples (2041/channel) than a deliberately tiny
+            // buffer can hold in one call -- this forces ReadInterleavedSamples' internal pending-sample
+            // buffering to drain across many calls, including calls that land mid-block, exercising a
+            // path the other tests (which use a comfortably large 4096-frame buffer) never reach.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37]; // deliberately not a divisor of the 2041-sample block
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_UnsupportedChannelCount_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 3, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2041, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_FmtChunkTooShortForExtension_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // A plain 16-byte fmt chunk (no cbSize/wSamplesPerBlock extension at all) declaring
+                // format tag 17 -- structurally impossible to decode correctly since the block
+                // structure can't be determined, so this must be rejected, not guessed at.
+                WavImaAdpcmFileBuilder.CreateWithTruncatedFmtChunk(filePath);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_ZeroSamplesPerBlock_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 0, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_BlockAlignTooSmallForHeader_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1 needs a 4-byte header alone; blockAlign=3 can't even hold that.
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 3, samplesPerBlock: 2, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_SamplesPerBlockExceedingBlockAlignCapacity_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1, blockAlign=8 -> 4 header bytes + 4 data bytes (8 nibbles) can hold at
+                // most 1 (header) + 8 = 9 samples; declaring 10 claims more than the block can supply.
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 8, samplesPerBlock: 10, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_WithoutFactChunk_Should_FallBack_To_BlockCountDerivedTotal()
+        {
+            // The 'fact' chunk is the preferred, authoritative source for TotalSamples, but it's not
+            // structurally required by the format tag itself -- a file missing it entirely should
+            // still decode using the block-count * samplesPerBlock formula instead of failing outright.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // 2 full blocks, blockAlign=1024, samplesPerBlock=2041, no 'fact' chunk at all.
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2041, totalSamples: null, blockCount: 2);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.TotalSamples.Should().Be(2 * 2041);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_WithTruncatedFinalBlock_Should_Stop_Without_Throwing()
+        {
+            // A genuinely truncated file (fewer bytes than one full block remaining) is a malformed
+            // input this project doesn't try to recover partial data from -- ReadInterleavedSamples
+            // should just stop cleanly (return 0) rather than throw or read out of bounds.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 1024, samplesPerBlock: 2041, totalSamples: 4082, blockCount: 2, truncateLastBlockBytes: 10);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[4096];
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                    }
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static List<int> DecodeAll(WavReader wavReader)
+        {
+            var decoded = new List<int>();
+            var buffer = new int[4096 * wavReader.Channels];
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead * wavReader.Channels));
+            }
+
+            return decoded;
+        }
+
+        private static int[] ReadGroundTruthPcm16(string path)
+        {
+            var bytes = File.ReadAllBytes(path);
+            var samples = new int[bytes.Length / 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = (short)(bytes[i * 2] | (bytes[(i * 2) + 1] << 8));
+            }
+
+            return samples;
+        }
     }
 }

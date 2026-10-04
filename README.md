@@ -100,7 +100,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 | Format | Probe | Decode | Encode |
 |--------|:---:|:---:|:---:|
-| WAV    | ✅ | ✅ | ✅ |
+| WAV    | ✅ | ✅⁶ | ✅ |
 | AIFF   | ✅ | ✅ | ✅ |
 | ALAC (.caf) | ✅ | ✅ | ✅² |
 | TTA    | ✅ | ✅ | ✅² |
@@ -122,6 +122,8 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 ⁴ Vorbis is lossy, mono/stereo, 16-bit PCM — unlike Opus, any sample rate is supported (no fixed-rate resampling requirement).
 
 ⁵ WavPack supports 16-bit and 24-bit lossless integer PCM (its own lossy/hybrid and floating-point modes are out of scope). Mono and stereo only. Unlike every other codec here, WavPack decode/encode is via a native binary (`wavpackdll.dll`, the official WavPack project's own prebuilt library) rather than a pure-managed implementation — no pure-managed WavPack decoder/encoder exists. Also unlike every other codec here, WavPack cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one) — encoding one throws `NotSupportedException` rather than producing a file.
+
+⁶ `WavReader` also decodes IMA ADPCM (`WAVE_FORMAT_IMA_ADPCM`, format tag 17) — still a `.wav` file, just a different `fmt` chunk codec, so it's read automatically by `Probe`/`Convert`/`Cut`/pipeline sources with no extra API. Mono and stereo only; reports as 16-bit PCM once decoded (the coded width is 4 bits). Decode only — `WavWriter` does not encode ADPCM.
 
 `IMediaEncoder.CutFile` decodes any supported source (WAV, AIFF, ALAC, TTA, WavPack, Opus, Vorbis, FLAC, MP3, AAC, WMA, and MOV/MP4 files with a mono AAC-LC audio track) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
 

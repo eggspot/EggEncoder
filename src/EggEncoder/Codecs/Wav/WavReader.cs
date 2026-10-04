@@ -6,25 +6,47 @@ namespace EggEncoder.Codecs.Wav
     {
         private const int PcmFormatTag = 1;
         private const int IeeeFloatFormatTag = 3;
+        private const int ImaAdpcmFormatTag = 17;
         private const int WaveFormatExtensibleTag = 0xFFFE;
 
         private readonly FileStream _stream;
         private readonly long _dataChunkLength;
         private readonly bool _isFloatFormat;
+        private readonly bool _isAdpcm;
+        private readonly int _adpcmBlockAlign;
+        private readonly int _adpcmSamplesPerBlock;
+        private readonly ImaAdpcmDecoder.ChannelState[] _adpcmChannelStates = [];
 
         private long _bytesRead;
         private byte[] _rawBytes = [];
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength)
+        // ADPCM decodes in whole-block units (the real block is almost never an exact multiple of the
+        // caller's requested frame count), so decoded-but-not-yet-returned samples are buffered here;
+        // PCM/float never populate this since they decode exactly what's requested, byte-for-byte.
+        private int[] _adpcmPendingSamples = [];
+        private int _adpcmPendingOffset;
+        private int _adpcmPendingCount;
+        private long _adpcmFramesProduced;
+
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
             _isFloatFormat = isFloatFormat;
+            _isAdpcm = isAdpcm;
+            _adpcmBlockAlign = adpcmBlockAlign;
+            _adpcmSamplesPerBlock = adpcmSamplesPerBlock;
 
             Channels = channels;
             SampleRate = sampleRate;
             BitsPerSample = bitsPerSample;
-            TotalSamples = dataChunkLength / (channels * (bitsPerSample / 8));
+            TotalSamples = totalSamples;
+
+            if (isAdpcm)
+            {
+                _adpcmChannelStates = new ImaAdpcmDecoder.ChannelState[channels];
+                _adpcmPendingSamples = new int[adpcmSamplesPerBlock * channels];
+            }
 
             _stream.Seek(dataChunkStart, SeekOrigin.Begin);
         }
@@ -38,6 +60,8 @@ namespace EggEncoder.Codecs.Wav
         public long TotalSamples { get; }
 
         public bool IsFloatFormat => _isFloatFormat;
+
+        public bool IsImaAdpcm => _isAdpcm;
 
         public static WavReader Open(string filePath)
         {
@@ -61,9 +85,13 @@ namespace EggEncoder.Codecs.Wav
                 int? sampleRate = null;
                 int? bitsPerSample = null;
                 var isFloatFormat = false;
+                var isAdpcm = false;
+                var adpcmBlockAlign = 0;
+                var adpcmSamplesPerBlock = 0;
                 long dataChunkStart = 0;
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
+                long? factChunkTotalSamples = null;
 
                 while (stream.Position < stream.Length)
                 {
@@ -74,18 +102,39 @@ namespace EggEncoder.Codecs.Wav
                     if (chunkId == "fmt ")
                     {
                         var formatTag = reader.ReadUInt16();
-                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != WaveFormatExtensibleTag)
+                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
                         {
-                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM and IEEE float are supported");
+                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, and IMA ADPCM are supported");
                         }
 
                         isFloatFormat = formatTag == IeeeFloatFormatTag;
+                        isAdpcm = formatTag == ImaAdpcmFormatTag;
 
                         channels = reader.ReadUInt16();
                         sampleRate = (int)reader.ReadUInt32();
                         reader.ReadUInt32();
-                        reader.ReadUInt16();
+                        adpcmBlockAlign = reader.ReadUInt16();
                         bitsPerSample = reader.ReadUInt16();
+
+                        if (isAdpcm)
+                        {
+                            if (chunkSize < 20)
+                            {
+                                throw new InvalidDataException($"'{filePath}' is IMA ADPCM but its 'fmt ' chunk is too short to carry the required wSamplesPerBlock extension");
+                            }
+
+                            var cbSize = reader.ReadUInt16();
+                            if (cbSize < 2)
+                            {
+                                throw new InvalidDataException($"'{filePath}' is IMA ADPCM but its 'fmt ' chunk extension is too short to carry wSamplesPerBlock");
+                            }
+
+                            adpcmSamplesPerBlock = reader.ReadUInt16();
+                        }
+                    }
+                    else if (chunkId == "fact")
+                    {
+                        factChunkTotalSamples = reader.ReadUInt32();
                     }
                     else if (chunkId == "data")
                     {
@@ -108,6 +157,43 @@ namespace EggEncoder.Codecs.Wav
                     throw new InvalidDataException($"'{filePath}' is missing a 'data' chunk");
                 }
 
+                if (isAdpcm)
+                {
+                    if (channels is not 1 and not 2)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has {channels} channels; only mono and stereo IMA ADPCM are supported");
+                    }
+
+                    if (adpcmSamplesPerBlock <= 1)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={adpcmSamplesPerBlock}, which is too small to carry any real IMA ADPCM data");
+                    }
+
+                    var headerBytes = 4 * channels.Value;
+                    if (adpcmBlockAlign < headerBytes)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares a block align of {adpcmBlockAlign} bytes, too small to hold the {headerBytes}-byte per-channel ADPCM block header");
+                    }
+
+                    // The standard IMA ADPCM relationship between block align and samples per block --
+                    // a wSamplesPerBlock claiming more samples than the block's own data bytes can
+                    // actually hold would run DecodeBlock's data loop past the end of its own block
+                    // buffer (IndexOutOfRangeException) rather than failing cleanly here.
+                    var maxSamplesPerBlock = ((adpcmBlockAlign - headerBytes) * 8 / headerBytes) + 1;
+                    if (adpcmSamplesPerBlock > maxSamplesPerBlock)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={adpcmSamplesPerBlock}, but its block align of {adpcmBlockAlign} bytes can only hold {maxSamplesPerBlock}");
+                    }
+
+                    // The 'fact' chunk's own total is the authoritative sample count (the standard,
+                    // recommended WAV convention for any non-PCM format) -- it's what lets a decoder
+                    // trim trailing padding from the last block without guessing. Fall back to deriving
+                    // it from the data chunk's own block count only if 'fact' is missing entirely.
+                    var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
+
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock);
+                }
+
                 if (isFloatFormat)
                 {
                     if (bitsPerSample != 32)
@@ -120,7 +206,9 @@ namespace EggEncoder.Codecs.Wav
                     throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
                 }
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength);
+                var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
+
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0);
             }
             catch
             {
@@ -131,6 +219,11 @@ namespace EggEncoder.Codecs.Wav
 
         public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
         {
+            if (_isAdpcm)
+            {
+                return ReadAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
+            }
+
             var bytesPerSample = BitsPerSample / 8;
             var bytesPerFrame = bytesPerSample * Channels;
             var remainingBytes = _dataChunkLength - _bytesRead;
@@ -189,6 +282,90 @@ namespace EggEncoder.Codecs.Wav
         // Delegates to FloatSampleConverter's shared conversion so a float WAV's NaN/Infinity/
         // out-of-range samples are handled identically regardless of entry point -- see its doc comment.
         private static int Float32ToInt32(float sample) => Pcm.FloatSampleConverter.ClampToNativeInt32(sample);
+
+        private int ReadAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
+        {
+            var framesWritten = 0;
+
+            while (framesWritten < maxSamplesPerChannel)
+            {
+                if (_adpcmPendingOffset >= _adpcmPendingCount && !DecodeNextAdpcmBlock())
+                {
+                    break;
+                }
+
+                var framesAvailable = _adpcmPendingCount - _adpcmPendingOffset;
+                var framesToCopy = Math.Min(framesAvailable, maxSamplesPerChannel - framesWritten);
+
+                Array.Copy(_adpcmPendingSamples, _adpcmPendingOffset * Channels, buffer, framesWritten * Channels, framesToCopy * Channels);
+
+                _adpcmPendingOffset += framesToCopy;
+                framesWritten += framesToCopy;
+            }
+
+            return framesWritten;
+        }
+
+        // Decodes exactly one more whole block from the stream into _adpcmPendingSamples, returning
+        // false once there's nothing left to decode (end of data chunk, the authoritative TotalSamples
+        // has already been reached, or the remaining bytes don't even add up to one complete block --
+        // the last of which only protects against a malformed/truncated file: every real encoder pads
+        // its own final block to the full block size and relies on TotalSamples, not a short read, to
+        // signal where the real audio ends -- confirmed against a real ffmpeg-produced file, whose
+        // final block is fully present but mostly trailing padding beyond its own 'fact' chunk total).
+        private bool DecodeNextAdpcmBlock()
+        {
+            if (_adpcmFramesProduced >= TotalSamples)
+            {
+                return false;
+            }
+
+            var remainingBytes = _dataChunkLength - _bytesRead;
+            if (remainingBytes < _adpcmBlockAlign)
+            {
+                return false;
+            }
+
+            if (_rawBytes.Length < _adpcmBlockAlign)
+            {
+                _rawBytes = new byte[_adpcmBlockAlign];
+            }
+
+            var bytesActuallyRead = ReadFullyAdpcmBlock();
+            _bytesRead += bytesActuallyRead;
+
+            if (bytesActuallyRead < _adpcmBlockAlign)
+            {
+                return false;
+            }
+
+            var samplesThisBlock = (int)Math.Min(_adpcmSamplesPerBlock, TotalSamples - _adpcmFramesProduced);
+
+            ImaAdpcmDecoder.DecodeBlock(new ReadOnlySpan<byte>(_rawBytes, 0, _adpcmBlockAlign), Channels, _adpcmSamplesPerBlock, _adpcmChannelStates, _adpcmPendingSamples);
+
+            _adpcmPendingOffset = 0;
+            _adpcmPendingCount = samplesThisBlock;
+            _adpcmFramesProduced += samplesThisBlock;
+
+            return true;
+
+            int ReadFullyAdpcmBlock()
+            {
+                var totalBytesRead = 0;
+                while (totalBytesRead < _adpcmBlockAlign)
+                {
+                    var bytesReadThisCall = _stream.Read(_rawBytes, totalBytesRead, _adpcmBlockAlign - totalBytesRead);
+                    if (bytesReadThisCall == 0)
+                    {
+                        break;
+                    }
+
+                    totalBytesRead += bytesReadThisCall;
+                }
+
+                return totalBytesRead;
+            }
+        }
 
         public void Dispose()
         {
