@@ -211,7 +211,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
             var act = () => WavPackEncoderSession.OpenSession(invalidPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 0);
 
-            act.Should().Throw<DirectoryNotFoundException>();
+            act.Should().ThrowExactly<DirectoryNotFoundException>();
         }
 
         private static void AssertRoundTrips(int[] interleavedSamples, int channels, int sampleRate, int bitsPerSample)
