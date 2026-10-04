@@ -50,7 +50,7 @@ builder.Services.AddEggEncoder(enableLogging: false);   // fully silent</code></
       <p>Every <code>Probe</code>/<code>ConvertFile</code>/<code>CutFile</code> call logs a start and a completion message at <code>LogInformation</code>, and logs (then rethrows) any failure at <code>LogError</code> — set <code>enableLogging: false</code> to suppress all of it, or leave it on and control verbosity the standard way via your app's logging configuration (e.g. <code>"Logging:LogLevel:EggEncoder.NativeEncoder": "None"</code> in <code>appsettings.json</code>).</p>
 
       <h2>Native Binary Resolution</h2>
-      <p>The bundled <code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are located automatically at runtime by <code>NativeLibraryLoader</code>, relative to <code>AppContext.BaseDirectory</code> — this is not configurable and requires no setup. See <a href="Advanced-Features.html#native-binary-packaging">Native Binary Packaging</a> for how the files get there.</p>
+      <p>The bundled <code>libmp3lame.dll</code>, <code>libFLAC.dll</code>, and <code>wavpackdll.dll</code> are located automatically at runtime by <code>NativeLibraryLoader</code>, relative to <code>AppContext.BaseDirectory</code> — this is not configurable and requires no setup. See <a href="Advanced-Features.html#native-binary-packaging">Native Binary Packaging</a> for how the files get there.</p>
     </div>
   </main>
 </div>

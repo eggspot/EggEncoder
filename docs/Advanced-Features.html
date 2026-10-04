@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Advanced Features — EggEncoder</title>
-  <meta name="description" content="Waveform generation, sample-accurate cutting, the PCM transform pipeline (resampling, normalization, remix, bit-depth/float conversion, fades, mixing, concatenation), MOV/MP4 probing, and native binary packaging details.">
+  <meta name="description" content="Waveform generation, sample-accurate cutting, the PCM transform pipeline (resampling, normalization, remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), MOV/MP4 probing, and native binary packaging details.">
   <link rel="icon" href="favicon.ico">
   <link rel="stylesheet" href="assets/css/eggspot.css">
   <link rel="stylesheet" href="assets/css/prism-eggspot.css">
@@ -43,7 +43,7 @@
       <h1>Advanced Features</h1>
 
       <h2>Waveform Generation</h2>
-      <p>Every <code>Probe</code> call that decodes audio (WAV, FLAC, MP3, AAC, WMA — not MOV/MP4) populates <code>ProbeResult.Waveform</code> with a list of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
+      <p>Every <code>Probe</code> call that decodes audio (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack — not MOV/MP4, which is metadata-only unless a decodable audio track is found) populates <code>ProbeResult.Waveform</code> with a list of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
       <pre><code class="language-csharp">using EggEncoder.Waveform;
 
 var calculator = new WaveformCalculator(totalSamplesPerChannel, channels, bitsPerSample);
@@ -58,7 +58,7 @@ List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 w
       <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once.</p>
 
       <h2>Sample-Accurate Cutting</h2>
-      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, FLAC, MP3, AAC, WMA) and writes any supported destination format (WAV, FLAC, MP3, AAC, WMA) without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
+      <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack, or MOV/MP4 with a mono AAC-LC audio track) and writes any supported destination format without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;
 
 bool produced = AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90);
@@ -122,6 +122,26 @@ AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(normalize));<
 AudioCutter.Concatenate([introPath, bodyPath, outroPath], destPath);</code></pre>
       <p>Both require every input to share the same channels, sample rate, and bit depth — mismatches throw <code>NotSupportedException</code>. <code>Mix</code> decodes every input fully into memory (silence-pads the shorter ones to the longest), so it's meant for clip-length material, not multi-hour streams. <code>Concatenate</code> streams for every destination format except WAV; a WAV destination buffers the combined output in memory, since <code>WavWriter</code> needs an exact frame count at creation time and the combined total across sources isn't known until they've all been decoded.</p>
 
+      <h3>Parametric EQ and FIR Filtering</h3>
+      <p><code>BiquadTransform</code> is a single second-order IIR filter section using the RBJ Audio EQ Cookbook formulas — low/high pass, band pass, notch, all pass, peaking EQ, and low/high shelf:</p>
+      <pre><code class="language-csharp">using EggEncoder.Codecs;
+using EggEncoder.Pcm;
+
+// A gentle low-pass at 8kHz, then a notch to pull out 60Hz mains hum
+var pipeline = new PcmTransformPipeline(
+    new BiquadTransform(BiquadFilterType.LowPass, channels: 2, sampleRate: 44100, frequencyHz: 8000),
+    new BiquadTransform(BiquadFilterType.Notch, channels: 2, sampleRate: 44100, frequencyHz: 60, q: 4.0));
+
+AudioCutter.Convert(sourcePath, destPath, pipeline);</code></pre>
+      <p>A single biquad section rolls off at 12 dB/octave. For a steeper, maximally-flat-passband low/high pass, <code>ButterworthTransform</code> cascades <code>order / 2</code> <code>BiquadTransform</code> stages sharing one cutoff frequency, each at its own Q from the standard Butterworth pole-pair formula — <code>filterType</code> must be <code>LowPass</code> or <code>HighPass</code> (the other <code>BiquadFilterType</code> values have no standard higher-order cascade construction), and <code>order</code> must be a positive even integer:</p>
+      <pre><code class="language-csharp">// A steep, maximally-flat 4th-order low-pass -- twice the biquad's own rolloff
+var steepLowPass = new ButterworthTransform(BiquadFilterType.LowPass, order: 4, channels: 2, sampleRate: 44100, frequencyHz: 8000);
+var pipeline = new PcmTransformPipeline(steepLowPass);</code></pre>
+      <p>For a filter shape neither of those covers, <code>FirFilterTransform</code> applies a caller-supplied tap array identically to every channel — general FIR convolution, matching ffmpeg's <code>afir</code>/general-FIR filters. It has no filter-design code of its own; accepting arbitrary taps (e.g. designed by an external tool) is the whole point:</p>
+      <pre><code class="language-csharp">double[] taps = ...; // from an external filter-design tool, or a hand-rolled window-based design
+var pipeline = new PcmTransformPipeline(new FirFilterTransform(channels: 2, taps: taps));</code></pre>
+      <p>All three keep per-channel filter history across blocks (two state values per channel per biquad stage; the last <code>taps.Length - 1</code> samples per channel for <code>FirFilterTransform</code>) — build a fresh instance per <code>Convert</code>/<code>Cut</code>/<code>Mix</code> call, same as every other stateful transform, or call <code>Reset()</code> to restart that state without discarding the instance.</p>
+
       <h3>Float PCM</h3>
       <p>The pipeline itself is exclusively <code>int[]</code>-based — a normalized float sample (<code>-1.0..1.0</code>) maps 1:1 onto the 32-bit int native range every other bit depth already uses, the same scale <code>WavReader</code> produces when decoding a float WAV. For samples that don't go through a WAV file at all (synthesized audio, another library's <code>float[]</code> buffer):</p>
       <pre><code class="language-csharp">using EggEncoder.Pcm;
@@ -161,7 +181,7 @@ Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s,
       <p><code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files through both: <code>ProbeResult.Width</code>/<code>Height</code>/duration always come from <code>MovProbe</code>, and if <code>MovDecoder</code> successfully finds a decodable audio track, <code>SampleRate</code>/<code>Channels</code>/<code>BitsPerSample</code>/<code>Waveform</code> get populated too. If there's no audio track, or it's not mono AAC-LC, those fields stay null and the video metadata is still returned — audio decode failure never fails the whole probe. <code>AudioCutter.Convert</code>/<code>Cut</code> can also use a <code>.mov</code>/<code>.mp4</code> file with a decodable audio track as a source, the same as any other format.</p>
 
       <h2 id="native-binary-packaging">Native Binary Packaging</h2>
-      <p><code>libmp3lame.dll</code> and <code>libFLAC.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>
+      <p><code>libmp3lame.dll</code>, <code>libFLAC.dll</code>, and <code>wavpackdll.dll</code> are packed via the NuGet <code>contentFiles</code> convention so they land at <code>Native/win-x64/*.dll</code> relative to your application's output directory — exactly where <code>NativeLibraryLoader</code>'s custom <code>DllImportResolver</code> looks for them at runtime, regardless of your app's working directory. No manual copy step is required after <code>dotnet add package EggEncoder</code>.</p>
       <p>These binaries are Windows x64 only. EggEncoder does not run on Linux/macOS or non-x64 architectures — there is no cross-platform fallback engine.</p>
     </div>
   </main>
