@@ -122,7 +122,7 @@ AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(normalize));<
 AudioCutter.Concatenate([introPath, bodyPath, outroPath], destPath);</code></pre>
       <p>Both require every input to share the same channels, sample rate, and bit depth — mismatches throw <code>NotSupportedException</code>. <code>Mix</code> decodes every input fully into memory (silence-pads the shorter ones to the longest), so it's meant for clip-length material, not multi-hour streams. <code>Concatenate</code> streams for every destination format except WAV; a WAV destination buffers the combined output in memory, since <code>WavWriter</code> needs an exact frame count at creation time and the combined total across sources isn't known until they've all been decoded.</p>
 
-      <h3>Parametric EQ and FIR Filtering</h3>
+      <h3>Parametric EQ and FIR filtering</h3>
       <p><code>BiquadTransform</code> is a single second-order IIR filter section using the RBJ Audio EQ Cookbook formulas — low/high pass, band pass, notch, all pass, peaking EQ, and low/high shelf:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;
 using EggEncoder.Pcm;
