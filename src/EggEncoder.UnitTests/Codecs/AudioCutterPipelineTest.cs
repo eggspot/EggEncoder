@@ -1227,6 +1227,43 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Fact]
+        public void Convert_WithRealAifcFixtureSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // AIFC decode wires into the existing WAV-family decode path with no dispatch changes
+            // beyond adding the extension, so every PcmTransform works on an AIFC source automatically
+            // -- this proves a transform genuinely runs on its decoded output, through a real
+            // ffmpeg-produced fixture rather than one this project's own AiffWriter helped produce.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Aiff/fixture_fl32_mono.aifc");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = EggEncoder.Codecs.Aiff.AiffReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+                destReader.BitsPerSample.Should().Be(32);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                // Clamp at this source's own native range (32-bit, since fl32 decodes into the full
+                // int32 range) rather than MS ADPCM's 16-bit one above.
+                var expected = sourceBuffer.Select(s => (int)Math.Clamp((long)s * 2, int.MinValue, int.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
