@@ -123,7 +123,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
-        public void DecodeBlock_WithOddTrailingSampleCount_Should_Waste_The_Final_Nibble()
+        public void DecodeBlock_Mono_WithOddTrailingSampleCount_Should_Waste_The_Final_Nibble()
         {
             // samplesPerBlock=4 -> remainingSamplesPerChannel=3 (odd): every real ffmpeg-produced
             // fixture this project has happens to land on a remainingSamplesPerChannel that's an
