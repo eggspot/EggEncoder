@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — 11 formats (AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — 11 formats (AAC, AIFF incl. AIFC, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -18,7 +18,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 
 - 🚀 **Fully native, in-process** — direct P/Invoke to LAME (MP3), libFLAC, and WavPack, no subprocess/shell-out overhead
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
-- 🎼 **Broad format coverage** — AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
+- 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
@@ -101,7 +101,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 | Format | Probe | Decode | Encode |
 |--------|:---:|:---:|:---:|
 | WAV    | ✅ | ✅⁶ | ✅⁷ |
-| AIFF   | ✅ | ✅ | ✅ |
+| AIFF   | ✅ | ✅⁹ | ✅⁹ |
 | ALAC (.caf) | ✅ | ✅ | ✅² |
 | TTA    | ✅ | ✅ | ✅² |
 | WavPack (.wv) | ✅ | ✅ | ✅⁵ |
@@ -129,9 +129,11 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ⁸ MS ADPCM (`WAVE_FORMAT_ADPCM`, format tag 2) decode, mono and stereo only — a genuinely different algorithm from IMA ADPCM (linear prediction from a per-file coefficient table carried in the `fmt` chunk itself, rather than IMA ADPCM's universal fixed step table), so it's its own decoder, not a variant of `ImaAdpcmDecoder`. Decode only, same as IMA ADPCM.
 
+⁹ `AiffReader`/`AiffWriter` also handle AIFC (FORM/AIFC), still under the `.aiff`/`.aif`/`.aifc` extensions — no separate dispatch, `AiffReader` just understands the AIFC form type's extra `compressionType` field in its COMM chunk. Covers `NONE`/`twos` (big-endian PCM, the same as plain AIFF), `sowt` (little-endian PCM), `fl32`/`fl64` (big-endian IEEE float, decoded at this codebase's usual int32-native-range scale — both report 32-bit PCM resolution), and `alaw`/`ulaw` (G.711, reusing the same `G711Codec` the WAV side uses, not a second implementation) — all read AND write, selectable on write via `AiffSampleFormat` (see `AudioCutter.Convert(..., AiffSampleFormat)`/`CutOptions.DestinationAiffFormat`). `ima4` (QuickTime IMA4 ADPCM) is a real, commonly-produced AIFC compressionType that is **not** decoded — its bitstream is materially different from WAV's own IMA ADPCM, not just a different container around the same algorithm — `AiffReader.Open` throws `NotSupportedException` naming it specifically.
+
 `IMediaEncoder.CutFile` decodes any supported source (WAV, AIFF, ALAC, TTA, WavPack, Opus, Vorbis, FLAC, MP3, AAC, WMA, and MOV/MP4 files with a mono AAC-LC audio track) and can cut into any supported destination format, including converting as it trims — sample-accurate, no re-encode of the untouched region.
 
-WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (read and write), plus IMA ADPCM decode, MS ADPCM decode, and G.711 mu-law/A-law decode+encode (see footnotes 6/7/8 above). AIFF (`.aiff`/`.aif`) supports 8/16/24/32-bit signed integer PCM, read and write — plain AIFF (FORM/COMM/SSND) only, not the AIFC compressed/float variant. ALAC (`.caf`, Apple Lossless in a CAF container) supports mono and stereo, 16-bit or 24-bit integer PCM, read and write. TTA (`.tta`, True Audio) supports mono and stereo, 16-bit integer PCM, read and write. WavPack (`.wv`) supports mono and stereo, 16-bit or 24-bit lossless integer PCM, read and write. Opus (`.opus`, in a from-scratch OggOpus container) supports mono and stereo, 16-bit integer PCM at a fixed 48kHz, read and write. Vorbis (`.ogg`) supports mono and stereo, 16-bit integer PCM at any sample rate, read and write. A float WAV *source* always decodes transparently into int PCM, the same as any other bit depth. For a float, mu-law, or A-law WAV *destination*, pass `WavSampleFormat.Float32`/`MuLaw`/`ALaw` to `AudioCutter.Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate` — the default (`WavSampleFormat.Integer`) is unchanged; `Float32` requires the destination's bit depth to already be 32, `MuLaw`/`ALaw` require 16 (widen/narrow with `BitDepthFormatTransform` first if needed). `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat`/`FloatSampleConverter` remain available for working with `float[]` directly instead of driving int PCM through a pipeline.
+WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (read and write), plus IMA ADPCM decode, MS ADPCM decode, and G.711 mu-law/A-law decode+encode (see footnotes 6/7/8 above). AIFF (`.aiff`/`.aif`/`.aifc`) supports 8/16/24/32-bit signed integer PCM, read and write (plain FORM/AIFF), plus AIFC (FORM/AIFC) read and write for `NONE`/`twos`/`sowt` integer PCM, `fl32`/`fl64` float, and `alaw`/`ulaw` G.711 (see footnote 9); AIFC's `ima4` compressionType is not decoded. ALAC (`.caf`, Apple Lossless in a CAF container) supports mono and stereo, 16-bit or 24-bit integer PCM, read and write. TTA (`.tta`, True Audio) supports mono and stereo, 16-bit integer PCM, read and write. WavPack (`.wv`) supports mono and stereo, 16-bit or 24-bit lossless integer PCM, read and write. Opus (`.opus`, in a from-scratch OggOpus container) supports mono and stereo, 16-bit integer PCM at a fixed 48kHz, read and write. Vorbis (`.ogg`) supports mono and stereo, 16-bit integer PCM at any sample rate, read and write. A float WAV *source* always decodes transparently into int PCM, the same as any other bit depth. For a float, mu-law, or A-law WAV *destination*, pass `WavSampleFormat.Float32`/`MuLaw`/`ALaw` to `AudioCutter.Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate` — the default (`WavSampleFormat.Integer`) is unchanged; `Float32` requires the destination's bit depth to already be 32, `MuLaw`/`ALaw` require 16 (widen/narrow with `BitDepthFormatTransform` first if needed). `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat`/`FloatSampleConverter` remain available for working with `float[]` directly instead of driving int PCM through a pipeline.
 
 ## License
 
