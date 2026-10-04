@@ -6,10 +6,12 @@ namespace EggEncoder.Codecs.Wav
     // unlike WavPack (which had no viable pure-managed option).
     //
     // Every constant and formula here was cross-verified against FFmpeg's own real decoder source
-    // (libavcodec/adpcm.c's adpcm_ima_expand_nibble, called with shift=3 for the plain IMA WAV case)
-    // and a real ffmpeg-produced reference file's actual bytes, not just a written specification --
-    // the same "verify against a real, authoritative implementation" discipline this project has used
-    // for every codec since WavPack's own API turned out to need two rounds of real-CI correction.
+    // (libavcodec/adpcm.c's ff_adpcm_ima_qt_expand_nibble -- see ExpandNibble's own comment below
+    // for why it's that function, not the differently-shaped adpcm_ima_expand_nibble one might
+    // expect) and a real ffmpeg-produced reference file's actual bytes, not just a written
+    // specification -- the same "verify against a real, authoritative implementation" discipline
+    // this project has used for every codec since WavPack's own API turned out to need two rounds
+    // of real-CI correction.
     internal static class ImaAdpcmDecoder
     {
         // The 89-entry step size table and 16-entry step-index adjustment table are the fixed,
