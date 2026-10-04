@@ -52,7 +52,11 @@ namespace EggEncoder.Codecs.Wav
         // The real encode table is indexed 0..16383 ((sample + 32768) >> 2 for a genuine int16-range
         // sample); clamped defensively so a sample outside that range -- which, unlike every other
         // bytesPerSample case in WavWriter, would otherwise index straight past the array -- fails safe
-        // by saturating instead of throwing IndexOutOfRangeException.
+        // instead of throwing IndexOutOfRangeException. Note this isn't a clean "saturate to the
+        // nearest valid extreme": sample + 32768 itself overflows C#'s default unchecked int32
+        // arithmetic for a sample far enough outside int16 range, so e.g. int.MaxValue and
+        // int.MinValue both wrap around to land on the SAME clamped index (0) rather than opposite
+        // ends of the table -- confirmed against the real runtime in G711CodecTest, not assumed.
         private static int ClampToTableIndex(int sample) => Math.Clamp((sample + 32768) >> 2, 0, 16383);
 
         // Ported directly from FFmpeg's build_xlaw_table: builds the encode table by evaluating the
