@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — a dozen formats (AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA ADPCM/G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — 11 formats (AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA ADPCM/G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
