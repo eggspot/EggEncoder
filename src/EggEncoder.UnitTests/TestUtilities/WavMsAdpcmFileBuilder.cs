@@ -160,9 +160,10 @@ namespace EggEncoder.UnitTests.TestUtilities
             using var writer = new BinaryWriter(stream);
 
             const int declaredFmtChunkSize = 22;
+            var riffSize = 4 + (8 + declaredFmtChunkSize); // no 'data' chunk needed -- Open() throws before reaching one
 
             writer.Write("RIFF"u8);
-            writer.Write((uint)0); // not validated by WavReader; Open() throws before any chunk after this is read
+            writer.Write((uint)riffSize);
             writer.Write("WAVE"u8);
 
             writer.Write("fmt "u8);
