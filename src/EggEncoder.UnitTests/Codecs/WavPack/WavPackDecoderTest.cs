@@ -8,6 +8,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         private static readonly string _stereoFixturePath = Path.GetFullPath("Codecs/WavPack/sample_ffmpeg.wv");
         private static readonly string _threeChannelFixturePath = Path.GetFullPath("Codecs/WavPack/sample_3channel.wv");
         private static readonly string _floatFixturePath = Path.GetFullPath("Codecs/WavPack/sample_float.wv");
+        private static readonly string _eightBitFixturePath = Path.GetFullPath("Codecs/WavPack/sample_8bit.wv");
 
         [Fact]
         public void Decode_StereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()
@@ -71,6 +72,18 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             // Same rationale as the 3-channel case above: a genuine ffmpeg-produced floating-point
             // WavPack file, to exercise this decoder's lossless-integer-only guard for real.
             var act = () => WavPackDecoder.Decode(_floatFixturePath, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Decode_WithUnsupportedBitDepth_Should_Throw()
+        {
+            // Same rationale again: a genuine ffmpeg-produced 8-bit WavPack file (ffmpeg's wavpack
+            // encoder supports u8p/s16p/s32p/fltp), to exercise this decoder's 16/24-bit-only guard
+            // for real -- this is the one branch in WavPackDecoder.Decode that no other test here
+            // reaches, since every other fixture and every round-trip test is 16 or 24-bit.
+            var act = () => WavPackDecoder.Decode(_eightBitFixturePath, (_, _, _, _, _) => { });
 
             act.Should().ThrowExactly<NotSupportedException>();
         }
