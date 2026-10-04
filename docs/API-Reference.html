@@ -283,6 +283,12 @@ public enum WavSampleFormat { Integer, Float32, MuLaw, ALaw }</code></pre>
 public static class AacEncoder
 {
     public static void Encode(string destFilePath, short[] samples, int channels, int sampleRate);
+}
+
+public sealed class AacEncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
+{
+    public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
 
       <h3>FLAC — <code>EggEncoder.Codecs.Flac</code></h3>
@@ -295,6 +301,12 @@ public static class FlacEncoder
 {
     public const uint DefaultCompressionLevel = 5;
     public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel);
+}
+
+public sealed class FlacEncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
+{
+    public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
 
       <h3>MP3 — <code>EggEncoder.Codecs.Mp3</code></h3>
@@ -307,6 +319,12 @@ public static class Mp3Encoder // backed by native libmp3lame
 {
     public const int DefaultBitRateKbps = 320;
     public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
+}
+
+public sealed class Mp3EncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
+{
+    public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = Mp3Encoder.DefaultBitRateKbps);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 
 public static class Mp3Probe // manual frame-header parsing, no native call
@@ -345,6 +363,12 @@ public sealed class WavWriter : IDisposable
 public static class WmaEncoder
 {
     public static void Encode(string destFilePath, IReadOnlyList&lt;short&gt; interleavedSamples, int channels, int sampleRate);
+}
+
+public sealed class WmaEncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
+{
+    public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
       <p>Mono or independently-coded stereo only. Mid/side stereo coding (used by most real-world WMAv2 encoders, including ffmpeg's) is not supported for decode and throws <code>NotSupportedException</code>; <code>WmaEncoder</code> never produces mid/side output, so this library's own encoder/decoder round-trip always works.</p>
 
@@ -377,7 +401,7 @@ public static class AlacEncoder
     public static void Encode(string sourceWavFilePath, string destAlacFilePath);
 }
 
-public sealed class AlacEncoderSession : IAudioSink
+public sealed class AlacEncoderSession : IDisposable
 {
     public static AlacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
@@ -395,7 +419,7 @@ public static class TtaEncoder
     public static void Encode(string sourceWavFilePath, string destTtaFilePath);
 }
 
-public sealed class TtaEncoderSession : IAudioSink
+public sealed class TtaEncoderSession : IDisposable
 {
     public static TtaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
@@ -413,7 +437,7 @@ public static class WavPackEncoder
     public static void Encode(string sourceWavFilePath, string destWvFilePath);
 }
 
-public sealed class WavPackEncoderSession : IAudioSink
+public sealed class WavPackEncoderSession : IDisposable
 {
     public static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
@@ -431,7 +455,7 @@ public static class OpusEncoder
     public static void Encode(string sourceWavFilePath, string destOpusFilePath);
 }
 
-public sealed class OpusEncoderSession : IAudioSink
+public sealed class OpusEncoderSession : IDisposable
 {
     public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
@@ -450,7 +474,7 @@ public static class VorbisEncoder
     public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = DefaultQuality);
 }
 
-public sealed class VorbisEncoderSession : IAudioSink
+public sealed class VorbisEncoderSession : IDisposable
 {
     public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
