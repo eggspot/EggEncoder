@@ -37,6 +37,10 @@
     <None Include="Codecs\WavPack\sample_3channel.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_float.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_8bit.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ima_adpcm_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ima_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ima_adpcm_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_ima_adpcm_stereo_expected.pcm" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>
