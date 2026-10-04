@@ -81,7 +81,7 @@
 {
     public NativeEncoder(ILogger&lt;NativeEncoder&gt; logger);
 }</code></pre>
-      <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
+      <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.aiff</code>/<code>.aif</code>, <code>.caf</code> (ALAC), <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code> (Vorbis), <code>.wv</code> (WavPack), <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
 
       <h2>ServiceCollectionExtensions</h2>
       <pre><code class="language-csharp">public static class ServiceCollectionExtensions
@@ -126,7 +126,7 @@
     public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
     public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan&lt;float&gt; interleavedSamples, int channels, int sampleRate);
 }</code></pre>
-      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
+      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.aiff</code>/<code>.aif</code>, <code>.caf</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code>, <code>.wv</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
 
       <h2>WaveformCalculator</h2>
       <p>Namespace: <code>EggEncoder.Waveform</code>.</p>
@@ -221,7 +221,31 @@ public sealed class FadeTransform : IPcmTransform
     public FadeTransform(long totalFrames, long fadeInFrames = 0, long fadeOutFrames = 0, FadeCurve curve = FadeCurve.Linear);
     public void Reset(); // restart the cross-block frame position tracker
 }
-public enum FadeCurve { Linear, EqualPower }</code></pre>
+public enum FadeCurve { Linear, EqualPower }
+
+public sealed class BiquadTransform : IPcmTransform
+{
+    public BiquadTransform(BiquadFilterType filterType, int channels, int sampleRate, double frequencyHz, double q = 0.7071067811865476, double gainDb = 0.0);
+    public void Reset(); // restart the two-state-value-per-channel filter history
+}
+public enum BiquadFilterType { LowPass, HighPass, BandPass, Notch, AllPass, PeakingEq, LowShelf, HighShelf }
+
+public sealed class ButterworthTransform : IPcmTransform
+{
+    // filterType must be LowPass or HighPass (the other BiquadFilterType values have no standard
+    // higher-order Butterworth cascade construction); order must be a positive even integer --
+    // realized as order/2 cascaded BiquadTransform stages sharing the cutoff, each at its own Q
+    // from the standard Butterworth pole-pair formula (maximally flat passband).
+    public ButterworthTransform(BiquadFilterType filterType, int order, int channels, int sampleRate, double frequencyHz);
+    public void Reset(); // restart every cascaded stage's filter history
+}
+
+public sealed class FirFilterTransform : IPcmTransform
+{
+    public FirFilterTransform(int channels, double[] taps); // applied identically to every channel; no filter-design code of its own
+    public void Reset(); // restart each channel's taps.Length - 1 sample history
+}</code></pre>
+      <p><strong>Parametric EQ and FIR filtering:</strong> <code>BiquadTransform</code> is a single second-order IIR section using the RBJ Audio EQ Cookbook formulas (Direct Form II Transposed, two state values per channel) — low/high pass, band pass, notch, all pass, peaking EQ, and low/high shelf. <code>ButterworthTransform</code> cascades <code>order / 2</code> <code>BiquadTransform</code> stages sharing one cutoff frequency, each at a different Q from the standard Butterworth pole-pair formula, for a steeper, maximally-flat-passband low/high pass than a single biquad section can provide. <code>FirFilterTransform</code> is general FIR convolution (parity with ffmpeg's <code>afir</code>/general-FIR filters) — it applies a caller-supplied tap array identically to every channel and keeps each channel's last <code>taps.Length - 1</code> samples as history across blocks; accepting arbitrary taps is the whole point, so there's no filter-design helper bundled with it.</p>
       <p><strong>Peak normalization used naively:</strong> if <code>PeakNormalizationTransform</code> is dropped into a pipeline and never pre-measured, <code>MeasurePeak</code> self-measures from whatever buffer <code>Apply</code> first sees — which, driven by <code>AudioCutter.Convert</code>/<code>Cut</code>, is one ~4096-frame decode block, not the whole file. For a true whole-file measurement, call <code>AudioCutter.MeasurePeakAmplitude</code> first and pass its result to <code>MeasurePeak(long, int)</code> before handing the transform to a pipeline.</p>
       <p><strong>Resampler quality:</strong> <code>ResamplingTransform</code> is a Kaiser-windowed-sinc polyphase filter — anti-aliasing on downsample, band-limited reconstruction on upsample — not linear interpolation. Output is held back until its full tap window (<code>FilterHalfWidth</code> source frames on each side) has genuinely arrived, rather than falling back to duplicating an edge sample at a block boundary; see <code>Flush</code> above for draining the last few frames this implies at the true end of a stream. Total output frame count is a cumulative <code>floor(sourceFramesSoFar * ratio)</code>, so it's exact regardless of how a stream is split into blocks — no per-block rounding drift to account for. The continuous fractional source position is quantized to 1024 polyphase-table phases (a small, standard timing error for this class of resampler); downsampling scales the filter's half-width up by <code>1/cutoff</code> to preserve anti-aliasing quality as the ratio shrinks, capped at 256 taps so an extreme ratio (e.g. 100:1) can't grow the table or per-sample cost unboundedly.</p>
 
@@ -323,6 +347,115 @@ public static class WmaEncoder
     public static void Encode(string destFilePath, IReadOnlyList&lt;short&gt; interleavedSamples, int channels, int sampleRate);
 }</code></pre>
       <p>Mono or independently-coded stereo only. Mid/side stereo coding (used by most real-world WMAv2 encoders, including ffmpeg's) is not supported for decode and throws <code>NotSupportedException</code>; <code>WmaEncoder</code> never produces mid/side output, so this library's own encoder/decoder round-trip always works.</p>
+
+      <h3>AIFF — <code>EggEncoder.Codecs.Aiff</code></h3>
+      <pre><code class="language-csharp">public sealed class AiffReader : IDisposable
+{
+    public static AiffReader Open(string filePath);
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+}
+
+public sealed class AiffWriter : IDisposable
+{
+    public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>Plain AIFF (FORM/COMM/SSND) only, not the AIFC compressed/float variant. Supports 8/16/24/32-bit signed integer PCM, both read and write (8-bit is signed, unlike WAV's unsigned convention) — the big-endian counterpart to WAV, with samples exchanged the same way: as <code>int[]</code> at the native range for whatever bit depth is in play.</p>
+
+      <h3>ALAC — <code>EggEncoder.Codecs.Alac</code></h3>
+      <pre><code class="language-csharp">public static class AlacDecoder
+{
+    public static AlacStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class AlacEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destAlacFilePath);
+}
+
+public sealed class AlacEncoderSession : IAudioSink
+{
+    public static AlacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>Apple Lossless, in a CAF container (<code>.caf</code>). Mono and stereo, 16-bit or 24-bit integer PCM only — throws <code>NotSupportedException</code> for any other channel count or bit depth (20-bit and 32-bit are out of scope, matching ffmpeg's own ALAC encoder, which doesn't emit those depths either). For stereo, the encoder tries a fixed mid/side mix first (the classic 0.5-weight split, expressed through ALAC's general affine decorrelation), falling back to independent channels and then to a verbatim (uncompressed) frame only if the previous option's residuals would overflow the Rice coder's escape code.</p>
+
+      <h3>TTA — <code>EggEncoder.Codecs.Tta</code></h3>
+      <pre><code class="language-csharp">public static class TtaDecoder
+{
+    public static TtaStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class TtaEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destTtaFilePath);
+}
+
+public sealed class TtaEncoderSession : IAudioSink
+{
+    public static TtaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>True Audio, a lossless codec (<code>.tta</code>). Mono and stereo, 16-bit integer PCM only — throws <code>NotSupportedException</code> for any other channel count or bit depth. Unlike ALAC, TTA's stereo decorrelation is unconditional (no bitstream flag, no fallback), and its Rice/unary residual coder has no escape code — the unary code is fully unbounded, so there's no verbatim/overflow fallback path.</p>
+
+      <h3>WavPack — <code>EggEncoder.Codecs.WavPack</code></h3>
+      <pre><code class="language-csharp">public static class WavPackDecoder
+{
+    public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class WavPackEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destWvFilePath);
+}
+
+public sealed class WavPackEncoderSession : IAudioSink
+{
+    public static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>Lossless, in its own <code>.wv</code> container. Mono and stereo, 16-bit or 24-bit integer PCM only (WavPack's own lossy/hybrid and floating-point modes are rejected) — throws <code>NotSupportedException</code> otherwise. Unlike every other codec here, WavPack delegates to a native binary (<code>wavpackdll.dll</code>, the official WavPack project's own prebuilt library, loaded the same way as <code>libmp3lame</code>/<code>libFLAC</code>) rather than a pure-managed implementation. <code>OpenSession</code> requires an exact, positive <code>totalSamples</code> up front (like <code>WavWriter</code>/<code>AiffWriter</code>) — WavPack genuinely cannot represent an empty/zero-sample stream at all, so a zero or negative total throws <code>NotSupportedException</code> rather than producing a file that would only turn out to be unreadable later.</p>
+
+      <h3>Opus — <code>EggEncoder.Codecs.Opus</code></h3>
+      <pre><code class="language-csharp">public static class OpusDecoder
+{
+    public static OpusStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class OpusEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destOpusFilePath);
+}
+
+public sealed class OpusEncoderSession : IAudioSink
+{
+    public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>Lossy, in a from-scratch OggOpus container (<code>.opus</code>). Mono and stereo, 16-bit integer PCM, and fixed at 48kHz (Opus's native/highest internal rate) regardless of the source's own rate — encoding at any other rate throws <code>NotSupportedException</code>; resample first with <code>ResamplingTransform</code>. The actual Opus codec (SILK+CELT) is delegated to <a href="https://github.com/lostromb/concentus" target="_blank" rel="noopener">Concentus</a>, a pure managed C# port (the same "lean on an established pure-managed implementation" precedent <code>NLayer</code> sets for MP3 decode); EggEncoder implements the OggOpus container itself (page framing, CRC-32, the mandatory <code>OpusHead</code>/<code>OpusTags</code> packets) from scratch. Channel mapping family 0 only.</p>
+
+      <h3>Vorbis — <code>EggEncoder.Codecs.Vorbis</code></h3>
+      <pre><code class="language-csharp">public static class VorbisDecoder
+{
+    public static VorbisStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class VorbisEncoder
+{
+    public const float DefaultQuality = 0.5f;
+    public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = DefaultQuality);
+}
+
+public sealed class VorbisEncoderSession : IAudioSink
+{
+    public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}</code></pre>
+      <p>Lossy, in an Ogg container (<code>.ogg</code>). Mono and stereo, 16-bit integer PCM — throws <code>NotSupportedException</code> otherwise; unlike Opus, any positive sample rate is accepted, no fixed-rate resampling requirement. The codec and the Ogg container are both delegated to third-party pure managed NuGet packages — <a href="https://github.com/NVorbis/NVorbis" target="_blank" rel="noopener">NVorbis</a> for decode, <a href="https://github.com/SteveLillis/.NET-Ogg-Vorbis-Encoder" target="_blank" rel="noopener">OggVorbisEncoder</a> for encode — each with its own independent Ogg object model (EggEncoder's own <code>Codecs/Opus/OggPageReader</code>/<code>OggPageWriter</code> aren't involved here). Vorbis has no <code>pre_skip</code>-equivalent field the way Opus does, so there's no way to tell a decoder exactly how many samples of the encoder's own fixed MDCT lookahead to trim off the front — finding the true alignment (e.g. via cross-correlation) is left to the caller if it matters.</p>
 
       <h3>MOV/MP4 — <code>EggEncoder.Codecs.Mov</code></h3>
       <pre><code class="language-csharp">public static class MovProbe
