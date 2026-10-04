@@ -1,5 +1,6 @@
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.WavPack;
 using EggEncoder.Pcm;
 using System.Runtime.ExceptionServices;
 
@@ -427,6 +428,18 @@ namespace EggEncoder.Codecs
                 return exactTotalFrames.HasValue
                     ? AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
                     : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames));
+            }
+
+            if (destExtension == ".wv")
+            {
+                // Unlike WAV/AIFF, WavpackSetConfiguration64 could instead take total_samples == -1
+                // ("unknown") and have the real count patched into the file's first block after the
+                // fact -- but requiring an exact count up front here reuses this already-proven
+                // deferred-sink machinery instead of this project needing to implement that native
+                // seek-and-patch sequence itself.
+                return exactTotalFrames.HasValue
+                    ? WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, exactTotalFrames.Value)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, totalFrames));
             }
 
             return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat);

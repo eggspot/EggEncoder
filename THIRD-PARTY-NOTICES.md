@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
-The package also redistributes two pre-built native codec libraries as separate, unmodified
+The package also redistributes three pre-built native codec libraries as separate, unmodified
 binary files under `Native/win-x64/`. Their licenses apply to those files independently.
 
 ## libmp3lame.dll — LAME MP3 encoder
@@ -26,6 +26,18 @@ binary files under `Native/win-x64/`. Their licenses apply to those files indepe
   `Native/FlacNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
   binary file under `Native/win-x64/`.
 - **Source availability**: FLAC source code is available at https://github.com/xiph/flac
+
+## wavpackdll.dll — WavPack reference library
+
+- **Project**: [WavPack](https://github.com/dbry/WavPack) (David Bryant)
+- **License**: BSD-style license — full text at
+  https://github.com/dbry/WavPack/blob/master/COPYING
+- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
+  `Native/WavPackNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
+  binary file under `Native/win-x64/`. The bundled DLL is the official project's own prebuilt
+  binary from its GitHub release (`wavpack-5.9.0-dll.zip`, `x64/wavpackdll.dll`), checksum-verified
+  against that release's own published `sums.txt` before being committed here.
+- **Source availability**: WavPack source code is available at https://github.com/dbry/WavPack
 
 ## NLayer — managed MP3 decoder
 
