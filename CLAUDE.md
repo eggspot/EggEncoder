@@ -23,7 +23,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 ### `IMediaEncoder` implementation
 
-- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no external binary dependency beyond the bundled `libmp3lame`/`libFLAC` DLLs.
+- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no external binary dependency beyond the bundled `libmp3lame`/`libFLAC`/`wavpackdll` DLLs.
 
 ### Codecs (`src/EggEncoder/Codecs/`)
 
@@ -47,7 +47,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 ### Supporting infrastructure
 
 - **`Transform/`** — `BitReader`, `BitWriter`, `HuffmanTable`, `Mdct` — low-level bitstream and signal-processing primitives shared by the AAC/WMA codecs
-- **`Native/`** — `FlacNative.cs`/`Mp3Native.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
+- **`Native/`** — `FlacNative.cs`/`Mp3Native.cs`/`WavPackNative.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC`/`libmp3lame`/`wavpackdll` load from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory)
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
 - **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `NativeEncoder` itself as scoped, then maps both `IMediaEncoder` and `IPcmTransformEncoder` to resolve that same scoped instance. `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
@@ -89,7 +89,7 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 - Pattern: **AAA** (Arrange / Act / Assert)
 - Naming: `Feature_Condition_ExpectedBehavior` (e.g., `Probe_WavFile_Should_Return_Correct_Metadata_And_Waveform`)
 - Tests live in `src/EggEncoder.UnitTests/`, mirroring the `src/EggEncoder/` folder structure
-- Fixture audio files (`.wav`/`.flac`/`.mp3`/`.mov`/`.mp4`) live alongside their tests and are copied to the test output directory — see `<None ... CopyToOutputDirectory>` entries in `EggEncoder.UnitTests.csproj`
+- Fixture audio files (`.wav`/`.flac`/`.mp3`/`.aac`/`.wma`/`.wv`/`.mov`/`.mp4`, plus raw `.pcm` ground-truth references for cross-check tests) live alongside their tests and are copied to the test output directory — see `<None ... CopyToOutputDirectory>` entries in `EggEncoder.UnitTests.csproj`
 - Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference fixtures checked into the repo — no external ffmpeg install is needed to run the tests, only the fixture files themselves
 - `src/EggEncoder.AotSmokeTest/` covers Native AOT: it's a separate `PublishAot=true` console project (not an xUnit test, since xUnit runs under the JIT) that CI publishes with `dotnet publish -r win-x64` and then executes, to catch AOT/trimming regressions that the build-time analyzer alone can't (e.g. inside the `NLayer` dependency, which ships no AOT metadata of its own)
 

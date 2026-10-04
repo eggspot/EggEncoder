@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, remix, fades, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — a dozen formats (AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA ADPCM/G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -16,14 +16,14 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 
 ### Why EggEncoder?
 
-- 🚀 **Fully native, in-process** — direct P/Invoke to LAME (MP3) and libFLAC, no subprocess/shell-out overhead
+- 🚀 **Fully native, in-process** — direct P/Invoke to LAME (MP3), libFLAC, and WavPack, no subprocess/shell-out overhead
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF, ALAC, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
-- 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
+- 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
-- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC)
+- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC, BSD-style WavPack)
 
 ## Installation
 
@@ -31,7 +31,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 dotnet add package EggEncoder
 ```
 
-Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`) ship inside the package for `win-x64` and are copied to your output directory automatically.
+Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`, `wavpackdll.dll`) ship inside the package for `win-x64` and are copied to your output directory automatically.
 
 ## Quick Start
 
