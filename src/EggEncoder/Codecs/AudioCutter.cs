@@ -50,6 +50,16 @@ namespace EggEncoder.Codecs
             Convert(sourceFilePath, destFilePath, new PcmTransformPipeline(), destinationWavFormat);
         }
 
+        /// <summary>
+        /// Same as <see cref="Convert(string, string)"/>, but additionally selects the on-disk sample
+        /// representation for a <c>.aiff</c>/<c>.aif</c>/<c>.aifc</c> destination (see
+        /// <see cref="AiffSampleFormat"/>); ignored for every other destination format.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, AiffSampleFormat destinationAiffFormat)
+        {
+            Convert(sourceFilePath, destFilePath, new PcmTransformPipeline(), destinationAiffFormat);
+        }
+
         /// <summary>Delegates to the pipeline-aware overload with empty CutOptions; see the Convert() overload's remarks.</summary>
         public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
@@ -75,6 +85,7 @@ namespace EggEncoder.Codecs
                     break;
                 case ".aiff":
                 case ".aif":
+                case ".aifc":
                     using (var aiffReader = AiffReader.Open(sourceFilePath))
                     {
                         var buffer = new int[FramesPerBlock * aiffReader.Channels];
@@ -123,17 +134,22 @@ namespace EggEncoder.Codecs
             }
         }
 
-        private static IAudioSink OpenSink(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer)
+        private static IAudioSink OpenSink(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer)
         {
             if (destinationWavFormat != WavSampleFormat.Integer && destExtension != ".wav")
             {
                 throw new NotSupportedException($"{nameof(WavSampleFormat)}.{destinationWavFormat} is only supported for a '.wav' destination, but '{destFilePath}' is '{destExtension}'");
             }
 
+            if (destinationAiffFormat != AiffSampleFormat.Integer && destExtension is not (".aiff" or ".aif" or ".aifc"))
+            {
+                throw new NotSupportedException($"{nameof(AiffSampleFormat)}.{destinationAiffFormat} is only supported for a '.aiff'/'.aif'/'.aifc' destination, but '{destFilePath}' is '{destExtension}'");
+            }
+
             return destExtension switch
             {
                 ".wav" => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat),
-                ".aiff" or ".aif" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames),
+                ".aiff" or ".aif" or ".aifc" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAiffFormat),
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
                 ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate),

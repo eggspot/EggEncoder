@@ -210,6 +210,37 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         [Fact]
         public void Open_NonAiffFormType_Should_Throw()
         {
+            // "8SVX" (Amiga 8SVX) is a real, genuinely-still-unsupported IFF form type -- "AIFC" was
+            // this test's own example before AIFC support landed (see Open_AifcFormType_WithNoCommChunk_Should_Throw
+            // below for what a bare FORM/AIFC header now does instead: proceeds past this check and
+            // fails later for a different, AIFC-specific reason).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write("FORM"u8);
+                    writer.Write(0u);
+                    writer.Write("8SVX"u8);
+                }
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*missing AIFF/AIFC form type*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_AifcFormType_WithNoCommChunk_Should_Throw()
+        {
+            // Confirms FORM/AIFC is genuinely accepted now, not just no-longer-rejected-at-the-form-type
+            // check for an unrelated reason -- a bare FORM/AIFC header with nothing else fails for the
+            // same "missing a 'COMM' chunk" reason a bare FORM/AIFF header already does, not for its
+            // form type.
             var filePath = Path.GetTempFileName();
             try
             {
@@ -222,7 +253,7 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
                 }
 
                 var act = () => AiffReader.Open(filePath).Dispose();
-                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*AIFC is not supported*");
+                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*missing a 'COMM' chunk*");
             }
             finally
             {

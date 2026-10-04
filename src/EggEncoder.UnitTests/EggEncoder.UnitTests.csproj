@@ -19,6 +19,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Codecs\Aiff\fixture_none_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_none_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_sowt_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_sowt_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_fl32_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_fl32_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_fl64_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_fl64_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_alaw_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_alaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ulaw_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ulaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\tone_mono.aac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Flac\sample.wav" CopyToOutputDirectory="Always" />

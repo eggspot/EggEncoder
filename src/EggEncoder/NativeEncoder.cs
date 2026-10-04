@@ -39,7 +39,7 @@ namespace EggEncoder
                 var result = extension switch
                 {
                     ".wav" => ProbeWav(filePath),
-                    ".aiff" or ".aif" => ProbeAiff(filePath),
+                    ".aiff" or ".aif" or ".aifc" => ProbeAiff(filePath),
                     ".flac" => ProbeFlac(filePath),
                     ".mp3" => ProbeMp3(filePath),
                     ".aac" => ProbeAac(filePath),
@@ -181,7 +181,7 @@ namespace EggEncoder
             }
 
             var durationSeconds = aiffReader.SampleRate > 0 ? (double)aiffReader.TotalSamples / aiffReader.SampleRate : 0;
-            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample);
+            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample, aiffReader.IsLittleEndian, aiffReader.IsFloat32, aiffReader.IsFloat64, aiffReader.IsALaw, aiffReader.IsMuLaw);
 
             return new ProbeResult
             {
@@ -605,8 +605,40 @@ namespace EggEncoder
             };
         }
 
-        private static (string CodecName, string CodecLongName) DescribeAiffCodec(int bitsPerSample)
+        private static (string CodecName, string CodecLongName) DescribeAiffCodec(int bitsPerSample, bool isLittleEndian, bool isFloat32, bool isFloat64, bool isALaw, bool isMuLaw)
         {
+            if (isFloat32)
+            {
+                return ("pcm_f32be", "PCM 32-bit floating point big-endian");
+            }
+
+            if (isFloat64)
+            {
+                return ("pcm_f64be", "PCM 64-bit floating point big-endian");
+            }
+
+            if (isALaw)
+            {
+                return ("pcm_alaw", "PCM A-law / G.711 A-law");
+            }
+
+            if (isMuLaw)
+            {
+                return ("pcm_mulaw", "PCM mu-law / G.711 mu-law");
+            }
+
+            if (isLittleEndian)
+            {
+                return bitsPerSample switch
+                {
+                    8 => ("pcm_s8", "PCM signed 8-bit"),
+                    16 => ("pcm_s16le", "PCM signed 16-bit little-endian"),
+                    24 => ("pcm_s24le", "PCM signed 24-bit little-endian"),
+                    32 => ("pcm_s32le", "PCM signed 32-bit little-endian"),
+                    _ => ($"pcm_s{bitsPerSample}le", $"PCM signed {bitsPerSample}-bit little-endian")
+                };
+            }
+
             return bitsPerSample switch
             {
                 8 => ("pcm_s8", "PCM signed 8-bit"),

@@ -33,6 +33,12 @@ namespace EggEncoder.Codecs
         /// every other destination format. Defaults to <see cref="WavSampleFormat.Integer"/>, the long-standing behavior.
         /// </summary>
         public WavSampleFormat DestinationWavFormat { get; init; } = WavSampleFormat.Integer;
+
+        /// <summary>
+        /// Sample representation for a <c>.aiff</c>/<c>.aif</c>/<c>.aifc</c> destination (see <see cref="AiffSampleFormat"/>);
+        /// ignored for every other destination format. Defaults to <see cref="AiffSampleFormat.Integer"/>, the long-standing behavior.
+        /// </summary>
+        public AiffSampleFormat DestinationAiffFormat { get; init; } = AiffSampleFormat.Integer;
     }
 
     public static partial class AudioCutter
@@ -56,7 +62,7 @@ namespace EggEncoder.Codecs
         /// </remarks>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
         {
-            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer);
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer);
         }
 
         /// <summary>
@@ -65,6 +71,21 @@ namespace EggEncoder.Codecs
         /// ignored for every other destination format.
         /// </summary>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat)
+        {
+            Convert(sourceFilePath, destFilePath, pipeline, destinationWavFormat, AiffSampleFormat.Integer);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Convert(string, string, PcmTransformPipeline)"/>, but additionally selects the
+        /// on-disk sample representation for a <c>.aiff</c>/<c>.aif</c>/<c>.aifc</c> destination (see
+        /// <see cref="AiffSampleFormat"/>); ignored for every other destination format.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AiffSampleFormat destinationAiffFormat)
+        {
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, destinationAiffFormat);
+        }
+
+        private static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat, AiffSampleFormat destinationAiffFormat)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
 
@@ -92,7 +113,7 @@ namespace EggEncoder.Codecs
                     // Opened only after the first successful Apply() call: if the pipeline rejects the
                     // source format (e.g. a mismatched ChannelRemixTransform), no destination file is
                     // ever created, instead of leaving a truncated header-only file behind.
-                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat);
+                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat, destinationAiffFormat);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
 
@@ -169,7 +190,7 @@ namespace EggEncoder.Codecs
 
                         // Opened only after the first successful Apply() call -- see the Convert(pipeline)
                         // overload's matching comment.
-                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat);
+                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat, options.DestinationAiffFormat);
                         destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                     });
 
@@ -413,7 +434,7 @@ namespace EggEncoder.Codecs
         // count (exactTotalFrames has a value -- true whenever nothing in play can change frame count,
         // e.g. a pipeline with no resampling, or no pipeline at all), open the real writer directly
         // instead of paying for the deferred sink's whole-file in-memory buffering.
-        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer)
+        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer)
         {
             if (destExtension == ".wav")
             {
@@ -422,11 +443,11 @@ namespace EggEncoder.Codecs
                     : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat));
             }
 
-            if (destExtension is ".aiff" or ".aif")
+            if (destExtension is ".aiff" or ".aif" or ".aifc")
             {
                 return exactTotalFrames.HasValue
-                    ? AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
-                    : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames));
+                    ? AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, destinationAiffFormat)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAiffFormat));
             }
 
             if (destExtension == ".wv")
