@@ -89,16 +89,8 @@ namespace EggEncoder.Codecs.WavPack
 
             if (totalSamples <= 0)
             {
-                // Confirmed via WavPack's own reference CLI source (cli/wavpack.c), not assumed: it
-                // refuses to encode a zero-sample input outright ("no raw PCM data to encode!") --
-                // this isn't a gap in this project's own encoder, WavPack genuinely has no
-                // representation for an empty/zero-sample stream the way FLAC/TTA/Opus/Vorbis do.
-                // A real CI run confirmed this directly: passing 0 makes WavpackSetConfiguration64
-                // itself reject it ("invalid total sample count!"), and substituting -1 ("unknown")
-                // instead produces a file WavpackOpenFileInput then refuses to read back
-                // ("can't read all of WavPack file!") since no data block is ever flushed for it to
-                // find. Reject clearly here rather than letting either failure surface confusingly
-                // later, at Finish() or at decode time.
+                // See this class's own doc comment above for why -- WavPack genuinely cannot
+                // represent an empty/zero-sample stream, confirmed from its own reference CLI.
                 throw new NotSupportedException($"'{destFilePath}' requests {totalSamples} total samples; WavPack cannot encode an empty/zero-sample stream");
             }
 
