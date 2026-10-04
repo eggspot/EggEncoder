@@ -5,6 +5,7 @@ namespace EggEncoder.Codecs.Wav
     public sealed class WavReader : IDisposable
     {
         private const int PcmFormatTag = 1;
+        private const int MsAdpcmFormatTag = 2;
         private const int IeeeFloatFormatTag = 3;
         private const int ALawFormatTag = 6;
         private const int MuLawFormatTag = 7;
@@ -21,6 +22,13 @@ namespace EggEncoder.Codecs.Wav
         private readonly int _adpcmSamplesPerBlock;
         private readonly ImaAdpcmDecoder.ChannelState[] _adpcmChannelStates = [];
 
+        private readonly bool _isMsAdpcm;
+        private readonly int _msAdpcmBlockAlign;
+        private readonly int _msAdpcmSamplesPerBlock;
+        private readonly short[] _msAdpcmCoeff1 = [];
+        private readonly short[] _msAdpcmCoeff2 = [];
+        private readonly MsAdpcmDecoder.ChannelState[] _msAdpcmChannelStates = [];
+
         private long _bytesRead;
         private byte[] _rawBytes = [];
 
@@ -32,7 +40,16 @@ namespace EggEncoder.Codecs.Wav
         private int _adpcmPendingCount;
         private long _adpcmFramesProduced;
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw)
+        // Same pending-buffer pattern as IMA ADPCM's own fields above, but kept fully separate rather
+        // than shared -- the two formats' block layouts, channel-state shapes, and even coefficient
+        // handling are different enough (MS ADPCM carries its own per-file coefficient table; IMA
+        // ADPCM has none) that sharing fields would need a union-like abstraction for no real benefit.
+        private int[] _msAdpcmPendingSamples = [];
+        private int _msAdpcmPendingOffset;
+        private int _msAdpcmPendingCount;
+        private long _msAdpcmFramesProduced;
+
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
@@ -42,6 +59,11 @@ namespace EggEncoder.Codecs.Wav
             _isAdpcm = isAdpcm;
             _adpcmBlockAlign = adpcmBlockAlign;
             _adpcmSamplesPerBlock = adpcmSamplesPerBlock;
+            _isMsAdpcm = isMsAdpcm;
+            _msAdpcmBlockAlign = msAdpcmBlockAlign;
+            _msAdpcmSamplesPerBlock = msAdpcmSamplesPerBlock;
+            _msAdpcmCoeff1 = msAdpcmCoeff1;
+            _msAdpcmCoeff2 = msAdpcmCoeff2;
 
             Channels = channels;
             SampleRate = sampleRate;
@@ -52,6 +74,12 @@ namespace EggEncoder.Codecs.Wav
             {
                 _adpcmChannelStates = new ImaAdpcmDecoder.ChannelState[channels];
                 _adpcmPendingSamples = new int[adpcmSamplesPerBlock * channels];
+            }
+
+            if (isMsAdpcm)
+            {
+                _msAdpcmChannelStates = new MsAdpcmDecoder.ChannelState[channels];
+                _msAdpcmPendingSamples = new int[msAdpcmSamplesPerBlock * channels];
             }
 
             _stream.Seek(dataChunkStart, SeekOrigin.Begin);
@@ -72,6 +100,8 @@ namespace EggEncoder.Codecs.Wav
         public bool IsMuLaw => _isMuLaw;
 
         public bool IsImaAdpcm => _isAdpcm;
+
+        public bool IsMsAdpcm => _isMsAdpcm;
 
         public static WavReader Open(string filePath)
         {
@@ -100,6 +130,10 @@ namespace EggEncoder.Codecs.Wav
                 var isAdpcm = false;
                 var adpcmBlockAlign = 0;
                 var adpcmSamplesPerBlock = 0;
+                var isMsAdpcm = false;
+                var msAdpcmSamplesPerBlock = 0;
+                var msAdpcmCoeff1 = Array.Empty<short>();
+                var msAdpcmCoeff2 = Array.Empty<short>();
                 long dataChunkStart = 0;
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
@@ -114,15 +148,16 @@ namespace EggEncoder.Codecs.Wav
                     if (chunkId == "fmt ")
                     {
                         var formatTag = reader.ReadUInt16();
-                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ALawFormatTag && formatTag != MuLawFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
+                        if (formatTag != PcmFormatTag && formatTag != MsAdpcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ALawFormatTag && formatTag != MuLawFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
                         {
-                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, G.711 A-law/mu-law, and IMA ADPCM are supported");
+                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, G.711 A-law/mu-law, IMA ADPCM, and MS ADPCM are supported");
                         }
 
                         isFloatFormat = formatTag == IeeeFloatFormatTag;
                         isALaw = formatTag == ALawFormatTag;
                         isMuLaw = formatTag == MuLawFormatTag;
                         isAdpcm = formatTag == ImaAdpcmFormatTag;
+                        isMsAdpcm = formatTag == MsAdpcmFormatTag;
 
                         channels = reader.ReadUInt16();
                         sampleRate = (int)reader.ReadUInt32();
@@ -144,6 +179,39 @@ namespace EggEncoder.Codecs.Wav
                             }
 
                             adpcmSamplesPerBlock = reader.ReadUInt16();
+                        }
+                        else if (isMsAdpcm)
+                        {
+                            if (chunkSize < 22)
+                            {
+                                throw new InvalidDataException($"'{filePath}' is MS ADPCM but its 'fmt ' chunk is too short to carry the required coefficient table");
+                            }
+
+                            var cbSize = reader.ReadUInt16();
+                            if (cbSize < 4)
+                            {
+                                throw new InvalidDataException($"'{filePath}' is MS ADPCM but its 'fmt ' chunk extension is too short to carry wSamplesPerBlock/wNumCoef");
+                            }
+
+                            msAdpcmSamplesPerBlock = reader.ReadUInt16();
+                            var numCoef = reader.ReadUInt16();
+                            if (numCoef == 0)
+                            {
+                                throw new InvalidDataException($"'{filePath}' is MS ADPCM but declares zero coefficient pairs");
+                            }
+
+                            if (chunkSize < 22 + (numCoef * 4))
+                            {
+                                throw new InvalidDataException($"'{filePath}' is MS ADPCM but its 'fmt ' chunk is too short to carry all {numCoef} declared coefficient pairs");
+                            }
+
+                            msAdpcmCoeff1 = new short[numCoef];
+                            msAdpcmCoeff2 = new short[numCoef];
+                            for (var i = 0; i < numCoef; i++)
+                            {
+                                msAdpcmCoeff1[i] = reader.ReadInt16();
+                                msAdpcmCoeff2[i] = reader.ReadInt16();
+                            }
                         }
                     }
                     else if (chunkId == "fact")
@@ -205,7 +273,43 @@ namespace EggEncoder.Codecs.Wav
                     // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
+                }
+
+                if (isMsAdpcm)
+                {
+                    if (channels is not 1 and not 2)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has {channels} channels; only mono and stereo MS ADPCM are supported");
+                    }
+
+                    if (msAdpcmSamplesPerBlock <= 2)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={msAdpcmSamplesPerBlock}, which is too small to carry any real MS ADPCM data beyond its own 2-sample block header");
+                    }
+
+                    var msAdpcmHeaderBytes = 7 * channels.Value;
+                    if (adpcmBlockAlign < msAdpcmHeaderBytes)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares a block align of {adpcmBlockAlign} bytes, too small to hold the {msAdpcmHeaderBytes}-byte MS ADPCM block header");
+                    }
+
+                    // Mono wastes the last nibble of its final data byte when the remaining sample
+                    // count is odd (the same "wasted trailing nibble" pattern IMA ADPCM has), so the
+                    // safe upper bound doubles the remaining bytes; stereo always uses both nibbles of
+                    // every byte (one per channel), so the bound is exact with no slack.
+                    var msAdpcmRemainingBytes = adpcmBlockAlign - msAdpcmHeaderBytes;
+                    var msAdpcmMaxSamplesPerBlock = channels.Value == 1 ? 2 + (msAdpcmRemainingBytes * 2) : 2 + msAdpcmRemainingBytes;
+                    if (msAdpcmSamplesPerBlock > msAdpcmMaxSamplesPerBlock)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={msAdpcmSamplesPerBlock}, but its block align of {adpcmBlockAlign} bytes can only hold {msAdpcmMaxSamplesPerBlock}");
+                    }
+
+                    // Same 'fact' chunk convention as IMA ADPCM -- authoritative when present, falling
+                    // back to the data chunk's own block count only if it's missing entirely.
+                    var msAdpcmTotalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * msAdpcmSamplesPerBlock;
+
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2);
                 }
 
                 if (isALaw || isMuLaw)
@@ -223,7 +327,7 @@ namespace EggEncoder.Codecs.Wav
                     // byte count divided evenly across channels.
                     var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
                 }
 
                 if (isFloatFormat)
@@ -240,7 +344,7 @@ namespace EggEncoder.Codecs.Wav
 
                 var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
             }
             catch
             {
@@ -254,6 +358,11 @@ namespace EggEncoder.Codecs.Wav
             if (_isAdpcm)
             {
                 return ReadAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
+            }
+
+            if (_isMsAdpcm)
+            {
+                return ReadMsAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
             }
 
             // G.711 always decodes to 16-bit resolution (BitsPerSample) but is only ever 1 coded byte
@@ -393,6 +502,87 @@ namespace EggEncoder.Codecs.Wav
                 while (totalBytesRead < _adpcmBlockAlign)
                 {
                     var bytesReadThisCall = _stream.Read(_rawBytes, totalBytesRead, _adpcmBlockAlign - totalBytesRead);
+                    if (bytesReadThisCall == 0)
+                    {
+                        break;
+                    }
+
+                    totalBytesRead += bytesReadThisCall;
+                }
+
+                return totalBytesRead;
+            }
+        }
+
+        // Mirrors ReadAdpcmInterleavedSamples exactly, just driving the MS ADPCM pending buffer instead.
+        private int ReadMsAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
+        {
+            var framesWritten = 0;
+
+            while (framesWritten < maxSamplesPerChannel)
+            {
+                if (_msAdpcmPendingOffset >= _msAdpcmPendingCount && !DecodeNextMsAdpcmBlock())
+                {
+                    break;
+                }
+
+                var framesAvailable = _msAdpcmPendingCount - _msAdpcmPendingOffset;
+                var framesToCopy = Math.Min(framesAvailable, maxSamplesPerChannel - framesWritten);
+
+                Array.Copy(_msAdpcmPendingSamples, _msAdpcmPendingOffset * Channels, buffer, framesWritten * Channels, framesToCopy * Channels);
+
+                _msAdpcmPendingOffset += framesToCopy;
+                framesWritten += framesToCopy;
+            }
+
+            return framesWritten;
+        }
+
+        // Mirrors DecodeNextAdpcmBlock exactly (same stop conditions: TotalSamples already reached,
+        // or not enough bytes left for one whole block), just calling MsAdpcmDecoder.DecodeBlock with
+        // its own coefficient table instead.
+        private bool DecodeNextMsAdpcmBlock()
+        {
+            if (_msAdpcmFramesProduced >= TotalSamples)
+            {
+                return false;
+            }
+
+            var remainingBytes = _dataChunkLength - _bytesRead;
+            if (remainingBytes < _msAdpcmBlockAlign)
+            {
+                return false;
+            }
+
+            if (_rawBytes.Length < _msAdpcmBlockAlign)
+            {
+                _rawBytes = new byte[_msAdpcmBlockAlign];
+            }
+
+            var bytesActuallyRead = ReadFullyMsAdpcmBlock();
+            _bytesRead += bytesActuallyRead;
+
+            if (bytesActuallyRead < _msAdpcmBlockAlign)
+            {
+                return false;
+            }
+
+            var samplesThisBlock = (int)Math.Min(_msAdpcmSamplesPerBlock, TotalSamples - _msAdpcmFramesProduced);
+
+            MsAdpcmDecoder.DecodeBlock(new ReadOnlySpan<byte>(_rawBytes, 0, _msAdpcmBlockAlign), Channels, _msAdpcmSamplesPerBlock, _msAdpcmChannelStates, _msAdpcmCoeff1, _msAdpcmCoeff2, _msAdpcmPendingSamples);
+
+            _msAdpcmPendingOffset = 0;
+            _msAdpcmPendingCount = samplesThisBlock;
+            _msAdpcmFramesProduced += samplesThisBlock;
+
+            return true;
+
+            int ReadFullyMsAdpcmBlock()
+            {
+                var totalBytesRead = 0;
+                while (totalBytesRead < _msAdpcmBlockAlign)
+                {
+                    var bytesReadThisCall = _stream.Read(_rawBytes, totalBytesRead, _msAdpcmBlockAlign - totalBytesRead);
                     if (bytesReadThisCall == 0)
                     {
                         break;
