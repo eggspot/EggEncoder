@@ -17,6 +17,8 @@ namespace EggEncoder.UnitTests
     {
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
+        private static readonly string _muLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
+        private static readonly string _aLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
         private static readonly string _movFixturePath = Path.GetFullPath("Codecs/Mov/test.mov");
         private static readonly string _mp4FixturePath = Path.GetFullPath("Codecs/Mov/test.mp4");
         private static readonly string _aacFixturePath = Path.GetFullPath("Codecs/Aac/tone_mono.aac");
@@ -71,6 +73,50 @@ namespace EggEncoder.UnitTests
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.DurationInSamples.Should().Be(88200);
             probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
+        public async Task Probe_MuLawWavFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var probeResult = await _nativeEncoder.Probe(_muLawWavFixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_muLawWavFixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("pcm_mulaw");
+            probeResult.CodecLongName.Should().Be("PCM mu-law / G.711 mu-law");
+            probeResult.SampleRate.Should().Be(8000);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(16000);
+            probeResult.TimeBase.Should().Be("1/8000");
+        }
+
+        [Fact]
+        public async Task Probe_ALawWavFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var probeResult = await _nativeEncoder.Probe(_aLawWavFixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_aLawWavFixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("pcm_alaw");
+            probeResult.CodecLongName.Should().Be("PCM A-law / G.711 A-law");
+            probeResult.SampleRate.Should().Be(8000);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(16000);
+            probeResult.TimeBase.Should().Be("1/8000");
         }
 
         [Fact]

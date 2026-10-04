@@ -1126,6 +1126,46 @@ namespace EggEncoder.UnitTests.Codecs
             act.Should().Throw<ArgumentException>();
         }
 
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Convert_WithG711Destination_Should_Apply_Pipeline_Transform_Before_Encoding(WavSampleFormat sampleFormat)
+        {
+            // Unlike IMA ADPCM (decode-only, so a pipeline could only ever run with it as the
+            // SOURCE), G.711 supports the encode direction too -- this proves a PcmTransform
+            // genuinely runs before the companding step, not just that the generic WavSampleFormat
+            // destination routing (already proven for Float32) happens to compile for G.711 too.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new[] { 1000, -1000, 2000, -2000 };
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), sampleFormat);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsMuLaw.Should().Be(sampleFormat == WavSampleFormat.MuLaw);
+                reader.IsALaw.Should().Be(sampleFormat == WavSampleFormat.ALaw);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Compare against the doubled samples companded directly, not the original samples --
+                // if the gain transform were silently skipped, this comparison would fail.
+                var expected = samples.Select(sample => sampleFormat == WavSampleFormat.MuLaw
+                    ? G711Codec.DecodeMuLaw(G711Codec.EncodeMuLaw(sample * 2))
+                    : G711Codec.DecodeALaw(G711Codec.EncodeALaw(sample * 2))).ToArray();
+
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

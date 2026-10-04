@@ -20,6 +20,10 @@ namespace EggEncoder.UnitTests.Codecs
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _imaAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono_expected.pcm");
+        private static readonly string _muLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
+        private static readonly string _muLawMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono_expected.pcm");
+        private static readonly string _aLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
+        private static readonly string _aLawMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono_expected.pcm");
 
         [Fact]
         public void Cut_Wav_Should_Extract_Exact_Sample_Range()
@@ -1352,6 +1356,124 @@ namespace EggEncoder.UnitTests.Codecs
             }
 
             return samples;
+        }
+
+        private static byte[] ReadDataChunkBytes(string path)
+        {
+            var bytes = File.ReadAllBytes(path);
+            var dataIndex = 0;
+            for (var i = 12; i < bytes.Length - 8; i++)
+            {
+                if (bytes[i] == 'd' && bytes[i + 1] == 'a' && bytes[i + 2] == 't' && bytes[i + 3] == 'a')
+                {
+                    dataIndex = i;
+                    break;
+                }
+            }
+
+            var dataSize = BitConverter.ToUInt32(bytes, dataIndex + 4);
+
+            return bytes[(dataIndex + 8)..(int)(dataIndex + 8 + dataSize)];
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Convert_G711WavToWav_Should_Reproduce_BitExact_Samples(WavSampleFormat sampleFormat)
+        {
+            var (sourcePath, expectedPath) = sampleFormat == WavSampleFormat.MuLaw
+                ? (_muLawMonoFixturePath, _muLawMonoExpectedPcmPath)
+                : (_aLawMonoFixturePath, _aLawMonoExpectedPcmPath);
+
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(8000);
+                wavReader.TotalSamples.Should().Be(16000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Convert_WavToG711Wav_Should_Produce_BitExact_Bytes_Against_FfmpegEncodedFixture(WavSampleFormat sampleFormat)
+        {
+            var (fixturePath, expectedPcmPath) = sampleFormat == WavSampleFormat.MuLaw
+                ? (_muLawMonoFixturePath, _muLawMonoExpectedPcmPath)
+                : (_aLawMonoFixturePath, _aLawMonoExpectedPcmPath);
+
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                // Unlike IMA ADPCM (decode-only), G.711 supports the encode direction too -- this
+                // proves AudioCutter.Convert's generic WavSampleFormat destination routing (already
+                // proven for Float32) now also reaches WavWriter's new G.711 encode path, producing
+                // bytes that match a real ffmpeg encoder exactly, not just this project's own decoder.
+                var groundTruthSamples = ReadGroundTruthPcm16(expectedPcmPath);
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, groundTruthSamples);
+
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourceWavPath, destPath, sampleFormat);
+
+                ReadDataChunkBytes(destPath).Should().Equal(ReadDataChunkBytes(fixturePath));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Cut_G711Wav_Should_Extract_Exact_Sample_Range(WavSampleFormat sampleFormat)
+        {
+            var (sourcePath, expectedPath) = sampleFormat == WavSampleFormat.MuLaw
+                ? (_muLawMonoFixturePath, _muLawMonoExpectedPcmPath)
+                : (_aLawMonoFixturePath, _aLawMonoExpectedPcmPath);
+
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "cut.wav");
+
+                AudioCutter.Cut(sourcePath, destWavPath, startInSeconds: 0, endInSeconds: 1).Should().BeTrue();
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(8000);
+                wavReader.TotalSamples.Should().Be(8000);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var expected = ReadGroundTruthPcm16(expectedPath);
+                buffer.Should().Equal(expected[0..8000]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
 
         private static (string FilePath, int[] InterleavedSamples) CreateRampTta(string tempDirectory, string fileName, int totalFrames, int sampleRate)
