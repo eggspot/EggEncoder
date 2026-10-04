@@ -10,7 +10,7 @@ namespace EggEncoder.Pcm;
 /// codebase's 32-bit int native range (see <see cref="BitDepthFormatTransform"/>'s doc comment on that
 /// convention) -- the exact scale <c>WavReader</c> already produces when it decodes a 32-bit IEEE float
 /// WAV file, and the scale <c>WavWriter</c> expects when asked to write one
-/// (<c>WavWriter.Create(..., isFloatFormat: true)</c>). This type is that same conversion, for samples
+/// (<c>WavWriter.Create(..., sampleFormat: WavSampleFormat.Float32)</c>). This type is that same conversion, for samples
 /// that arrive as (or need to become) an actual <see langword="float"/>[] rather than a WAV file.
 ///
 /// AOT-safe, managed implementation.
