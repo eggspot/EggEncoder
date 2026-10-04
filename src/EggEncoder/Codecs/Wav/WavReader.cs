@@ -6,12 +6,16 @@ namespace EggEncoder.Codecs.Wav
     {
         private const int PcmFormatTag = 1;
         private const int IeeeFloatFormatTag = 3;
+        private const int ALawFormatTag = 6;
+        private const int MuLawFormatTag = 7;
         private const int ImaAdpcmFormatTag = 17;
         private const int WaveFormatExtensibleTag = 0xFFFE;
 
         private readonly FileStream _stream;
         private readonly long _dataChunkLength;
         private readonly bool _isFloatFormat;
+        private readonly bool _isALaw;
+        private readonly bool _isMuLaw;
         private readonly bool _isAdpcm;
         private readonly int _adpcmBlockAlign;
         private readonly int _adpcmSamplesPerBlock;
@@ -28,11 +32,13 @@ namespace EggEncoder.Codecs.Wav
         private int _adpcmPendingCount;
         private long _adpcmFramesProduced;
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock)
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
             _isFloatFormat = isFloatFormat;
+            _isALaw = isALaw;
+            _isMuLaw = isMuLaw;
             _isAdpcm = isAdpcm;
             _adpcmBlockAlign = adpcmBlockAlign;
             _adpcmSamplesPerBlock = adpcmSamplesPerBlock;
@@ -61,6 +67,10 @@ namespace EggEncoder.Codecs.Wav
 
         public bool IsFloatFormat => _isFloatFormat;
 
+        public bool IsALaw => _isALaw;
+
+        public bool IsMuLaw => _isMuLaw;
+
         public bool IsImaAdpcm => _isAdpcm;
 
         public static WavReader Open(string filePath)
@@ -85,6 +95,8 @@ namespace EggEncoder.Codecs.Wav
                 int? sampleRate = null;
                 int? bitsPerSample = null;
                 var isFloatFormat = false;
+                var isALaw = false;
+                var isMuLaw = false;
                 var isAdpcm = false;
                 var adpcmBlockAlign = 0;
                 var adpcmSamplesPerBlock = 0;
@@ -102,12 +114,14 @@ namespace EggEncoder.Codecs.Wav
                     if (chunkId == "fmt ")
                     {
                         var formatTag = reader.ReadUInt16();
-                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
+                        if (formatTag != PcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ALawFormatTag && formatTag != MuLawFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
                         {
-                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, and IMA ADPCM are supported");
+                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, G.711 A-law/mu-law, and IMA ADPCM are supported");
                         }
 
                         isFloatFormat = formatTag == IeeeFloatFormatTag;
+                        isALaw = formatTag == ALawFormatTag;
+                        isMuLaw = formatTag == MuLawFormatTag;
                         isAdpcm = formatTag == ImaAdpcmFormatTag;
 
                         channels = reader.ReadUInt16();
@@ -191,7 +205,25 @@ namespace EggEncoder.Codecs.Wav
                     // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false);
+                }
+
+                if (isALaw || isMuLaw)
+                {
+                    // Unlike every other codec here, G.711 has no structural reason to limit channel
+                    // count -- it's a per-sample, per-channel companding formula with no block/frame
+                    // structure at all, so any channel count decodes/encodes correctly; the mono/
+                    // stereo-only limits elsewhere in this project come from the underlying native
+                    // library or bitstream structure each of those codecs actually has, not from a
+                    // project-wide rule.
+                    //
+                    // The 'fact' chunk's total is preferred when present (the standard WAV convention
+                    // for a non-PCM format), but unlike IMA ADPCM there's no block padding to trim --
+                    // each byte is exactly one sample, so the fallback is just the data chunk's own
+                    // byte count divided evenly across channels.
+                    var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
+
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw);
                 }
 
                 if (isFloatFormat)
@@ -208,7 +240,7 @@ namespace EggEncoder.Codecs.Wav
 
                 var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false);
             }
             catch
             {
@@ -224,7 +256,11 @@ namespace EggEncoder.Codecs.Wav
                 return ReadAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
             }
 
-            var bytesPerSample = BitsPerSample / 8;
+            // G.711 always decodes to 16-bit resolution (BitsPerSample) but is only ever 1 coded byte
+            // per sample on disk, regardless of that reported resolution -- the same "reported
+            // decoded width != actual coded width" gap IMA ADPCM has, just without IMA ADPCM's block
+            // structure requiring a whole separate buffered-decode path to bridge it.
+            var bytesPerSample = _isALaw || _isMuLaw ? 1 : BitsPerSample / 8;
             var bytesPerFrame = bytesPerSample * Channels;
             var remainingBytes = _dataChunkLength - _bytesRead;
             var framesToRead = (int)Math.Min(maxSamplesPerChannel, remainingBytes / bytesPerFrame);
@@ -249,7 +285,9 @@ namespace EggEncoder.Codecs.Wav
                 var byteOffset = i * bytesPerSample;
                 buffer[i] = bytesPerSample switch
                 {
-                    1 => _rawBytes[byteOffset] - 128,
+                    1 => _isALaw ? G711Codec.DecodeALaw(_rawBytes[byteOffset])
+                        : _isMuLaw ? G711Codec.DecodeMuLaw(_rawBytes[byteOffset])
+                        : _rawBytes[byteOffset] - 128,
                     2 => (short)(_rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8)),
                     3 => (_rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8) | (_rawBytes[byteOffset + 2] << 16)) << 8 >> 8,
                     4 => _isFloatFormat

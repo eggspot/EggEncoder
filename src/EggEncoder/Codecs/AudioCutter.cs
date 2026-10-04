@@ -125,14 +125,14 @@ namespace EggEncoder.Codecs
 
         private static IAudioSink OpenSink(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer)
         {
-            if (destinationWavFormat == WavSampleFormat.Float32 && destExtension != ".wav")
+            if (destinationWavFormat != WavSampleFormat.Integer && destExtension != ".wav")
             {
-                throw new NotSupportedException($"{nameof(WavSampleFormat.Float32)} is only supported for a '.wav' destination, but '{destFilePath}' is '{destExtension}'");
+                throw new NotSupportedException($"{nameof(WavSampleFormat)}.{destinationWavFormat} is only supported for a '.wav' destination, but '{destFilePath}' is '{destExtension}'");
             }
 
             return destExtension switch
             {
-                ".wav" => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, isFloatFormat: destinationWavFormat == WavSampleFormat.Float32),
+                ".wav" => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat),
                 ".aiff" or ".aif" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames),
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
                 ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),

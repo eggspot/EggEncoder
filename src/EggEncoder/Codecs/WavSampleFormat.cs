@@ -20,6 +20,12 @@ namespace EggEncoder.Codecs
         Integer,
 
         /// <summary>32-bit IEEE float. Requires the destination's bit depth to be 32 (the pipeline/source's own, or overridden with a <see cref="EggEncoder.Pcm.BitDepthFormatTransform"/> to 32).</summary>
-        Float32
+        Float32,
+
+        /// <summary>G.711 mu-law companded PCM (8 bits on disk). Requires the destination's bit depth to be 16 (the input scale the companding formula expects).</summary>
+        MuLaw,
+
+        /// <summary>G.711 A-law companded PCM (8 bits on disk). Requires the destination's bit depth to be 16 (the input scale the companding formula expects).</summary>
+        ALaw
     }
 }

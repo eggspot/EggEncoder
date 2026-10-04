@@ -145,7 +145,7 @@ namespace EggEncoder
             }
 
             var durationSeconds = wavReader.SampleRate > 0 ? (double)wavReader.TotalSamples / wavReader.SampleRate : 0;
-            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat, wavReader.IsImaAdpcm);
+            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat, wavReader.IsImaAdpcm, wavReader.IsALaw, wavReader.IsMuLaw);
 
             return new ProbeResult
             {
@@ -568,11 +568,21 @@ namespace EggEncoder
             public required IReadOnlyList<double> Waveform { get; init; }
         }
 
-        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm)
+        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm, bool isALaw, bool isMuLaw)
         {
             if (isImaAdpcm)
             {
                 return ("adpcm_ima_wav", "ADPCM IMA WAV");
+            }
+
+            if (isALaw)
+            {
+                return ("pcm_alaw", "PCM A-law / G.711 A-law");
+            }
+
+            if (isMuLaw)
+            {
+                return ("pcm_mulaw", "PCM mu-law / G.711 mu-law");
             }
 
             if (isFloatFormat)

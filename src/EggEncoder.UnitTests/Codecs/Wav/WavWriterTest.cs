@@ -1,3 +1,4 @@
+using EggEncoder.Codecs;
 using EggEncoder.Codecs.Wav;
 using FluentAssertions;
 
@@ -67,7 +68,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
                 // that's expected precision loss from the format, not tested here.
                 var samples = new[] { 0, int.MaxValue, -int.MaxValue };
 
-                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 32, totalFrames: samples.Length, isFloatFormat: true))
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 32, totalFrames: samples.Length, WavSampleFormat.Float32))
                 {
                     writer.WriteInterleavedSamples(samples, samples.Length);
                 }
@@ -93,9 +94,139 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             var filePath = Path.GetTempFileName();
             try
             {
-                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: 1, isFloatFormat: true);
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: 1, WavSampleFormat.Float32);
 
                 act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void Create_G711_With_NonSixteenBit_Should_Throw(WavSampleFormat sampleFormat)
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: 1, sampleFormat);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void WriteInterleavedSamples_G711_With_FiveChannels_Should_Round_Trip_Without_ChannelCount_Restriction(WavSampleFormat sampleFormat)
+        {
+            // Deliberately NOT restricted to mono/stereo, unlike every other codec in this project --
+            // G.711 has no block/frame structure or adaptive state, so any channel count decodes and
+            // encodes correctly. Confirms this actually works end to end, not just that neither
+            // WavWriter.Create nor WavReader.Open happens to contain a channel-count check for it.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                const int channels = 5;
+                const int frameCount = 3;
+                var samples = new int[frameCount * channels];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (i * 1000) - 7000; // spread across the range, including negative values
+                }
+
+                var expected = samples.Select(sample => sampleFormat == WavSampleFormat.MuLaw
+                    ? G711Codec.DecodeMuLaw(G711Codec.EncodeMuLaw(sample))
+                    : G711Codec.DecodeALaw(G711Codec.EncodeALaw(sample))).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels, sampleRate: 8000, bitsPerSample: 16, totalFrames: frameCount, sampleFormat))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Channels.Should().Be(channels);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[samples.Length];
+                var framesRead = reader.ReadInterleavedSamples(buffer, frameCount);
+
+                framesRead.Should().Be(frameCount);
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw)]
+        [InlineData(WavSampleFormat.ALaw)]
+        public void WriteInterleavedSamples_G711_Should_Round_Trip_Through_WavReader(WavSampleFormat sampleFormat)
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new[] { 0, 32767, -32768, 1000, -1000, 12345, -12345 };
+                var expected = samples.Select(sample => sampleFormat == WavSampleFormat.MuLaw
+                    ? G711Codec.DecodeMuLaw(G711Codec.EncodeMuLaw(sample))
+                    : G711Codec.DecodeALaw(G711Codec.EncodeALaw(sample))).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: samples.Length, sampleFormat))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.BitsPerSample.Should().Be(16);
+                reader.TotalSamples.Should().Be(samples.Length);
+                reader.IsMuLaw.Should().Be(sampleFormat == WavSampleFormat.MuLaw);
+                reader.IsALaw.Should().Be(sampleFormat == WavSampleFormat.ALaw);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(WavSampleFormat.MuLaw, "sample_g711_mulaw_mono.wav", "sample_g711_mulaw_mono_expected.pcm")]
+        [InlineData(WavSampleFormat.ALaw, "sample_g711_alaw_mono.wav", "sample_g711_alaw_mono_expected.pcm")]
+        public void WriteInterleavedSamples_G711_Should_Produce_BitExact_Bytes_Against_FfmpegEncodedFixture(WavSampleFormat sampleFormat, string fixtureFileName, string expectedPcmFileName)
+        {
+            // The strongest possible encode check: feed ffmpeg's own ground-truth decoded samples
+            // back through this project's encoder and confirm the resulting coded BYTES match
+            // ffmpeg's own real encoder output exactly, byte for byte -- not just that our own
+            // decode(encode(x)) composes correctly in isolation (already covered by G711CodecTest).
+            var fixturePath = Path.GetFullPath($"Codecs/Wav/{fixtureFileName}");
+            var expectedPcmPath = Path.GetFullPath($"Codecs/Wav/{expectedPcmFileName}");
+            var groundTruthSamples = ReadGroundTruthPcm16(expectedPcmPath);
+
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: groundTruthSamples.Length, sampleFormat))
+                {
+                    writer.WriteInterleavedSamples(groundTruthSamples, groundTruthSamples.Length);
+                }
+
+                var producedDataBytes = ReadDataChunkBytes(filePath);
+                var realEncodedDataBytes = ReadDataChunkBytes(fixturePath);
+
+                producedDataBytes.Should().Equal(realEncodedDataBytes);
             }
             finally
             {
@@ -128,6 +259,36 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             {
                 File.Delete(filePath);
             }
+        }
+
+        private static int[] ReadGroundTruthPcm16(string path)
+        {
+            var bytes = File.ReadAllBytes(path);
+            var samples = new int[bytes.Length / 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = (short)(bytes[i * 2] | (bytes[(i * 2) + 1] << 8));
+            }
+
+            return samples;
+        }
+
+        private static byte[] ReadDataChunkBytes(string path)
+        {
+            var bytes = File.ReadAllBytes(path);
+            var dataIndex = 0;
+            for (var i = 12; i < bytes.Length - 8; i++)
+            {
+                if (bytes[i] == 'd' && bytes[i + 1] == 'a' && bytes[i + 2] == 't' && bytes[i + 3] == 'a')
+                {
+                    dataIndex = i;
+                    break;
+                }
+            }
+
+            var dataSize = BitConverter.ToUInt32(bytes, dataIndex + 4);
+
+            return bytes[(dataIndex + 8)..(int)(dataIndex + 8 + dataSize)];
         }
     }
 }

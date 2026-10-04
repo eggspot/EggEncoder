@@ -413,6 +413,117 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             }
         }
 
+        [Theory]
+        [InlineData("sample_g711_mulaw_mono.wav", "sample_g711_mulaw_mono_expected.pcm", 1)]
+        [InlineData("sample_g711_alaw_mono.wav", "sample_g711_alaw_mono_expected.pcm", 1)]
+        [InlineData("sample_g711_mulaw_stereo.wav", "sample_g711_mulaw_stereo_expected.pcm", 2)]
+        [InlineData("sample_g711_alaw_stereo.wav", "sample_g711_alaw_stereo_expected.pcm", 2)]
+        public void Open_G711_Should_Decode_BitExact_Against_FfmpegGroundTruth(string fixtureFileName, string expectedFileName, int expectedChannels)
+        {
+            // Ground truth generated once by decoding a real ffmpeg-produced G.711 file via ffmpeg's
+            // own pcm_mulaw/pcm_alaw decoder -- cross-checked separately (during development, not
+            // re-asserted per test run) against macOS's own afconvert/CoreAudio decode of the same
+            // mono files, which agreed bit-exact. Covers both companding laws and both channel counts.
+            var fixturePath = Path.GetFullPath($"Codecs/Wav/{fixtureFileName}");
+            var expectedPath = Path.GetFullPath($"Codecs/Wav/{expectedFileName}");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(expectedChannels);
+            wavReader.SampleRate.Should().Be(8000);
+            wavReader.BitsPerSample.Should().Be(16, "G.711 decodes to 16-bit PCM resolution regardless of its own 8-bit coded storage width");
+            wavReader.TotalSamples.Should().Be(16000);
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_MuLawWav_IsMuLaw_Should_Be_True_And_IsALaw_Should_Be_False()
+        {
+            using var wavReader = WavReader.Open(Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav"));
+
+            wavReader.IsMuLaw.Should().BeTrue();
+            wavReader.IsALaw.Should().BeFalse();
+            wavReader.IsImaAdpcm.Should().BeFalse();
+            wavReader.IsFloatFormat.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_ALawWav_IsALaw_Should_Be_True_And_IsMuLaw_Should_Be_False()
+        {
+            using var wavReader = WavReader.Open(Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav"));
+
+            wavReader.IsALaw.Should().BeTrue();
+            wavReader.IsMuLaw.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_G711_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            // G.711 has no block structure at all, but this still confirms the generic byte-width
+            // override (1 byte/sample on disk despite a reported 16-bit decoded resolution) behaves
+            // correctly across many small reads, not just one comfortably large one.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37];
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_WithUnsupportedFormatTag_Should_Throw()
+        {
+            // Format tag 2 (MS ADPCM) is a real, legitimately different, still-unsupported format --
+            // confirms the validation that lets PCM/float/G.711/IMA-ADPCM through continues to reject
+            // everything else, now that G.711's own tags (6/7) have been added to that allow-list.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithFormatTag(filePath, formatTag: 2);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static void CreateWavWithFormatTag(string filePath, ushort formatTag)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int dataSize = 16;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(36 + dataSize));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write(formatTag);
+            writer.Write((ushort)1);
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
+        }
+
         private static List<int> DecodeAll(WavReader wavReader)
         {
             var decoded = new List<int>();

@@ -417,10 +417,9 @@ namespace EggEncoder.Codecs
         {
             if (destExtension == ".wav")
             {
-                var isFloatFormat = destinationWavFormat == WavSampleFormat.Float32;
                 return exactTotalFrames.HasValue
-                    ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, isFloatFormat)
-                    : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, isFloatFormat));
+                    ? WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, destinationWavFormat)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat));
             }
 
             if (destExtension is ".aiff" or ".aif")
@@ -533,7 +532,7 @@ namespace EggEncoder.Codecs
             var intSamples = FloatSampleConverter.FromFloat(interleavedSamples);
             var totalFrames = intSamples.Length / channels;
 
-            using var writer = WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample: 32, totalFrames, isFloatFormat: true);
+            using var writer = WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample: 32, totalFrames, WavSampleFormat.Float32);
             writer.WriteInterleavedSamples(intSamples, totalFrames);
             writer.Finish();
         }

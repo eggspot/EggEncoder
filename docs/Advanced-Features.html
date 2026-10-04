@@ -132,7 +132,7 @@ float[] backToFloat = FloatSampleConverter.ToFloat(intSamples, bitsPerSample: 32
 // Or directly against a WAV file:
 AudioCutter.WriteWavFromFloat(destPath, myFloatSamples, channels: 2, sampleRate: 44100);
 var (samples, channels, sampleRate) = AudioCutter.ReadWavAsFloat(sourcePath); // any WAV bit depth, normalized</code></pre>
-      <p><code>WavWriter.Create(..., isFloatFormat: true)</code> writes a real 32-bit IEEE float WAV. A float WAV <strong>source</strong> already decodes transparently into int PCM through <code>Convert</code>/<code>Cut</code>/<code>Mix</code>/<code>Concatenate</code> — no special handling needed. For a float <strong>destination</strong> through those same entry points, pass <code>WavSampleFormat.Float32</code>:</p>
+      <p><code>WavWriter.Create(..., sampleFormat: WavSampleFormat.Float32)</code> writes a real 32-bit IEEE float WAV. A float WAV <strong>source</strong> already decodes transparently into int PCM through <code>Convert</code>/<code>Cut</code>/<code>Mix</code>/<code>Concatenate</code> — no special handling needed. For a float <strong>destination</strong> through those same entry points, pass <code>WavSampleFormat.Float32</code>:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;
 
 AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.Float32);
@@ -145,6 +145,7 @@ AudioCutter.Cut(sourcePath, destPath, startInSeconds: 0, endInSeconds: 30, new C
 AudioCutter.Mix(inputs, destPath, WavSampleFormat.Float32);
 AudioCutter.Concatenate(sourcePaths, destPath, WavSampleFormat.Float32);</code></pre>
       <p><code>WavSampleFormat.Float32</code> requires the destination's bit depth to already be 32 (widen a narrower source first with a <code>BitDepthFormatTransform</code> in the pipeline — <code>Mix</code>/<code>Concatenate</code> have no bit-depth conversion of their own, so their sources must already be 32-bit) and throws <code>NotSupportedException</code> against a non-WAV destination. The default, <code>WavSampleFormat.Integer</code>, is unchanged from before this option existed. Internally, processing always stays <code>int[]</code>-based at the usual native-range scale — this only selects how <code>WavWriter</code> encodes that data on disk. <code>float.NaN</code> samples convert to silence (<code>0</code>), not the unspecified result of a raw <code>(int)double.NaN</code> cast; <code>float.PositiveInfinity</code>/<code>NegativeInfinity</code> clamp to +/-1.0, same as any other out-of-range value.</p>
+      <p><code>WavSampleFormat.MuLaw</code>/<code>ALaw</code> select G.711 companded PCM the same way — they require the destination's bit depth to be 16 instead of 32. <code>WavReader</code> also decodes IMA ADPCM WAV files (decode only) automatically, with no API to opt in or out of. See the README's format-coverage table for the full constraints on both.</p>
 
       <h2>MOV/MP4 Probing and Audio Decode</h2>
       <p><code>MovProbe</code> walks the ISO base media container's atom tree directly — no native dependency — to read duration, dimensions, and the video codec's four-character code. It's metadata-only and never decodes audio or video frames:</p>
