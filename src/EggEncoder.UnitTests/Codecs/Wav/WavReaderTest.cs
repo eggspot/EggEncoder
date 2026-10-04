@@ -323,6 +323,45 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_ImaAdpcm_With_BlockAlignTooSmallForHeader_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1 needs a 4-byte header alone; blockAlign=3 can't even hold that.
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 3, samplesPerBlock: 2, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_ImaAdpcm_With_SamplesPerBlockExceedingBlockAlignCapacity_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // channels=1, blockAlign=8 -> 4 header bytes + 4 data bytes (8 nibbles) can hold at
+                // most 1 (header) + 8 = 9 samples; declaring 10 claims more than the block can supply.
+                WavImaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, blockAlign: 8, samplesPerBlock: 10, totalSamples: 1);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_ImaAdpcm_WithoutFactChunk_Should_FallBack_To_BlockCountDerivedTotal()
         {
             // The 'fact' chunk is the preferred, authoritative source for TotalSamples, but it's not

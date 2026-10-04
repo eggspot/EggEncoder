@@ -169,6 +169,22 @@ namespace EggEncoder.Codecs.Wav
                         throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={adpcmSamplesPerBlock}, which is too small to carry any real IMA ADPCM data");
                     }
 
+                    var headerBytes = 4 * channels.Value;
+                    if (adpcmBlockAlign < headerBytes)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares a block align of {adpcmBlockAlign} bytes, too small to hold the {headerBytes}-byte per-channel ADPCM block header");
+                    }
+
+                    // The standard IMA ADPCM relationship between block align and samples per block --
+                    // a wSamplesPerBlock claiming more samples than the block's own data bytes can
+                    // actually hold would run DecodeBlock's data loop past the end of its own block
+                    // buffer (IndexOutOfRangeException) rather than failing cleanly here.
+                    var maxSamplesPerBlock = ((adpcmBlockAlign - headerBytes) * 8 / headerBytes) + 1;
+                    if (adpcmSamplesPerBlock > maxSamplesPerBlock)
+                    {
+                        throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={adpcmSamplesPerBlock}, but its block align of {adpcmBlockAlign} bytes can only hold {maxSamplesPerBlock}");
+                    }
+
                     // The 'fact' chunk's own total is the authoritative sample count (the standard,
                     // recommended WAV convention for any non-PCM format) -- it's what lets a decoder
                     // trim trailing padding from the last block without guessing. Fall back to deriving
