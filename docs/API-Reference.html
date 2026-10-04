@@ -344,6 +344,7 @@ public static class Mp3Probe // manual frame-header parsing, no native call
     public bool IsALaw { get; }
     public bool IsMuLaw { get; }
     public bool IsImaAdpcm { get; }
+    public bool IsMsAdpcm { get; }
     public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
 }
 
@@ -352,7 +353,7 @@ public sealed class WavWriter : IDisposable
     public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
-      <p>Supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (both read and write — <code>WavSampleFormat.Float32</code> requires <code>bitsPerSample: 32</code>). Also supports G.711 mu-law/A-law companded PCM, both read and write (<code>WavSampleFormat.MuLaw</code>/<code>ALaw</code> require <code>bitsPerSample: 16</code>; any channel count, unlike every other codec here), and IMA ADPCM, read only (<code>IsImaAdpcm</code>; picked up automatically from the file's own <code>fmt</code> chunk, no write-side option exists). Samples are always exchanged as <code>int[]</code>, at this codebase's native-range convention for whatever bit depth is in play (see <a href="Advanced-Features.html#pcm-transform-pipeline">PCM Transform Pipeline</a>); for float format that range is the full 32-bit int range, matching what a normalized <code>-1.0..1.0</code> float sample maps to.</p>
+      <p>Supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM (both read and write — <code>WavSampleFormat.Float32</code> requires <code>bitsPerSample: 32</code>). Also supports G.711 mu-law/A-law companded PCM, both read and write (<code>WavSampleFormat.MuLaw</code>/<code>ALaw</code> require <code>bitsPerSample: 16</code>; any channel count, unlike every other codec here), and two ADPCM variants, read only (<code>IsImaAdpcm</code>/<code>IsMsAdpcm</code>; each picked up automatically from the file's own <code>fmt</code> chunk, no write-side option for either). IMA ADPCM and MS ADPCM are genuinely different algorithms despite the shared name and 4-bit coded width — IMA ADPCM uses one universal fixed step table, while MS ADPCM carries its own linear-prediction coefficient table in the <code>fmt</code> chunk extension itself and groups its block header by field across channels rather than repeating it per channel. Both are mono/stereo only. Samples are always exchanged as <code>int[]</code>, at this codebase's native-range convention for whatever bit depth is in play (see <a href="Advanced-Features.html#pcm-transform-pipeline">PCM Transform Pipeline</a>); for float format that range is the full 32-bit int range, matching what a normalized <code>-1.0..1.0</code> float sample maps to.</p>
 
       <h3>WMA — <code>EggEncoder.Codecs.Wma</code></h3>
       <pre><code class="language-csharp">public static class WmaDecoder
