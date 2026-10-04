@@ -1,6 +1,7 @@
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
+using System.Buffers.Binary;
 
 namespace EggEncoder.UnitTests.Codecs.Aiff
 {
@@ -413,6 +414,69 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             using var aiffReader = AiffReader.Open(Path.GetFullPath("Codecs/Aiff/fixture_fl64_mono.aifc"));
             aiffReader.IsFloat64.Should().BeTrue();
             aiffReader.IsFloat32.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_Aifc_Fl32_WithNaNOrInfinity_Should_Clamp_Not_Throw()
+        {
+            // Float32ToInt32 delegates to FloatSampleConverter.ClampToNativeInt32(float), which has its
+            // own dedicated NaN/Infinity test coverage elsewhere -- this just confirms AiffReader's fl32
+            // decode path genuinely reaches it (not, say, silently skipping the clamp) for real
+            // adversarial/synthesized bytes, not just well-behaved sine-wave fixture data.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var bytes = new byte[16];
+                BinaryPrimitives.WriteSingleBigEndian(bytes.AsSpan(0, 4), float.NaN);
+                BinaryPrimitives.WriteSingleBigEndian(bytes.AsSpan(4, 4), float.PositiveInfinity);
+                BinaryPrimitives.WriteSingleBigEndian(bytes.AsSpan(8, 4), float.NegativeInfinity);
+                BinaryPrimitives.WriteSingleBigEndian(bytes.AsSpan(12, 4), 0.5f);
+                AifcFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, sampleSize: 32, "fl32", bytes);
+
+                using var aiffReader = AiffReader.Open(filePath);
+                var buffer = new int[4];
+                aiffReader.ReadInterleavedSamples(buffer, 4).Should().Be(4);
+
+                buffer[0].Should().Be(0, "NaN maps to silence");
+                buffer[1].Should().Be(int.MaxValue, "+Infinity clamps to the top of the native range");
+                buffer[2].Should().Be(-int.MaxValue, "-Infinity clamps to the bottom of the native range");
+                buffer[3].Should().Be((int)(0.5 * int.MaxValue));
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_Fl64_WithNaNOrInfinity_Should_Clamp_Not_Throw()
+        {
+            // Unlike fl32, Float64ToInt32 is AiffReader's own method -- not shared with any
+            // already-tested code elsewhere -- so its NaN/Infinity handling needs its own direct
+            // coverage, not just an inherited guarantee from FloatSampleConverter's test suite.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var bytes = new byte[32];
+                BinaryPrimitives.WriteDoubleBigEndian(bytes.AsSpan(0, 8), double.NaN);
+                BinaryPrimitives.WriteDoubleBigEndian(bytes.AsSpan(8, 8), double.PositiveInfinity);
+                BinaryPrimitives.WriteDoubleBigEndian(bytes.AsSpan(16, 8), double.NegativeInfinity);
+                BinaryPrimitives.WriteDoubleBigEndian(bytes.AsSpan(24, 8), 0.5);
+                AifcFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, sampleSize: 64, "fl64", bytes);
+
+                using var aiffReader = AiffReader.Open(filePath);
+                var buffer = new int[4];
+                aiffReader.ReadInterleavedSamples(buffer, 4).Should().Be(4);
+
+                buffer[0].Should().Be(0, "NaN maps to silence");
+                buffer[1].Should().Be(int.MaxValue, "+Infinity clamps to the top of the native range");
+                buffer[2].Should().Be(-int.MaxValue, "-Infinity clamps to the bottom of the native range");
+                buffer[3].Should().Be((int)(0.5 * int.MaxValue));
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
         }
 
         [Theory]

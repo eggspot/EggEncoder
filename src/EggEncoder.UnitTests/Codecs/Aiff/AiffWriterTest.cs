@@ -299,6 +299,42 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             }
         }
 
+        [Theory]
+        [InlineData(8, new[] { 0, 127, -128, -64 })]
+        [InlineData(16, new[] { 0, short.MaxValue, short.MinValue, -1 })]
+        [InlineData(24, new[] { 0, 8388607, -8388608, -1 })]
+        [InlineData(32, new[] { 0, int.MaxValue, int.MinValue, -12345678 })]
+        public void Create_WithLittleEndianInteger_Should_Round_Trip_AtEveryBitDepth(int bitsPerSample, int[] samples)
+        {
+            // Create_WithLittleEndianInteger_Should_Round_Trip_Through_AiffReader (above) only ever
+            // exercises DecodeLittleEndianInteger/WriteLittleEndianInteger's 2-byte case -- this proves
+            // the 1/3/4-byte cases (the ones that actually have a sign-extension formula to get wrong,
+            // unlike the 1-byte case) round-trip correctly too, mirroring the plain-AIFF
+            // WriteInterleavedSamples_*Bit_Should_Round_Trip_Through_AiffReader tests' own per-bit-depth
+            // coverage shape.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = AiffWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample, totalFrames: samples.Length, AiffSampleFormat.LittleEndianInteger))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = AiffReader.Open(filePath);
+                reader.IsLittleEndian.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(bitsPerSample);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Fact]
         public void Create_WithFloat32_Should_Round_Trip_Through_AiffReader()
         {
