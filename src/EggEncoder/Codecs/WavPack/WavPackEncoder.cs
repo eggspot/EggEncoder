@@ -103,7 +103,16 @@ namespace EggEncoder.Codecs.WavPack
                     BytesPerSample = bitsPerSample / 8
                 };
 
-                if (WavPackNative.WavpackSetConfiguration64(wpc, ref config, totalSamples, IntPtr.Zero) == 0)
+                // WavpackSetConfiguration64 rejects a literal 0 as "invalid total sample count!"
+                // (confirmed via a real CI failure on Windows, not assumed) -- it only accepts a
+                // positive count or -1 ("unknown", the same sentinel WavPack's own reference CLI
+                // uses for stdin input). A genuinely empty session has nothing to lose by reporting
+                // "unknown" instead of zero: WriteInterleavedSamples is never called, so the actual
+                // written total still comes out to zero once Finish() flushes, and that's what
+                // decoding the file back reports.
+                var configuredTotalSamples = totalSamples == 0 ? -1 : totalSamples;
+
+                if (WavPackNative.WavpackSetConfiguration64(wpc, ref config, configuredTotalSamples, IntPtr.Zero) == 0)
                 {
                     throw new InvalidOperationException($"Failed to configure WavPack encoder for '{destFilePath}': {GetErrorMessage(wpc)}");
                 }
