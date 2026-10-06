@@ -1756,7 +1756,7 @@ namespace EggEncoder.UnitTests.Codecs
         {
             var bytes = File.ReadAllBytes(path);
             var dataIndex = 0;
-            for (var i = 12; i < bytes.Length - 8; i++)
+            for (var i = 12; i <= bytes.Length - 8; i++)
             {
                 if (bytes[i] == 'd' && bytes[i + 1] == 'a' && bytes[i + 2] == 't' && bytes[i + 3] == 'a')
                 {
