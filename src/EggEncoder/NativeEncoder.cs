@@ -183,7 +183,7 @@ namespace EggEncoder
             }
 
             var durationSeconds = aiffReader.SampleRate > 0 ? (double)aiffReader.TotalSamples / aiffReader.SampleRate : 0;
-            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample, aiffReader.IsLittleEndian, aiffReader.IsFloat32, aiffReader.IsFloat64, aiffReader.IsALaw, aiffReader.IsMuLaw);
+            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample, aiffReader.IsLittleEndian, aiffReader.IsFloat32, aiffReader.IsFloat64, aiffReader.IsALaw, aiffReader.IsMuLaw, aiffReader.IsIma4);
 
             return new ProbeResult
             {
@@ -643,7 +643,7 @@ namespace EggEncoder
             };
         }
 
-        private static (string CodecName, string CodecLongName) DescribeAiffCodec(int bitsPerSample, bool isLittleEndian, bool isFloat32, bool isFloat64, bool isALaw, bool isMuLaw)
+        private static (string CodecName, string CodecLongName) DescribeAiffCodec(int bitsPerSample, bool isLittleEndian, bool isFloat32, bool isFloat64, bool isALaw, bool isMuLaw, bool isIma4)
         {
             if (isFloat32)
             {
@@ -663,6 +663,11 @@ namespace EggEncoder
             if (isMuLaw)
             {
                 return ("pcm_mulaw", "PCM mu-law / G.711 mu-law");
+            }
+
+            if (isIma4)
+            {
+                return ("adpcm_ima_qt", "ADPCM IMA QuickTime");
             }
 
             if (isLittleEndian)

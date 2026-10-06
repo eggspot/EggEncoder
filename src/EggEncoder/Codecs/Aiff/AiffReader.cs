@@ -22,16 +22,21 @@ namespace EggEncoder.Codecs.Aiff
     // same thing as plain AIFF's own PCM, verified against a real afconvert-produced fixture), 'sowt'
     // (little-endian PCM -- the classic reason AIFC exists: cross-platform-friendly byte order), 'fl32'/
     // 'fl64' (big-endian IEEE float, decoded into this codebase's usual int32-native-range scale -- see
-    // Float32ToInt32/Float64ToInt32), and 'alaw'/'ulaw' (G.711 companded PCM, decoded via this project's
-    // own Wav.G711Codec rather than a second, duplicate implementation -- the algorithm is byte-for-byte
-    // identical to WAV's G.711, only the surrounding container differs). 'ima4' (QuickTime IMA4 ADPCM) is
-    // a real, commonly-produced AIFC compressionType but is NOT decoded here -- it has a materially
-    // different bitstream from WAV's own IMA ADPCM (not just a different container around the same
-    // algorithm, the way the other types above are), and was deliberately scoped out of this pass rather
-    // than half-implemented; Open() throws a clear, distinct NotSupportedException naming it rather than
-    // falling through to the generic "unsupported compressionType" message. Every compressionType here
-    // (including 'twos' and the real ima4 rejection path) was verified against real ffmpeg- and
-    // afconvert-produced fixture files' actual bytes, not just a read-through of Apple's AIFF-C spec.
+    // Float32ToInt32/Float64ToInt32), 'alaw'/'ulaw' (G.711 companded PCM, decoded via this project's own
+    // Wav.G711Codec rather than a second, duplicate implementation -- the algorithm is byte-for-byte
+    // identical to WAV's G.711, only the surrounding container differs), and 'ima4' (QuickTime IMA4
+    // ADPCM, decode only -- see Ima4Decoder for the full writeup of why its bitstream framing is
+    // genuinely different from WAV's own IMA ADPCM, even though the per-nibble math turns out to be
+    // identical and is reused directly from Wav.ImaAdpcmDecoder). Every compressionType here was
+    // verified against real ffmpeg- and afconvert-produced fixture files' actual bytes, not just a
+    // read-through of Apple's AIFF-C spec -- ima4 specifically was cross-checked bit-exact against both
+    // ffmpeg's own decode AND macOS's afconvert/CoreAudio decode of the same real files, for both mono
+    // and stereo, before any of this file's ima4-specific code was written.
+    //
+    // ima4's own COMM chunk quirk: numSampleFrames reports the IMA4 BLOCK count, not the raw sample
+    // count every other compressionType here uses it for (confirmed exactly: a real file's SSND data
+    // length, divided by 34 bytes/block for mono, equals numSampleFrames precisely) -- Open() multiplies
+    // by Ima4Decoder.SamplesPerChannelSubBlock to get the true TotalSamples this reader reports.
     public sealed class AiffReader : IDisposable
     {
         private enum Compression
@@ -41,7 +46,8 @@ namespace EggEncoder.Codecs.Aiff
             Float32,
             Float64,
             ALaw,
-            MuLaw
+            MuLaw,
+            Ima4
         }
 
         private readonly FileStream _stream;
@@ -51,6 +57,17 @@ namespace EggEncoder.Codecs.Aiff
 
         private long _bytesRead;
         private byte[] _rawBytes = [];
+
+        // ima4's own pending-buffer decode state -- kept fully separate from the simple per-sample
+        // fields above (_bytesPerDiskSample is unused/0 for ima4) the same way WavReader keeps its own
+        // MS ADPCM fields separate from its simple per-sample ones: the block framing is different
+        // enough that sharing fields would need a union-like abstraction for no real benefit.
+        private readonly Wav.ImaAdpcmDecoder.ChannelState[] _ima4ChannelStates = [];
+        private readonly int _ima4BlockGroupBytes;
+        private int[] _ima4PendingSamples = [];
+        private int _ima4PendingOffset;
+        private int _ima4PendingCount;
+        private long _ima4FramesProduced;
 
         private AiffReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, Compression compression, int bytesPerDiskSample)
         {
@@ -63,6 +80,13 @@ namespace EggEncoder.Codecs.Aiff
             SampleRate = sampleRate;
             BitsPerSample = bitsPerSample;
             TotalSamples = totalSamples;
+
+            if (compression == Compression.Ima4)
+            {
+                _ima4ChannelStates = new Wav.ImaAdpcmDecoder.ChannelState[channels];
+                _ima4BlockGroupBytes = Ima4Decoder.BytesPerChannelSubBlock * channels;
+                _ima4PendingSamples = new int[Ima4Decoder.SamplesPerChannelSubBlock * channels];
+            }
 
             _stream.Seek(sampleDataStart, SeekOrigin.Begin);
         }
@@ -89,6 +113,9 @@ namespace EggEncoder.Codecs.Aiff
 
         /// <summary>True for AIFC's 'sowt' compressionType (little-endian PCM); false for everything else, including plain AIFF.</summary>
         public bool IsLittleEndian => _compression == Compression.LittleEndianInteger;
+
+        /// <summary>True for AIFC's 'ima4' compressionType (QuickTime IMA4 ADPCM, decode only); false for everything else.</summary>
+        public bool IsIma4 => _compression == Compression.Ima4;
 
         public static AiffReader Open(string filePath)
         {
@@ -178,7 +205,19 @@ namespace EggEncoder.Codecs.Aiff
 
                 var (compression, reportedBitsPerSample, bytesPerDiskSample) = DetermineCompression(filePath, compressionType, bitsPerSample.Value);
 
-                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, totalSampleFrames.Value, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample);
+                if (compression == Compression.Ima4 && channels.Value is not 1 and not 2)
+                {
+                    throw new NotSupportedException($"'{filePath}' has {channels.Value} channels; only mono and stereo ima4 are supported");
+                }
+
+                // ima4's own quirk: numSampleFrames reports the block count, not the raw sample count
+                // every other compressionType uses it for -- see this file's own top-of-file comment
+                // for how that was confirmed, not assumed.
+                var trueTotalSamples = compression == Compression.Ima4
+                    ? totalSampleFrames.Value * Ima4Decoder.SamplesPerChannelSubBlock
+                    : totalSampleFrames.Value;
+
+                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample);
             }
             catch
             {
@@ -234,7 +273,17 @@ namespace EggEncoder.Codecs.Aiff
                     return (Compression.MuLaw, 16, 1);
 
                 case "ima4":
-                    throw new NotSupportedException($"'{filePath}' uses AIFC compressionType 'ima4' (QuickTime IMA4 ADPCM), which is not supported by this decoder");
+                    if (declaredBitsPerSample != 4)
+                    {
+                        throw new NotSupportedException($"'{filePath}' is AIFC 'ima4' but declares {declaredBitsPerSample}-bit samples; only 4-bit is valid");
+                    }
+
+                    // Reports 16, the decoded resolution -- the same "decoded resolution, not coded
+                    // width" convention WavReader uses for its own IMA/MS ADPCM. BytesPerDiskSample is
+                    // unused for ima4 (0): it takes the separate block-group pending-buffer path in
+                    // ReadInterleavedSamples, not the simple per-sample switch this tuple's third value
+                    // drives for every other compressionType.
+                    return (Compression.Ima4, 16, 0);
 
                 default:
                     throw new NotSupportedException($"'{filePath}' uses unsupported AIFC compressionType '{compressionType}'");
@@ -259,6 +308,11 @@ namespace EggEncoder.Codecs.Aiff
 
         public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
         {
+            if (_compression == Compression.Ima4)
+            {
+                return ReadIma4InterleavedSamples(buffer, maxSamplesPerChannel);
+            }
+
             var bytesPerSample = _bytesPerDiskSample;
             var bytesPerFrame = bytesPerSample * Channels;
             var remainingBytes = _sampleDataLength - _bytesRead;
@@ -337,6 +391,89 @@ namespace EggEncoder.Codecs.Aiff
             4 => _rawBytes[byteOffset] | (_rawBytes[byteOffset + 1] << 8) | (_rawBytes[byteOffset + 2] << 16) | (_rawBytes[byteOffset + 3] << 24),
             _ => throw new NotSupportedException($"Unsupported bytes per sample: {bytesPerSample}")
         };
+
+        // Mirrors the simple per-sample ReadInterleavedSamples above structurally (same pending-buffer
+        // copy-out loop WavReader's own ReadMsAdpcmInterleavedSamples uses), just driving ima4's own
+        // block-group pending buffer instead.
+        private int ReadIma4InterleavedSamples(int[] buffer, int maxSamplesPerChannel)
+        {
+            var framesWritten = 0;
+
+            while (framesWritten < maxSamplesPerChannel)
+            {
+                if (_ima4PendingOffset >= _ima4PendingCount && !DecodeNextIma4BlockGroup())
+                {
+                    break;
+                }
+
+                var framesAvailable = _ima4PendingCount - _ima4PendingOffset;
+                var framesToCopy = Math.Min(framesAvailable, maxSamplesPerChannel - framesWritten);
+
+                Array.Copy(_ima4PendingSamples, _ima4PendingOffset * Channels, buffer, framesWritten * Channels, framesToCopy * Channels);
+
+                _ima4PendingOffset += framesToCopy;
+                framesWritten += framesToCopy;
+            }
+
+            return framesWritten;
+        }
+
+        // Reads and decodes exactly one block group (one Ima4Decoder.BytesPerChannelSubBlock-byte
+        // sub-block per channel) from the stream. Stops cleanly (no exception) if TotalSamples has
+        // already been reached, or if a truncated final block group doesn't have enough bytes left --
+        // the same two stop conditions WavReader's own DecodeNextMsAdpcmBlock has.
+        private bool DecodeNextIma4BlockGroup()
+        {
+            if (_ima4FramesProduced >= TotalSamples)
+            {
+                return false;
+            }
+
+            var remainingBytes = _sampleDataLength - _bytesRead;
+            if (remainingBytes < _ima4BlockGroupBytes)
+            {
+                return false;
+            }
+
+            if (_rawBytes.Length < _ima4BlockGroupBytes)
+            {
+                _rawBytes = new byte[_ima4BlockGroupBytes];
+            }
+
+            var bytesActuallyRead = ReadFullyIma4BlockGroup();
+            _bytesRead += bytesActuallyRead;
+
+            if (bytesActuallyRead < _ima4BlockGroupBytes)
+            {
+                return false;
+            }
+
+            Ima4Decoder.DecodeBlockGroup(new ReadOnlySpan<byte>(_rawBytes, 0, _ima4BlockGroupBytes), Channels, _ima4ChannelStates, _ima4PendingSamples);
+
+            var samplesThisBlockGroup = (int)Math.Min(Ima4Decoder.SamplesPerChannelSubBlock, TotalSamples - _ima4FramesProduced);
+            _ima4PendingOffset = 0;
+            _ima4PendingCount = samplesThisBlockGroup;
+            _ima4FramesProduced += samplesThisBlockGroup;
+
+            return true;
+
+            int ReadFullyIma4BlockGroup()
+            {
+                var totalBytesRead = 0;
+                while (totalBytesRead < _ima4BlockGroupBytes)
+                {
+                    var bytesReadThisCall = _stream.Read(_rawBytes, totalBytesRead, _ima4BlockGroupBytes - totalBytesRead);
+                    if (bytesReadThisCall == 0)
+                    {
+                        break;
+                    }
+
+                    totalBytesRead += bytesReadThisCall;
+                }
+
+                return totalBytesRead;
+            }
+        }
 
         private static int Float32ToInt32(float sample) => Pcm.FloatSampleConverter.ClampToNativeInt32(sample);
 
