@@ -1265,6 +1265,45 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithIma4AifcSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // ima4 is decode-only (like WAV's own IMA/MS ADPCM), so it can only ever be the
+            // pipeline's SOURCE, never its destination -- mirrors
+            // Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own role for
+            // MS ADPCM, proving a PcmTransform genuinely runs on ima4's decoded output (not just that
+            // an ima4 source happens to be readable at all, already proven by AudioCutterTest's own
+            // bit-exact decode coverage).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = EggEncoder.Codecs.Aiff.AiffReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                // Compare against the source doubled directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail. Clamp at int16 native
+                // range, since ima4 decodes to 16-bit.
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithRealAuFixtureSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
             // AU decode wires into the existing WAV-family decode path with no dispatch changes

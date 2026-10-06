@@ -27,6 +27,8 @@ namespace EggEncoder.UnitTests.Codecs
         private static readonly string _muLawMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono_expected.pcm");
         private static readonly string _aLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
         private static readonly string _aLawMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono_expected.pcm");
+        private static readonly string _ima4MonoFixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+        private static readonly string _ima4MonoExpectedPcmPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono_expected.pcm");
 
         [Fact]
         public void Cut_Wav_Should_Extract_Exact_Sample_Range()
@@ -1569,6 +1571,69 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var expected = ReadGroundTruthPcm16(_imaAdpcmMonoExpectedPcmPath);
                 buffer.Should().Equal(expected[0..44100]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_Ima4AifcToWav_Should_Reproduce_BitExact_Samples()
+        {
+            // Decode-only direction against a real, ffmpeg-produced AIFC ima4 fixture -- mirrors the
+            // depth already given to WAV's own IMA/MS ADPCM above, since ima4's block-oriented,
+            // stateful decode is genuinely distinct machinery deserving its own integration coverage,
+            // unlike AIFC's simpler per-sample compressionTypes (sowt/fl32/alaw/etc.) which just reuse
+            // AiffReader's already-tested generic read path through this same Convert/Cut machinery.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(_ima4MonoFixturePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.TotalSamples.Should().Be(8832);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(ReadGroundTruthPcm16(_ima4MonoExpectedPcmPath));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_Ima4Aifc_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "cut.wav");
+
+                // The fixture is only ~0.2s long, so endInSeconds: 1 clamps to its own full 8832
+                // samples (GetSampleRange's own Math.Clamp(..., startSample, totalSamples)) -- this
+                // still exercises the Cut-specific code path (distinct from Convert's) with ima4 as
+                // the source, just without a genuinely partial range to assert against.
+                AudioCutter.Cut(_ima4MonoFixturePath, destWavPath, startInSeconds: 0, endInSeconds: 1).Should().BeTrue();
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.TotalSamples.Should().Be(8832);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(ReadGroundTruthPcm16(_ima4MonoExpectedPcmPath));
             }
             finally
             {
