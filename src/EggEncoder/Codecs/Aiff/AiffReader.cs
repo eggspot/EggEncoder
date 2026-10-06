@@ -62,7 +62,7 @@ namespace EggEncoder.Codecs.Aiff
         // fields above (_bytesPerDiskSample is unused/0 for ima4) the same way WavReader keeps its own
         // MS ADPCM fields separate from its simple per-sample ones: the block framing is different
         // enough that sharing fields would need a union-like abstraction for no real benefit.
-        private readonly Wav.ImaAdpcmDecoder.ChannelState[] _ima4ChannelStates = [];
+        private readonly ImaAdpcmDecoder.ChannelState[] _ima4ChannelStates = [];
         private readonly int _ima4BlockGroupBytes;
         private int[] _ima4PendingSamples = [];
         private int _ima4PendingOffset;
@@ -83,7 +83,7 @@ namespace EggEncoder.Codecs.Aiff
 
             if (compression == Compression.Ima4)
             {
-                _ima4ChannelStates = new Wav.ImaAdpcmDecoder.ChannelState[channels];
+                _ima4ChannelStates = new ImaAdpcmDecoder.ChannelState[channels];
                 _ima4BlockGroupBytes = Ima4Decoder.BytesPerChannelSubBlock * channels;
                 _ima4PendingSamples = new int[Ima4Decoder.SamplesPerChannelSubBlock * channels];
             }
