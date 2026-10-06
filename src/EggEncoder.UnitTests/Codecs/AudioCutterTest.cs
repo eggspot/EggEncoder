@@ -1579,6 +1579,49 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WavToImaAdpcmWav_Should_Round_Trip_WithinQuantizationTolerance()
+        {
+            // IMA ADPCM has since gained encode support (WavWriterTest's own
+            // WriteInterleavedSamples_ImaAdpcm_* tests cover WavWriter directly, including a real-
+            // ffmpeg-independent-decode cross-check) -- this proves AudioCutter.Convert's generic
+            // WavSampleFormat destination routing (already proven for Float32/G.711) reaches that new
+            // encode path too. Unlike G.711's own bit-exact encode check, exact equality is the wrong
+            // bar for a lossy, adaptive codec -- a tolerance is used instead, the same as
+            // WavWriterTest's own round-trip coverage.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.ImaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsImaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                for (var i = 1; i < samples.Length; i++) // skip the first block's verbatim header sample
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_Ima4AifcToWav_Should_Reproduce_BitExact_Samples()
         {
             // Decode-only direction against a real, ffmpeg-produced AIFC ima4 fixture -- mirrors the
@@ -1773,7 +1816,7 @@ namespace EggEncoder.UnitTests.Codecs
 
             try
             {
-                // Unlike IMA ADPCM (decode-only), G.711 supports the encode direction too -- this
+                // Unlike MS ADPCM (decode-only), G.711 supports the encode direction too -- this
                 // proves AudioCutter.Convert's generic WavSampleFormat destination routing (already
                 // proven for Float32) now also reaches WavWriter's new G.711 encode path, producing
                 // bytes that match a real ffmpeg encoder exactly, not just this project's own decoder.

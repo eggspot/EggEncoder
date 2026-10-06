@@ -73,6 +73,10 @@
     <None Include="Codecs\Wav\sample_ima_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ima_adpcm_stereo.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ima_adpcm_stereo_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\ima_adpcm_encoded_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\ima_adpcm_encoded_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\ima_adpcm_encoded_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\ima_adpcm_encoded_stereo_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_g711_mulaw_mono.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_g711_mulaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_g711_mulaw_stereo.wav" CopyToOutputDirectory="Always" />

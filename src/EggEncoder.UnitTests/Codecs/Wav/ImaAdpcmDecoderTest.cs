@@ -151,5 +151,70 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             output[3].Should().Be(sample3);
             states[0].Predictor.Should().Be(expectedState.Predictor, "the wasted upper nibble (0xF) must never be decoded");
         }
+
+        [Fact]
+        public void QuantizeNibble_Should_Pick_The_Nibble_ExpandNibble_Itself_Agrees_Is_Closest()
+        {
+            // Exhaustively confirms the search picks the true closest match under ComputeDiff/
+            // ExpandNibble's own formula, not FFmpeg's differently-tuned closed-form heuristic (see
+            // this method's own doc comment in ImaAdpcmDecoder.cs) -- for every nibble n, decoding it
+            // via a copy of the current state must never produce a result closer to the target sample
+            // than what QuantizeNibble itself chose.
+            var state = new ImaAdpcmDecoder.ChannelState { Predictor = 100, StepIndex = 20 };
+            const int targetSample = 250;
+
+            var nibble = ImaAdpcmDecoder.QuantizeNibble(ref state, targetSample);
+            var chosenError = Math.Abs(targetSample - state.Predictor);
+
+            for (var candidate = 0; candidate < 16; candidate++)
+            {
+                var candidateState = new ImaAdpcmDecoder.ChannelState { Predictor = 100, StepIndex = 20 };
+                var candidateSample = ImaAdpcmDecoder.ExpandNibble(ref candidateState, candidate);
+                var candidateError = Math.Abs(targetSample - candidateSample);
+
+                candidateError.Should().BeGreaterThanOrEqualTo(chosenError, $"nibble {candidate} must not reconstruct closer to {targetSample} than the chosen nibble {nibble} did");
+            }
+        }
+
+        [Fact]
+        public void QuantizeNibble_WithNegativeDelta_Should_Set_The_SignBit()
+        {
+            var state = new ImaAdpcmDecoder.ChannelState { Predictor = 1000, StepIndex = 20 };
+
+            var nibble = ImaAdpcmDecoder.QuantizeNibble(ref state, sample: 0);
+
+            (nibble & 8).Should().Be(8, "the target sample is below the predictor, so the sign bit must be set");
+            state.Predictor.Should().BeLessThan(1000);
+        }
+
+        [Fact]
+        public void QuantizeNibble_WithPositiveDelta_Should_Clear_The_SignBit()
+        {
+            var state = new ImaAdpcmDecoder.ChannelState { Predictor = 0, StepIndex = 20 };
+
+            var nibble = ImaAdpcmDecoder.QuantizeNibble(ref state, sample: 1000);
+
+            (nibble & 8).Should().Be(0, "the target sample is above the predictor, so the sign bit must be clear");
+            state.Predictor.Should().BeGreaterThan(0);
+        }
+
+        [Fact]
+        public void QuantizeNibble_CalledRepeatedly_Should_Track_A_Slowly_Varying_Signal_Closely()
+        {
+            // The real-world property that actually matters: encoding a smooth signal sample-by-sample
+            // should keep the reconstructed predictor within a small, bounded error of each target --
+            // not just that any one isolated call picks its own locally-best nibble.
+            var state = new ImaAdpcmDecoder.ChannelState { Predictor = 0, StepIndex = 0 };
+            var maxAbsoluteError = 0;
+
+            for (var i = 0; i < 200; i++)
+            {
+                var target = (int)(8000 * Math.Sin(i * 0.05));
+                ImaAdpcmDecoder.QuantizeNibble(ref state, target);
+                maxAbsoluteError = Math.Max(maxAbsoluteError, Math.Abs(target - state.Predictor));
+            }
+
+            maxAbsoluteError.Should().BeLessThan(2000, "a smooth, slowly-varying signal should stay well within the quantizer's adaptive step range once it has ramped up");
+        }
     }
 }
