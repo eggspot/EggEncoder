@@ -31,6 +31,10 @@
     <None Include="Codecs\Aiff\fixture_alaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_ulaw_mono.aifc" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_ulaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ima4_mono.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ima4_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ima4_stereo.aifc" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aiff\fixture_ima4_stereo_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Au\fixture_s16be_mono.au" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Au\fixture_s16be_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Au\fixture_s8_mono.au" CopyToOutputDirectory="Always" />

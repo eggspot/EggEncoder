@@ -201,6 +201,30 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_Ima4AifcFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+
+            var probeResult = await _nativeEncoder.Probe(fixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("aiff");
+            probeResult.SizeBytes.Should().Be(new FileInfo(fixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(0.2, 0.01);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("adpcm_ima_qt");
+            probeResult.CodecLongName.Should().Be("ADPCM IMA QuickTime");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16, "ima4 decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            probeResult.DurationInSamples.Should().Be(8832);
+            probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
         public async Task Probe_AuFile_Should_Return_Correct_Metadata_And_Waveform()
         {
             var fixturePath = Path.GetFullPath("Codecs/Au/fixture_mulaw_mono.au");
