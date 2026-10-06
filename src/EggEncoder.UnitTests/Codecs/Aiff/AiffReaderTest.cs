@@ -506,7 +506,7 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
-        public void Open_Aifc_Ima4Mono_Should_Decode_BitExact_Against_RealFixture()
+        public void Open_Aifc_Ima4_Mono_Should_Decode_BitExact_Against_RealFixture()
         {
             // Ground truth generated via ffmpeg's own decode of this same real file, independently
             // cross-checked bit-exact against macOS's own afconvert/CoreAudio decode of the same file
@@ -533,14 +533,14 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
-        public void Open_Aifc_Ima4Stereo_Should_Decode_BitExact_Against_RealFixture()
+        public void Open_Aifc_Ima4_Stereo_Should_Decode_BitExact_Against_RealFixture()
         {
             // Exercises the overall stereo decode path (block-group count, total-sample accounting,
             // no crash/mismatch across a real 2-channel ima4 stream) against a real fixture. Note: this
             // fixture's own left/right channels happen to be byte-identical throughout (confirmed by
             // inspecting its raw SSND bytes directly), so it can NOT by itself distinguish a correct
             // channel-0-then-channel-1 block-group layout from a swapped-channel or shared-state bug --
-            // see Open_Aifc_Ima4Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent below
+            // see Open_Aifc_Ima4_Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent below
             // for the test that actually proves that.
             var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo.aifc");
             var expectedPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo_expected.pcm");
@@ -559,7 +559,7 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
-        public void Open_Aifc_Ima4Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent()
+        public void Open_Aifc_Ima4_Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent()
         {
             // The real stereo fixture above has byte-identical left/right channels throughout, so it
             // can't catch a swapped-channel-order or shared-adaptive-state bug -- a broken
