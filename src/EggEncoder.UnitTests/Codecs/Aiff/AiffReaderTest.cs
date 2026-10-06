@@ -535,11 +535,13 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         [Fact]
         public void Open_Aifc_Ima4Stereo_Should_Decode_BitExact_Against_RealFixture()
         {
-            // Exercises ima4's own stereo block-group framing (channel 0's complete 34-byte sub-block
-            // immediately followed by channel 1's complete sub-block, NOT interleaved at the nibble or
-            // byte level the way WAV's own IMA ADPCM stereo framing is) -- genuinely distinct code from
-            // the mono path above, so it needs its own real-fixture cross-check rather than relying on
-            // the mono fixture alone.
+            // Exercises the overall stereo decode path (block-group count, total-sample accounting,
+            // no crash/mismatch across a real 2-channel ima4 stream) against a real fixture. Note: this
+            // fixture's own left/right channels happen to be byte-identical throughout (confirmed by
+            // inspecting its raw SSND bytes directly), so it can NOT by itself distinguish a correct
+            // channel-0-then-channel-1 block-group layout from a swapped-channel or shared-state bug --
+            // see Open_Aifc_Ima4Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent below
+            // for the test that actually proves that.
             var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo.aifc");
             var expectedPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo_expected.pcm");
 
@@ -554,6 +556,57 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples).Should().Be((int)aiffReader.TotalSamples);
 
             buffer.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent()
+        {
+            // The real stereo fixture above has byte-identical left/right channels throughout, so it
+            // can't catch a swapped-channel-order or shared-adaptive-state bug -- a broken
+            // implementation that mixed the two channels up would still match it. This test builds one
+            // block group (channel 0's 34-byte sub-block, all-0x00 nibble bytes, immediately followed by
+            // channel 1's, all-0xFF nibble bytes -- genuinely different adaptive-decode trajectories)
+            // and confirms the stereo decode of the combined file matches two independent mono decodes
+            // of each half, which is only true if the block-group layout and per-channel state really
+            // are independent, channel 0 first then channel 1, with no cross-talk between them.
+            var ch0Bytes = new byte[34]; // preamble (never read) + all-zero nibbles
+            var ch1Bytes = new byte[34];
+            Array.Fill(ch1Bytes, (byte)0xFF, 2, 32); // preamble left zero; nibble bytes all 0xFF
+
+            var mono0Path = Path.GetTempFileName();
+            var mono1Path = Path.GetTempFileName();
+            var stereoPath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.CreateWithExplicitFrameCount(mono0Path, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", ch0Bytes, totalFrames: 1);
+                AifcFileBuilder.CreateWithExplicitFrameCount(mono1Path, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", ch1Bytes, totalFrames: 1);
+                AifcFileBuilder.CreateWithExplicitFrameCount(stereoPath, channels: 2, sampleRate: 44100, sampleSize: 4, "ima4", [..ch0Bytes, ..ch1Bytes], totalFrames: 1);
+
+                var expectedCh0 = DecodeAllMono(mono0Path);
+                var expectedCh1 = DecodeAllMono(mono1Path);
+                expectedCh0.Should().NotEqual(expectedCh1, "the two channels' nibble bytes are deliberately different, so a correct decode must diverge too");
+
+                using var stereoReader = AiffReader.Open(stereoPath);
+                var stereoBuffer = new int[stereoReader.TotalSamples * stereoReader.Channels];
+                stereoReader.ReadInterleavedSamples(stereoBuffer, (int)stereoReader.TotalSamples);
+
+                stereoBuffer.Where((_, i) => i % 2 == 0).Should().Equal(expectedCh0);
+                stereoBuffer.Where((_, i) => i % 2 == 1).Should().Equal(expectedCh1);
+            }
+            finally
+            {
+                File.Delete(mono0Path);
+                File.Delete(mono1Path);
+                File.Delete(stereoPath);
+            }
+
+            static int[] DecodeAllMono(string path)
+            {
+                using var reader = AiffReader.Open(path);
+                var buffer = new int[reader.TotalSamples];
+                reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+                return buffer;
+            }
         }
 
         [Fact]
