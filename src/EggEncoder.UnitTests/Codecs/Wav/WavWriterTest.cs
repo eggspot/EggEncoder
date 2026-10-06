@@ -495,6 +495,37 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             }
         }
 
+        [Fact]
+        public void WriteInterleavedSamples_ImaAdpcm_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw()
+        {
+            // End-to-end version of ImaAdpcmDecoderTest's own
+            // QuantizeNibble_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw -- confirms the full
+            // public WavWriter.Create + WriteInterleavedSamples path (reachable directly, without going
+            // through AudioCutter's own pipeline, whose transforms are the only thing conventionally
+            // guaranteeing an in-range value) doesn't crash either, not just the internal quantizer
+            // method in isolation.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[10];
+                samples[1] = int.MinValue;
+                samples[5] = int.MaxValue;
+
+                var act = () =>
+                {
+                    using var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.ImaAdpcm);
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Theory]
         [InlineData("ima_adpcm_encoded_mono.wav", "ima_adpcm_encoded_mono_expected.pcm")]
         [InlineData("ima_adpcm_encoded_stereo.wav", "ima_adpcm_encoded_stereo_expected.pcm")]
