@@ -2,6 +2,7 @@ using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
@@ -40,6 +41,7 @@ namespace EggEncoder
                 {
                     ".wav" => ProbeWav(filePath),
                     ".aiff" or ".aif" or ".aifc" => ProbeAiff(filePath),
+                    ".au" => ProbeAu(filePath),
                     ".flac" => ProbeFlac(filePath),
                     ".mp3" => ProbeMp3(filePath),
                     ".aac" => ProbeAac(filePath),
@@ -199,6 +201,42 @@ namespace EggEncoder
                 BitRate = aiffReader.SampleRate * aiffReader.BitsPerSample * aiffReader.Channels,
                 DurationInSamples = aiffReader.TotalSamples,
                 TimeBase = aiffReader.SampleRate > 0 ? $"1/{aiffReader.SampleRate}" : null,
+                Waveform = waveformCalculator.GetNormalizedWindows()
+            };
+        }
+
+        private static ProbeResult ProbeAu(string filePath)
+        {
+            using var auReader = AuReader.Open(filePath);
+            var waveformCalculator = new WaveformCalculator(auReader.TotalSamples, auReader.Channels, auReader.BitsPerSample);
+
+            var buffer = new int[FramesPerBlock * auReader.Channels];
+
+            int framesRead;
+            while ((framesRead = auReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+            {
+                waveformCalculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * auReader.Channels));
+            }
+
+            var durationSeconds = auReader.SampleRate > 0 ? (double)auReader.TotalSamples / auReader.SampleRate : 0;
+            var (codecName, codecLongName) = DescribeAuCodec(auReader.BitsPerSample, auReader.IsFloat32, auReader.IsFloat64, auReader.IsALaw, auReader.IsMuLaw);
+
+            return new ProbeResult
+            {
+                FormatName = "au",
+                FormatLongName = "Sun AU",
+                SizeBytes = GetFileSize(filePath),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = auReader.SampleRate,
+                Channels = auReader.Channels,
+                ChannelLayout = DescribeChannelLayout(auReader.Channels),
+                BitsPerSample = auReader.BitsPerSample,
+                BitRate = auReader.SampleRate * auReader.BitsPerSample * auReader.Channels,
+                DurationInSamples = auReader.TotalSamples,
+                TimeBase = auReader.SampleRate > 0 ? $"1/{auReader.SampleRate}" : null,
                 Waveform = waveformCalculator.GetNormalizedWindows()
             };
         }
@@ -637,6 +675,38 @@ namespace EggEncoder
                     32 => ("pcm_s32le", "PCM signed 32-bit little-endian"),
                     _ => ($"pcm_s{bitsPerSample}le", $"PCM signed {bitsPerSample}-bit little-endian")
                 };
+            }
+
+            return bitsPerSample switch
+            {
+                8 => ("pcm_s8", "PCM signed 8-bit"),
+                16 => ("pcm_s16be", "PCM signed 16-bit big-endian"),
+                24 => ("pcm_s24be", "PCM signed 24-bit big-endian"),
+                32 => ("pcm_s32be", "PCM signed 32-bit big-endian"),
+                _ => ($"pcm_s{bitsPerSample}be", $"PCM signed {bitsPerSample}-bit big-endian")
+            };
+        }
+
+        private static (string CodecName, string CodecLongName) DescribeAuCodec(int bitsPerSample, bool isFloat32, bool isFloat64, bool isALaw, bool isMuLaw)
+        {
+            if (isFloat32)
+            {
+                return ("pcm_f32be", "PCM 32-bit floating point big-endian");
+            }
+
+            if (isFloat64)
+            {
+                return ("pcm_f64be", "PCM 64-bit floating point big-endian");
+            }
+
+            if (isALaw)
+            {
+                return ("pcm_alaw", "PCM A-law / G.711 A-law");
+            }
+
+            if (isMuLaw)
+            {
+                return ("pcm_mulaw", "PCM mu-law / G.711 mu-law");
             }
 
             return bitsPerSample switch

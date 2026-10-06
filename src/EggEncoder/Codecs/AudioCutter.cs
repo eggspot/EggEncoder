@@ -1,6 +1,7 @@
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Mp3;
@@ -60,6 +61,16 @@ namespace EggEncoder.Codecs
             Convert(sourceFilePath, destFilePath, new PcmTransformPipeline(), destinationAiffFormat);
         }
 
+        /// <summary>
+        /// Same as <see cref="Convert(string, string)"/>, but additionally selects the on-disk sample
+        /// representation for a <c>.au</c> destination (see <see cref="AuSampleFormat"/>); ignored for
+        /// every other destination format.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, AuSampleFormat destinationAuFormat)
+        {
+            Convert(sourceFilePath, destFilePath, new PcmTransformPipeline(), destinationAuFormat);
+        }
+
         /// <summary>Delegates to the pipeline-aware overload with empty CutOptions; see the Convert() overload's remarks.</summary>
         public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
@@ -94,6 +105,19 @@ namespace EggEncoder.Codecs
                         while ((framesRead = aiffReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
                         {
                             onBlockDecoded(new ReadOnlySpan<int>(buffer, 0, framesRead * aiffReader.Channels), aiffReader.Channels, aiffReader.SampleRate, aiffReader.BitsPerSample, aiffReader.TotalSamples);
+                        }
+                    }
+
+                    break;
+                case ".au":
+                    using (var auReader = AuReader.Open(sourceFilePath))
+                    {
+                        var buffer = new int[FramesPerBlock * auReader.Channels];
+
+                        int framesRead;
+                        while ((framesRead = auReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+                        {
+                            onBlockDecoded(new ReadOnlySpan<int>(buffer, 0, framesRead * auReader.Channels), auReader.Channels, auReader.SampleRate, auReader.BitsPerSample, auReader.TotalSamples);
                         }
                     }
 
@@ -134,7 +158,7 @@ namespace EggEncoder.Codecs
             }
         }
 
-        private static IAudioSink OpenSink(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer)
+        private static IAudioSink OpenSink(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer, AuSampleFormat destinationAuFormat = AuSampleFormat.Integer)
         {
             if (destinationWavFormat != WavSampleFormat.Integer && destExtension != ".wav")
             {
@@ -146,10 +170,16 @@ namespace EggEncoder.Codecs
                 throw new NotSupportedException($"{nameof(AiffSampleFormat)}.{destinationAiffFormat} is only supported for a '.aiff'/'.aif'/'.aifc' destination, but '{destFilePath}' is '{destExtension}'");
             }
 
+            if (destinationAuFormat != AuSampleFormat.Integer && destExtension != ".au")
+            {
+                throw new NotSupportedException($"{nameof(AuSampleFormat)}.{destinationAuFormat} is only supported for a '.au' destination, but '{destFilePath}' is '{destExtension}'");
+            }
+
             return destExtension switch
             {
                 ".wav" => WavWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationWavFormat),
                 ".aiff" or ".aif" or ".aifc" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAiffFormat),
+                ".au" => AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAuFormat),
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
                 ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate),

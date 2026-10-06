@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
 using EggEncoder.Pcm;
@@ -39,6 +40,12 @@ namespace EggEncoder.Codecs
         /// ignored for every other destination format. Defaults to <see cref="AiffSampleFormat.Integer"/>, the long-standing behavior.
         /// </summary>
         public AiffSampleFormat DestinationAiffFormat { get; init; } = AiffSampleFormat.Integer;
+
+        /// <summary>
+        /// Sample representation for a <c>.au</c> destination (see <see cref="AuSampleFormat"/>);
+        /// ignored for every other destination format. Defaults to <see cref="AuSampleFormat.Integer"/>, the long-standing behavior.
+        /// </summary>
+        public AuSampleFormat DestinationAuFormat { get; init; } = AuSampleFormat.Integer;
     }
 
     public static partial class AudioCutter
@@ -62,7 +69,7 @@ namespace EggEncoder.Codecs
         /// </remarks>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
         {
-            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer);
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer, AuSampleFormat.Integer);
         }
 
         /// <summary>
@@ -72,7 +79,7 @@ namespace EggEncoder.Codecs
         /// </summary>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat)
         {
-            Convert(sourceFilePath, destFilePath, pipeline, destinationWavFormat, AiffSampleFormat.Integer);
+            Convert(sourceFilePath, destFilePath, pipeline, destinationWavFormat, AiffSampleFormat.Integer, AuSampleFormat.Integer);
         }
 
         /// <summary>
@@ -82,10 +89,20 @@ namespace EggEncoder.Codecs
         /// </summary>
         public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AiffSampleFormat destinationAiffFormat)
         {
-            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, destinationAiffFormat);
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, destinationAiffFormat, AuSampleFormat.Integer);
         }
 
-        private static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat, AiffSampleFormat destinationAiffFormat)
+        /// <summary>
+        /// Same as <see cref="Convert(string, string, PcmTransformPipeline)"/>, but additionally selects the
+        /// on-disk sample representation for a <c>.au</c> destination (see <see cref="AuSampleFormat"/>);
+        /// ignored for every other destination format.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AuSampleFormat destinationAuFormat)
+        {
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer, destinationAuFormat);
+        }
+
+        private static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat, AiffSampleFormat destinationAiffFormat, AuSampleFormat destinationAuFormat)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
 
@@ -113,7 +130,7 @@ namespace EggEncoder.Codecs
                     // Opened only after the first successful Apply() call: if the pipeline rejects the
                     // source format (e.g. a mismatched ChannelRemixTransform), no destination file is
                     // ever created, instead of leaving a truncated header-only file behind.
-                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat, destinationAiffFormat);
+                    destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat, destinationAiffFormat, destinationAuFormat);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
 
@@ -190,7 +207,7 @@ namespace EggEncoder.Codecs
 
                         // Opened only after the first successful Apply() call -- see the Convert(pipeline)
                         // overload's matching comment.
-                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat, options.DestinationAiffFormat);
+                        destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat, options.DestinationAiffFormat, options.DestinationAuFormat);
                         destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                     });
 
@@ -434,7 +451,7 @@ namespace EggEncoder.Codecs
         // count (exactTotalFrames has a value -- true whenever nothing in play can change frame count,
         // e.g. a pipeline with no resampling, or no pipeline at all), open the real writer directly
         // instead of paying for the deferred sink's whole-file in-memory buffering.
-        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer)
+        private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer, AuSampleFormat destinationAuFormat = AuSampleFormat.Integer)
         {
             if (destExtension == ".wav")
             {
@@ -450,6 +467,18 @@ namespace EggEncoder.Codecs
                     : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAiffFormat));
             }
 
+            if (destExtension == ".au")
+            {
+                // Sun AU does have its own "unknown size" sentinel (0xFFFFFFFF, see AuReader) a real
+                // streaming encoder could use instead -- but requiring an exact count up front here
+                // reuses this already-proven deferred-sink machinery instead of a second, bespoke
+                // "patch the header on Finish" path, the same call WAV/AIFF already made despite each
+                // having no equivalent sentinel at all.
+                return exactTotalFrames.HasValue
+                    ? AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, destinationAuFormat)
+                    : new DeferredFixedHeaderSink(channels, totalFrames => AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAuFormat));
+            }
+
             if (destExtension == ".wv")
             {
                 // Unlike WAV/AIFF, WavpackSetConfiguration64 could instead take total_samples == -1
@@ -462,7 +491,7 @@ namespace EggEncoder.Codecs
                     : new DeferredFixedHeaderSink(channels, totalFrames => WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, totalFrames));
             }
 
-            return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat, destinationAiffFormat);
+            return OpenSink(destExtension, destFilePath, channels, sampleRate, bitsPerSample, totalFrames: 0, destinationWavFormat, destinationAiffFormat, destinationAuFormat);
         }
 
         private static (int[] Samples, int Channels, int SampleRate, int BitsPerSample) DecodeFully(string filePath)
