@@ -1,7 +1,9 @@
 namespace EggEncoder.Codecs.Wav
 {
     // Decodes IMA ADPCM (WAVE_FORMAT_IMA_ADPCM / WAVE_FORMAT_DVI_ADPCM, tag 17) block data into 16-bit
-    // PCM. This is a from-scratch, pure managed implementation of a long-standing (early 1990s),
+    // PCM, and (via QuantizeNibble below) backs ImaAdpcmEncoder's own encode direction with the exact
+    // same nibble<->diff mapping, so encode and decode can never silently drift out of sync with each
+    // other. This is a from-scratch, pure managed implementation of a long-standing (early 1990s),
     // patent-expired, extensively documented algorithm -- no third-party dependency needed at all,
     // unlike WavPack (which had no viable pure-managed option).
     //
@@ -11,7 +13,9 @@ namespace EggEncoder.Codecs.Wav
     // expect) and a real ffmpeg-produced reference file's actual bytes, not just a written
     // specification -- the same "verify against a real, authoritative implementation" discipline
     // this project has used for every codec since WavPack's own API turned out to need two rounds
-    // of real-CI correction.
+    // of real-CI correction. QuantizeNibble's own doc comment below has a second example of this same
+    // discipline catching a real, numeric discrepancy in FFmpeg's own source before any encoder code
+    // was written against it.
     internal static class ImaAdpcmDecoder
     {
         // The 89-entry step size table and 16-entry step-index adjustment table are the fixed,
@@ -56,15 +60,67 @@ namespace EggEncoder.Codecs.Wav
             var stepIndex = state.StepIndex + _indexTable[nibble];
             state.StepIndex = Math.Clamp(stepIndex, 0, _stepTable.Length - 1);
 
-            var diff = step >> 3;
-            if ((nibble & 4) != 0) diff += step;
-            if ((nibble & 2) != 0) diff += step >> 1;
-            if ((nibble & 1) != 0) diff += step >> 2;
+            var diff = ComputeDiff(step, nibble);
 
             var predictor = state.Predictor + ((nibble & 8) != 0 ? -diff : diff);
             state.Predictor = Math.Clamp(predictor, short.MinValue, short.MaxValue);
 
             return state.Predictor;
+        }
+
+        // The per-bit-term magnitude sum shared by ExpandNibble (decode) and QuantizeNibble (encode)'s
+        // own search below -- extracted so both sides are guaranteed to agree on what a given nibble
+        // actually means, rather than the encoder re-deriving the same formula a second time and
+        // risking it drifting out of sync with this one.
+        private static int ComputeDiff(int step, int nibble)
+        {
+            var diff = step >> 3;
+            if ((nibble & 4) != 0) diff += step;
+            if ((nibble & 2) != 0) diff += step >> 1;
+            if ((nibble & 1) != 0) diff += step >> 2;
+            return diff;
+        }
+
+        // Picks the nibble (0-15) whose ComputeDiff-decoded magnitude is CLOSEST to the sample's actual
+        // distance from the channel's current predictor, then commits it via ExpandNibble itself --
+        // guaranteeing the encoder's running predictor/step-index track in perfect lockstep with any
+        // standards-compliant IMA ADPCM decoder (this project's own ExpandNibble-based WavReader decode
+        // included), by construction, rather than by re-deriving the update formula a second time in a
+        // separate encoder and hoping it happens to match.
+        //
+        // Deliberately NOT FFmpeg's own adpcm_ima_compress_sample closed-form guess
+        // (nibble = min(7, abs(delta)*4/step)): verified directly from FFmpeg's real adpcmenc.c source
+        // that function updates its OWN internal state via a DIFFERENT, single-multiply
+        // ff_adpcm_yamaha_difflookup-table formula than the one FFmpeg's real ADPCM_IMA_WAV decoder
+        // actually uses to expand nibbles back (ff_adpcm_ima_qt_expand_nibble, i.e. this file's own
+        // ComputeDiff) -- confirmed numerically to disagree (step=7, nibble magnitude 1: ComputeDiff
+        // gives diff=1, the Yamaha-table formula gives diff=2), so reusing FFmpeg's own nibble-picking
+        // heuristic here would have picked nibbles optimized for a reconstruction formula this project
+        // doesn't use to decode them. An 8-candidate brute-force search against this file's own real
+        // ComputeDiff is exact and just as cheap.
+        internal static int QuantizeNibble(ref ChannelState state, int sample)
+        {
+            var delta = sample - state.Predictor;
+            var sign = delta < 0 ? 8 : 0;
+            var magnitude = Math.Abs(delta);
+            var step = _stepTable[state.StepIndex];
+
+            var bestMagnitudeNibble = 0;
+            var bestError = int.MaxValue;
+            for (var m = 0; m <= 7; m++)
+            {
+                var error = Math.Abs(magnitude - ComputeDiff(step, m));
+                if (error < bestError)
+                {
+                    bestError = error;
+                    bestMagnitudeNibble = m;
+                }
+            }
+
+            var nibble = sign | bestMagnitudeNibble;
+            ExpandNibble(ref state, nibble);
+
+            return nibble;
         }
 
         // Decodes exactly one block's worth of samples into interleavedOutput (sized to

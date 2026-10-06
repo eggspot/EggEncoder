@@ -1131,7 +1131,7 @@ namespace EggEncoder.UnitTests.Codecs
         [InlineData(WavSampleFormat.ALaw)]
         public void Convert_WithG711Destination_Should_Apply_Pipeline_Transform_Before_Encoding(WavSampleFormat sampleFormat)
         {
-            // Unlike IMA ADPCM (decode-only, so a pipeline could only ever run with it as the
+            // Unlike MS ADPCM (decode-only, so a pipeline could only ever run with it as the
             // SOURCE), G.711 supports the encode direction too -- this proves a PcmTransform
             // genuinely runs before the companding step, not just that the generic WavSampleFormat
             // destination routing (already proven for Float32) happens to compile for G.711 too.
@@ -1191,12 +1191,60 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Unlike MS ADPCM (decode-only), IMA ADPCM now supports the encode direction too -- this
+            // proves a PcmTransform genuinely runs before the quantization step, not just that the
+            // generic WavSampleFormat destination routing (already proven for Float32/G.711) happens
+            // to compile for IMA ADPCM too. A tolerance is used for the final comparison rather than
+            // exact equality -- IMA ADPCM is lossy, the same reasoning AudioCutterTest's own
+            // Convert_WavToImaAdpcmWav_Should_Round_Trip_WithinQuantizationTolerance already applies.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.ImaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsImaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Compare against the doubled samples directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail outside tolerance (the
+                // doubled signal's amplitude is far from the original's).
+                for (var i = 1; i < samples.Length; i++) // skip the first block's verbatim header sample
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
-            // MS ADPCM is decode-only (like IMA ADPCM), so it can only ever be the pipeline's SOURCE,
-            // never its destination -- this proves a PcmTransform genuinely runs on its decoded
-            // output, not just that an MS ADPCM source happens to be readable at all (already proven
-            // by AudioCutterTest's own bit-exact decode coverage).
+            // MS ADPCM is decode-only (IMA ADPCM has since gained encode support -- see
+            // Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding below),
+            // so it can only ever be the pipeline's SOURCE, never its destination -- this proves a
+            // PcmTransform genuinely runs on its decoded output, not just that an MS ADPCM source
+            // happens to be readable at all (already proven by AudioCutterTest's own bit-exact decode
+            // coverage).
             var tempDirectory = CreateTempDirectory();
             try
             {

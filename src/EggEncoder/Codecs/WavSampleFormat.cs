@@ -26,6 +26,16 @@ namespace EggEncoder.Codecs
         MuLaw,
 
         /// <summary>G.711 A-law companded PCM (8 bits on disk). Requires the destination's bit depth to be 16 (the input scale the companding formula expects).</summary>
-        ALaw
+        ALaw,
+
+        /// <summary>
+        /// IMA ADPCM (<c>WAVE_FORMAT_IMA_ADPCM</c>, 4 bits on disk). Requires the destination's bit
+        /// depth to be 16 (the input scale its quantizer expects) and mono or stereo only, matching
+        /// <c>WavReader</c>'s own decode-side restriction. Unlike <see cref="MuLaw"/>/<see cref="ALaw"/>,
+        /// this is block-structured (a fixed number of frames per block, buffered internally until a
+        /// full block is ready to encode, with the final block padded if needed) rather than one sample
+        /// at a time -- see <c>ImaAdpcmEncoder</c>.
+        /// </summary>
+        ImaAdpcm
     }
 }
