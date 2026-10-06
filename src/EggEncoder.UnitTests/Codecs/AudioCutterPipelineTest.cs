@@ -1264,6 +1264,41 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Fact]
+        public void Convert_WithRealAuFixtureSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // AU decode wires into the existing WAV-family decode path with no dispatch changes
+            // beyond adding the extension, so every PcmTransform works on an AU source automatically --
+            // mirrors Convert_WithRealAifcFixtureSource_Should_Apply_Pipeline_Transform_Before_Writing's
+            // own role for AIFC.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Au/fixture_mulaw_mono.au");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = EggEncoder.Codecs.Au.AuReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+                destReader.BitsPerSample.Should().Be(16);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

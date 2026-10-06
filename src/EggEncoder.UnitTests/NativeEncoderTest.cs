@@ -201,6 +201,31 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_AuFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Au/fixture_mulaw_mono.au");
+
+            var probeResult = await _nativeEncoder.Probe(fixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("au");
+            probeResult.FormatLongName.Should().Be("Sun AU");
+            probeResult.SizeBytes.Should().Be(new FileInfo(fixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(0.1, 0.01);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("pcm_mulaw");
+            probeResult.CodecLongName.Should().Be("PCM mu-law / G.711 mu-law");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(4410);
+            probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
         public async Task Probe_CafFile_Should_Return_Correct_Metadata_And_Waveform()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

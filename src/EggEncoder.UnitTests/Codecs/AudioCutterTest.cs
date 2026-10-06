@@ -2,6 +2,7 @@ using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
@@ -448,6 +449,118 @@ namespace EggEncoder.UnitTests.Codecs
                 var destPath = Path.Combine(tempDirectory, "dest.flac");
 
                 var act = () => AudioCutter.Convert(sourcePath, destPath, AiffSampleFormat.Float32);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_RealAuFixture_Should_Decode_BitExact_Samples()
+        {
+            // Decode-only direction against a real, ffmpeg-produced AU fixture -- mirrors
+            // Convert_RealAifcFixture_Should_Decode_BitExact_Samples's own role for AIFC.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Au/fixture_s24be_mono.au");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath);
+
+                using var wavReader = WavReader.Open(destPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.BitsPerSample.Should().Be(24);
+                wavReader.TotalSamples.Should().Be(4410);
+
+                using var auReader = AuReader.Open(sourcePath);
+                var expected = new int[auReader.TotalSamples];
+                auReader.ReadInterleavedSamples(expected, (int)auReader.TotalSamples);
+
+                var buffer = new int[wavReader.TotalSamples];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToAu_Should_Reproduce_Exact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 2000, sampleRate: 8000);
+                var destAuPath = Path.Combine(tempDirectory, "dest.au");
+
+                AudioCutter.Convert(sourcePath, destAuPath);
+
+                using var auReader = AuReader.Open(destAuPath);
+                auReader.Channels.Should().Be(2);
+                auReader.SampleRate.Should().Be(8000);
+                auReader.TotalSamples.Should().Be(2000);
+
+                var buffer = new int[auReader.TotalSamples * auReader.Channels];
+                auReader.ReadInterleavedSamples(buffer, (int)auReader.TotalSamples);
+
+                buffer.Should().Equal(interleavedSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithAuDestinationFormat_Should_Write_RequestedEncoding()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, interleavedSamples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.au");
+
+                AudioCutter.Convert(sourcePath, destPath, AuSampleFormat.MuLaw);
+
+                using var auReader = AuReader.Open(destPath);
+                auReader.IsMuLaw.Should().BeTrue();
+                auReader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[auReader.TotalSamples * auReader.Channels];
+                auReader.ReadInterleavedSamples(buffer, (int)auReader.TotalSamples);
+
+                var expected = interleavedSamples.Select(s =>
+                    EggEncoder.Codecs.Wav.G711Codec.DecodeMuLaw(EggEncoder.Codecs.Wav.G711Codec.EncodeMuLaw(s))).ToArray();
+                buffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithAuDestinationFormat_ToNonAuExtension_Should_Throw()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 10, sampleRate: 8000);
+                var destPath = Path.Combine(tempDirectory, "dest.flac");
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, AuSampleFormat.Float32);
 
                 act.Should().ThrowExactly<NotSupportedException>();
             }
