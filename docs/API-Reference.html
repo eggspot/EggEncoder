@@ -81,7 +81,7 @@
 {
     public NativeEncoder(ILogger&lt;NativeEncoder&gt; logger);
 }</code></pre>
-      <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code>, <code>.caf</code> (ALAC), <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code> (Vorbis), <code>.wv</code> (WavPack), <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
+      <p>Supported extensions for <code>Probe</code>: <code>.wav</code>, <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code>, <code>.au</code> (Sun AU), <code>.caf</code> (ALAC), <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code> (Vorbis), <code>.wv</code> (WavPack), <code>.mov</code>, <code>.mp4</code>. Unrecognized extensions throw <code>NotSupportedException</code>.</p>
 
       <h2>ServiceCollectionExtensions</h2>
       <pre><code class="language-csharp">public static class ServiceCollectionExtensions
@@ -116,6 +116,12 @@
     public static void Convert(string sourceFilePath, string destFilePath, AiffSampleFormat destinationAiffFormat);
     public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AiffSampleFormat destinationAiffFormat);
 
+    // AuSampleFormat overloads: same idea again, for a .au destination's on-disk encoding (Integer,
+    // the default, or Float32/Float64/MuLaw/ALaw). Also available via CutOptions.DestinationAuFormat
+    // for Cut; Mix/Concatenate don't have a dedicated AuSampleFormat overload yet either.
+    public static void Convert(string sourceFilePath, string destFilePath, AuSampleFormat destinationAuFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AuSampleFormat destinationAuFormat);
+
     // Mixes 2+ same-format sources with per-input gain; decodes every input fully into memory, concurrently.
     public static void Mix(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath);
     public static void Mix(IReadOnlyList&lt;MixInput&gt; inputs, string destFilePath, WavSampleFormat destinationWavFormat);
@@ -133,7 +139,7 @@
     public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
     public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan&lt;float&gt; interleavedSamples, int channels, int sampleRate);
 }</code></pre>
-      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code>, <code>.caf</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code>, <code>.wv</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
+      <p><code>Cut</code> decodes any supported source (<code>.wav</code>, <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code>, <code>.au</code>, <code>.caf</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.wma</code>, <code>.tta</code>, <code>.opus</code>, <code>.ogg</code>, <code>.wv</code>, or <code>.mov</code>/<code>.mp4</code> with a mono AAC-LC audio track) and writes any supported destination extension — source and destination don't need to match, so it can transcode while it trims. Returns <code>false</code> (and writes no file) if the requested range is entirely outside the source's duration.</p>
 
       <h2>WaveformCalculator</h2>
       <p>Namespace: <code>EggEncoder.Waveform</code>.</p>
@@ -265,13 +271,15 @@ public sealed class FirFilterTransform : IPcmTransform
     public FadeCurve FadeCurve { get; init; } = FadeCurve.Linear;
     public WavSampleFormat DestinationWavFormat { get; init; } = WavSampleFormat.Integer;
     public AiffSampleFormat DestinationAiffFormat { get; init; } = AiffSampleFormat.Integer;
+    public AuSampleFormat DestinationAuFormat { get; init; } = AuSampleFormat.Integer;
 }
 
 public readonly record struct MixInput(string FilePath, double Gain = 1.0);
 
 public enum WavSampleFormat { Integer, Float32, MuLaw, ALaw }
-public enum AiffSampleFormat { Integer, LittleEndianInteger, Float32, Float64, MuLaw, ALaw }</code></pre>
-      <p>A fade, if requested, runs over the retained range before any transform in <code>Pipeline</code>. <code>AudioCutter.Mix</code> requires every input to share the same channels/sample rate/bit depth, and decodes all of them fully into memory, concurrently — clip-length material, not multi-hour streams. <code>AudioCutter.Concatenate</code> has the same format-matching requirement. <code>WavSampleFormat</code> selects a <code>.wav</code> destination's on-disk encoding (see <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for the float-WAV walkthrough); it's ignored for every other destination format. <code>Float32</code> requires the destination's bit depth to already be 32; <code>MuLaw</code>/<code>ALaw</code> (G.711) require it to already be 16. <code>AiffSampleFormat</code> is the same idea for a <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code> destination — <code>LittleEndianInteger</code>/<code>Float32</code>/<code>Float64</code>/<code>MuLaw</code>/<code>ALaw</code> all write an AIFC container regardless of which of those three extensions is used; <code>Float32</code>/<code>Float64</code> require bit depth 32, <code>MuLaw</code>/<code>ALaw</code> require 16.</p>
+public enum AiffSampleFormat { Integer, LittleEndianInteger, Float32, Float64, MuLaw, ALaw }
+public enum AuSampleFormat { Integer, Float32, Float64, MuLaw, ALaw }</code></pre>
+      <p>A fade, if requested, runs over the retained range before any transform in <code>Pipeline</code>. <code>AudioCutter.Mix</code> requires every input to share the same channels/sample rate/bit depth, and decodes all of them fully into memory, concurrently — clip-length material, not multi-hour streams. <code>AudioCutter.Concatenate</code> has the same format-matching requirement. <code>WavSampleFormat</code> selects a <code>.wav</code> destination's on-disk encoding (see <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for the float-WAV walkthrough); it's ignored for every other destination format. <code>Float32</code> requires the destination's bit depth to already be 32; <code>MuLaw</code>/<code>ALaw</code> (G.711) require it to already be 16. <code>AiffSampleFormat</code> is the same idea for a <code>.aiff</code>/<code>.aif</code>/<code>.aifc</code> destination — <code>LittleEndianInteger</code>/<code>Float32</code>/<code>Float64</code>/<code>MuLaw</code>/<code>ALaw</code> all write an AIFC container regardless of which of those three extensions is used; <code>Float32</code>/<code>Float64</code> require bit depth 32, <code>MuLaw</code>/<code>ALaw</code> require 16. <code>AuSampleFormat</code> is the same idea again for a <code>.au</code> destination — it has no <code>LittleEndianInteger</code>-equivalent value at all (AU is always big-endian), otherwise the same bit-depth requirements as <code>AiffSampleFormat</code>.</p>
 
       <h3>FloatSampleConverter — <code>EggEncoder.Pcm</code></h3>
       <pre><code class="language-csharp">public static class FloatSampleConverter
@@ -408,6 +416,32 @@ public sealed class AiffWriter : IDisposable
 
 public enum AiffSampleFormat { Integer, LittleEndianInteger, Float32, Float64, MuLaw, ALaw }</code></pre>
       <p>Plain AIFF (FORM/AIFF, 8/16/24/32-bit signed integer PCM — 8-bit is signed, unlike WAV's unsigned convention) both read and write under <code>AiffSampleFormat.Integer</code>, the default — byte-for-byte what this type has always produced, under the <code>.aiff</code>/<code>.aif</code> extensions. <code>AiffReader</code> additionally reads AIFC (FORM/AIFC) under the same extensions plus <code>.aifc</code>, with no separate dispatch beyond that extension list — just an extra <code>compressionType</code> field it understands in COMM. Every other <code>AiffSampleFormat</code> value writes AIFC instead: <code>LittleEndianInteger</code> ('sowt'), <code>Float32</code>/<code>Float64</code> ('fl32'/'fl64', big-endian IEEE float decoded at this codebase's usual int32-native-range scale — both report <code>BitsPerSample</code> 32, since this project's <code>int[]</code> model has no 64-bit representation and 64 is purely fl64's on-disk coded width), and <code>MuLaw</code>/<code>ALaw</code> ('ulaw'/'alaw', G.711, via the same <code>G711Codec</code> the WAV side uses). AIFC's 'ima4' (QuickTime IMA4 ADPCM) compressionType is a real, commonly-produced one that is deliberately <strong>not</strong> decoded — a materially different bitstream from WAV's own IMA ADPCM — <code>Open</code> throws <code>NotSupportedException</code> naming it specifically. Samples are always exchanged as <code>int[]</code> at the native range for whatever bit depth is in play, the same convention WAV uses.</p>
+
+      <h3>AU — <code>EggEncoder.Codecs.Au</code></h3>
+      <pre><code class="language-csharp">public sealed class AuReader : IDisposable
+{
+    public static AuReader Open(string filePath);
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public bool IsFloatFormat { get; }
+    public bool IsFloat32 { get; }
+    public bool IsFloat64 { get; }
+    public bool IsALaw { get; }
+    public bool IsMuLaw { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+}
+
+public sealed class AuWriter : IDisposable
+{
+    public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+
+public enum AuSampleFormat { Integer, Float32, Float64, MuLaw, ALaw }</code></pre>
+      <p>Sun/NeXT AU (magic <code>.snd</code>, mime <code>audio/basic</code>) — a much simpler container than WAV/AIFF, with no chunk structure at all: one fixed 24-byte header, optionally followed by an annotation string (never parsed), then raw big-endian samples with no byte-alignment padding requirement. <code>AuSampleFormat.Integer</code> (the default) covers 8/16/24/32-bit signed integer PCM — AU's 8-bit is signed, the same convention AIFF uses, not WAV's unsigned one. <code>Float32</code>/<code>Float64</code> are big-endian IEEE float decoded at this codebase's usual int32-native-range scale — both report <code>BitsPerSample</code> 32, the same "no 64-bit representation in this project's <code>int[]</code> model" reasoning <code>AiffSampleFormat.Float64</code> already established. <code>MuLaw</code>/<code>ALaw</code> are G.711, via the same <code>G711Codec</code> the WAV and AIFF sides use. Every other defined AU encoding (G.721/G.722/G.723 ADPCM, fragmented samples) is real but obscure enough in practice that it's out of scope the same way AIFC's 'ima4' is — <code>Open</code> throws <code>NotSupportedException</code> naming the unrecognized encoding value. AU also has its own "unknown data size" sentinel a real streaming file can use; <code>AuReader</code> reads until end-of-file for it, though <code>AuWriter</code> never writes it (it always knows its exact <code>totalFrames</code> up front, like <code>WavWriter</code>/<code>AiffWriter</code>).</p>
 
       <h3>ALAC — <code>EggEncoder.Codecs.Alac</code></h3>
       <pre><code class="language-csharp">public static class AlacDecoder
