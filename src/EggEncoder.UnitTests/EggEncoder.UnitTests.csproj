@@ -31,6 +31,22 @@
     <None Include="Codecs\Aiff\fixture_alaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_ulaw_mono.aifc" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_ulaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s16be_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s16be_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s8_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s8_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s24be_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s24be_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s32be_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_s32be_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_f32be_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_f32be_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_f64be_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_f64be_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_mulaw_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_mulaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_alaw_mono.au" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Au\fixture_alaw_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\tone_mono.aac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Flac\sample.wav" CopyToOutputDirectory="Always" />
