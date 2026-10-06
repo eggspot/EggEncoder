@@ -34,7 +34,11 @@ namespace EggEncoder.Codecs.Wav
             var offset = 0;
             for (var channel = 0; channel < channels; channel++)
             {
-                var firstSample = (short)interleavedSamples[channel];
+                // Clamped, not just truncated, for the same reason QuantizeNibble clamps its own
+                // input -- an out-of-contract sample here would otherwise wrap silently (e.g.
+                // int.MinValue truncates to 0 via a raw (short) cast) rather than saturate like every
+                // other encode path in this project does for an out-of-range value.
+                var firstSample = (short)Math.Clamp(interleavedSamples[channel], short.MinValue, short.MaxValue);
                 channelStates[channel].Predictor = firstSample;
 
                 blockBytes[offset] = (byte)firstSample;

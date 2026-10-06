@@ -100,6 +100,14 @@ namespace EggEncoder.Codecs.Wav
         // ComputeDiff is exact and just as cheap.
         internal static int QuantizeNibble(ref ChannelState state, int sample)
         {
+            // Clamped defensively to this format's own documented 16-bit input contract, the same way
+            // G711Codec.ClampToTableIndex guards its own encode entry point against an out-of-contract
+            // caller -- without this, a sample of exactly int.MinValue makes delta also int.MinValue
+            // (state.Predictor is always already within short range), and Math.Abs(int.MinValue) throws
+            // OverflowException (confirmed by actually triggering it, not assumed) rather than this
+            // method degrading gracefully like every other encode path in this file does.
+            sample = Math.Clamp(sample, short.MinValue, short.MaxValue);
+
             var delta = sample - state.Predictor;
             var sign = delta < 0 ? 8 : 0;
             var magnitude = Math.Abs(delta);

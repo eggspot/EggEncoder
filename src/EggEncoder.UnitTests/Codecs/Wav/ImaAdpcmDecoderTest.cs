@@ -198,6 +198,27 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             state.Predictor.Should().BeGreaterThan(0);
         }
 
+        [Theory]
+        [InlineData(int.MinValue)]
+        [InlineData(int.MaxValue)]
+        public void QuantizeNibble_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw(int extremeSample)
+        {
+            // This format's own documented contract is 16-bit input, but nothing stops a caller from
+            // passing an out-of-range int anyway (WavWriter is a public type, reachable without going
+            // through AudioCutter's own pipeline, whose transforms are the only things conventionally
+            // guaranteeing an in-range value). Without clamping, int.MinValue specifically makes delta
+            // also int.MinValue (state.Predictor is always within short range already), and
+            // Math.Abs(int.MinValue) throws OverflowException -- confirmed by actually triggering it
+            // against a real WavWriter.Create + WriteInterleavedSamples call before this fix, not
+            // assumed. G711Codec.ClampToTableIndex already establishes the "clamp, don't crash, at an
+            // encode entry point" precedent this mirrors.
+            var state = new ImaAdpcmDecoder.ChannelState { Predictor = 0, StepIndex = 20 };
+
+            var act = () => ImaAdpcmDecoder.QuantizeNibble(ref state, extremeSample);
+
+            act.Should().NotThrow();
+        }
+
         [Fact]
         public void QuantizeNibble_CalledRepeatedly_Should_Track_A_Slowly_Varying_Signal_Closely()
         {
