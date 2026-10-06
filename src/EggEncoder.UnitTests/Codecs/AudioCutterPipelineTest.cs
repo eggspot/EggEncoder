@@ -1242,9 +1242,9 @@ namespace EggEncoder.UnitTests.Codecs
             // MS ADPCM is decode-only (IMA ADPCM has since gained encode support -- see
             // Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding below),
             // so it can only ever be the pipeline's SOURCE, never its destination -- this proves a
-            // PcmTransform genuinely runs on its decoded
-            // output, not just that an MS ADPCM source happens to be readable at all (already proven
-            // by AudioCutterTest's own bit-exact decode coverage).
+            // PcmTransform genuinely runs on its decoded output, not just that an MS ADPCM source
+            // happens to be readable at all (already proven by AudioCutterTest's own bit-exact decode
+            // coverage).
             var tempDirectory = CreateTempDirectory();
             try
             {

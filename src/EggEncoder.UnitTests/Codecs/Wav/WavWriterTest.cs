@@ -390,6 +390,60 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void WriteInterleavedSamples_ImaAdpcm_SpanningMultipleBlocks_Should_Reset_Predictor_At_Each_Block_Boundary()
+        {
+            // Every other test above uses fewer frames than one mono block (2041 samples, derived from
+            // the 1024-byte block align the same way WavWriter.CreateImaAdpcm does), so none of them
+            // can actually exercise what happens at a SECOND block's own boundary -- confirmed by
+            // mutation: temporarily removing ImaAdpcmEncoder's own per-block predictor reset left every
+            // other test in this file passing, including the real-ffmpeg bit-exact cross-check (decode
+            // always reads each block's header verbatim regardless of what the encoder's own internal
+            // state was, so two independent DECODERS agreeing with each other proves nothing about
+            // whether the ENCODER's quantizer choices were actually sound).
+            //
+            // Uses a genuine discontinuity exactly at the block boundary: silence for the whole of
+            // block 0, then a large, sustained jump starting at block 1's own first sample. If the
+            // predictor correctly resets to block 1's own true first raw sample (always written
+            // verbatim into that block's header, regardless), the quantizer should track the jump
+            // almost immediately; if it doesn't (carrying over block 0's near-zero ending state
+            // instead, the mutation above), the step size left over from block 0's own near-silent
+            // adaptation is also still small, so even with step size growing quickly under repeated
+            // maximum-magnitude nibbles, sample 6 of block 1 measured 533 off target under the mutation
+            // -- confirmed by actually running it, not assumed -- just over this test's own 500 bound.
+            const int samplesPerBlockMono = 2041;
+            var samples = new int[samplesPerBlockMono + 50];
+            for (var i = samplesPerBlockMono; i < samples.Length; i++)
+            {
+                samples[i] = 12000;
+            }
+
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.ImaAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer[samplesPerBlockMono].Should().Be(12000, "block 1's own header predictor is always its own raw first sample, verbatim, regardless of the encoder's internal state");
+
+                for (var i = samplesPerBlockMono + 1; i < samplesPerBlockMono + 10; i++)
+                {
+                    Math.Abs(buffer[i] - 12000).Should().BeLessThan(500, $"sample {i}, early in block 1, should already track the jump closely -- only possible if the predictor was reset to block 1's own first sample at the block boundary, not left near block 0's own ending state");
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void WriteInterleavedSamples_ImaAdpcm_WithoutCallingFinish_Should_Not_Write_The_Pending_Partial_Block()
         {
             // Finish() is what flushes a short final block (see the test above) -- confirms that
