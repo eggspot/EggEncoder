@@ -2,7 +2,6 @@ using EggEncoder.Codecs;
 using EggEncoder.Codecs.Au;
 using FluentAssertions;
 using System.Buffers.Binary;
-using System.Linq;
 using System.Text;
 
 namespace EggEncoder.UnitTests.Codecs.Au
