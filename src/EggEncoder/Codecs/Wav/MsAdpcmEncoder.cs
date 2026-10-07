@@ -44,8 +44,18 @@ namespace EggEncoder.Codecs.Wav
         // every file's own 'fmt ' chunk extension, since that's what every real encoder does and what
         // a correct, standards-compliant reader (including this project's own WavReader) expects to
         // find there regardless of which single pair a given block actually uses.
-        internal static readonly short[] Coeff1Table = [256, 512, 0, 192, 240, 460, 392];
-        internal static readonly short[] Coeff2Table = [0, -256, 0, 64, 0, -208, -232];
+        //
+        // Backed by private arrays, exposed only as ReadOnlySpan<short>: this is shared, static,
+        // process-lifetime state -- an internal (not private) mutable short[] field would let any
+        // other code in this same assembly silently corrupt the "standard" table for every future MS
+        // ADPCM encode, since a `readonly` array field only prevents reassigning the field itself,
+        // never mutating its contents. ReadOnlySpan's own indexer has no setter at all, so this is
+        // compiler-enforced, not just a naming convention.
+        private static readonly short[] _coeff1Table = [256, 512, 0, 192, 240, 460, 392];
+        private static readonly short[] _coeff2Table = [0, -256, 0, 64, 0, -208, -232];
+
+        internal static ReadOnlySpan<short> Coeff1Table => _coeff1Table;
+        internal static ReadOnlySpan<short> Coeff2Table => _coeff2Table;
 
         // Encodes exactly one block (samplesPerBlock frames, channels interleaved) from
         // interleavedSamples into blockBytes, sized to the caller's own block-align byte count.
