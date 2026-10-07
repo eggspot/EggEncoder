@@ -117,7 +117,7 @@ namespace EggEncoder.Codecs.Wav
         /// <c>MsAdpcmEncoder</c>/<c>MsAdpcmDecoder.CompressSample</c> respectively, buffered internally into
         /// fixed-size blocks (see their own doc comments) rather than written one sample at a time. For
         /// <see cref="WavSampleFormat.YamahaAdpcm"/>, also mono or stereo only and quantized into a 4-bit
-        /// nibble via <c>YamahaAdpcmEncoder</c>/<c>YamahaAdpcmEncoder.CompressSample</c>, but unlike
+        /// nibble via <c>YamahaAdpcmEncoder.CompressSample</c>, but unlike
         /// <see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> there's no block
         /// structure at all -- two samples are written per byte continuously as they arrive, with at most
         /// one trailing nibble (mono, odd frame count) held pending until <see cref="Finish"/>.
