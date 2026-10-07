@@ -17,7 +17,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
             var decodeStates = new MsAdpcmDecoder.ChannelState[1];
             var decoded = new int[samplesPerBlock];
-            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
+            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock, decodeStates, MsAdpcmEncoder.Coeff1Table.ToArray(), MsAdpcmEncoder.Coeff2Table.ToArray(), decoded);
 
             decoded[0].Should().Be(50, "frame 0 is the header's own sample2, written verbatim");
             decoded[1].Should().Be(100, "frame 1 is the header's own sample1, written verbatim");
@@ -54,7 +54,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
             var decodeStates = new MsAdpcmDecoder.ChannelState[2];
             var decoded = new int[samplesPerBlock * 2];
-            MsAdpcmDecoder.DecodeBlock(block, channels: 2, samplesPerBlock, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
+            MsAdpcmDecoder.DecodeBlock(block, channels: 2, samplesPerBlock, decodeStates, MsAdpcmEncoder.Coeff1Table.ToArray(), MsAdpcmEncoder.Coeff2Table.ToArray(), decoded);
 
             decoded[0].Should().Be(1000, "frame 0, channel 0 is its own raw header sample2");
             decoded[1].Should().Be(5000, "frame 0, channel 1 is its own raw header sample2");
@@ -162,7 +162,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
             var decodeStates = new MsAdpcmDecoder.ChannelState[1];
             var decoded = new int[10];
-            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
+            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table.ToArray(), MsAdpcmEncoder.Coeff2Table.ToArray(), decoded);
 
             decoded[0].Should().Be(expectedSaturated);
         }
@@ -187,7 +187,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
             var decodeStates = new MsAdpcmDecoder.ChannelState[1];
             var decoded = new int[10];
-            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
+            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table.ToArray(), MsAdpcmEncoder.Coeff2Table.ToArray(), decoded);
 
             decoded[1].Should().Be(expectedSaturated);
         }
