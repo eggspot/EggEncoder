@@ -36,6 +36,16 @@ namespace EggEncoder.Codecs
         /// full block is ready to encode, with the final block padded if needed) rather than one sample
         /// at a time -- see <c>ImaAdpcmEncoder</c>.
         /// </summary>
-        ImaAdpcm
+        ImaAdpcm,
+
+        /// <summary>
+        /// MS ADPCM (<c>WAVE_FORMAT_ADPCM</c>, 4 bits on disk). Requires the destination's bit depth
+        /// to be 16 (the input scale its quantizer expects) and mono or stereo only, matching
+        /// <c>WavReader</c>'s own decode-side restriction. Block-structured the same way
+        /// <see cref="ImaAdpcm"/> is, but a genuinely different algorithm -- linear prediction from a
+        /// coefficient pair written into the file's own <c>fmt</c> chunk extension, rather than
+        /// <see cref="ImaAdpcm"/>'s universal fixed step table -- see <c>MsAdpcmEncoder</c>.
+        /// </summary>
+        MsAdpcm
     }
 }

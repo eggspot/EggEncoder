@@ -10,6 +10,7 @@ namespace EggEncoder.Codecs.Wav
         private const int ALawFormatTag = 6;
         private const int MuLawFormatTag = 7;
         private const int ImaAdpcmFormatTag = 17;
+        private const int MsAdpcmFormatTag = 2;
 
         // A fixed block-align byte count (the whole multi-channel block, matching WAVEFORMATEX's own
         // nBlockAlign convention) rather than a caller-configurable one -- this project's other
@@ -20,6 +21,13 @@ namespace EggEncoder.Codecs.Wav
         // channel counts this format supports) -- (1024 - 4*channels) * 8 / (4*channels) + 1 is exact
         // for channels in {1, 2}, with no truncation to reason about.
         private const int ImaAdpcmBlockAlignBytes = 1024;
+
+        // Same 1024-byte choice as ImaAdpcmBlockAlignBytes, for the same reason (FFmpeg's own real
+        // ADPCM encoders share one block_size default/option across every ADPCM variant, confirmed
+        // from its adpcmenc.c source) -- the resulting samples-per-block differs from IMA ADPCM's own
+        // since MS ADPCM's block header (7 bytes/channel) and per-byte sample density (2 samples/byte
+        // mono, 1 frame/byte stereo, vs IMA's 8-sample/4-byte groups) are both genuinely different.
+        private const int MsAdpcmBlockAlignBytes = 1024;
 
         private readonly FileStream _stream;
         private readonly int _channels;
@@ -35,10 +43,16 @@ namespace EggEncoder.Codecs.Wav
         private int[] _adpcmPendingSamples = [];
         private int _adpcmPendingCount;
 
+        private readonly bool _isMsAdpcm;
+        private readonly int _msAdpcmSamplesPerBlock;
+        private readonly MsAdpcmDecoder.ChannelState[] _msAdpcmChannelStates = [];
+        private int[] _msAdpcmPendingSamples = [];
+        private int _msAdpcmPendingCount;
+
         private byte[] _rawBytes = [];
         private bool _disposed;
 
-        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock)
+        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock)
         {
             _stream = stream;
             _channels = channels;
@@ -56,12 +70,21 @@ namespace EggEncoder.Codecs.Wav
                 _adpcmChannelStates = new ImaAdpcmDecoder.ChannelState[channels];
                 _adpcmPendingSamples = new int[adpcmSamplesPerBlock * channels];
             }
+
+            _isMsAdpcm = isMsAdpcm;
+            _msAdpcmSamplesPerBlock = msAdpcmSamplesPerBlock;
+
+            if (isMsAdpcm)
+            {
+                _msAdpcmChannelStates = new MsAdpcmDecoder.ChannelState[channels];
+                _msAdpcmPendingSamples = new int[msAdpcmSamplesPerBlock * channels];
+            }
         }
 
         /// <param name="filePath">Destination path.</param>
         /// <param name="channels">Number of interleaved channels.</param>
         /// <param name="sampleRate">Sample rate in Hz.</param>
-        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/IMA ADPCM are always 8/4 bits on disk).</param>
+        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/the ADPCM variants are always 8/4 bits on disk).</param>
         /// <param name="totalFrames">Exact total frame count that will be written -- required up front since the RIFF header's size fields are written at creation time.</param>
         /// <param name="sampleFormat">
         /// Selects the on-disk encoding (see <see cref="WavSampleFormat"/>). For <see cref="WavSampleFormat.Float32"/>,
@@ -70,11 +93,11 @@ namespace EggEncoder.Codecs.Wav
         /// <see cref="EggEncoder.Pcm.FloatSampleConverter"/> uses), converted to an actual IEEE 754 float at
         /// write time. For <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>, each
         /// incoming sample is at the native 16-bit range, companded to one coded byte per sample via
-        /// <see cref="G711Codec"/>. For <see cref="WavSampleFormat.ImaAdpcm"/>, mono or stereo only, each
-        /// incoming sample is at the native 16-bit range and is quantized into a 4-bit nibble via
-        /// <c>ImaAdpcmEncoder</c>/<c>ImaAdpcmDecoder.QuantizeNibble</c>, buffered internally into fixed-size
-        /// blocks (see <see cref="WavSampleFormat.ImaAdpcm"/>'s own doc comment) rather than written one
-        /// sample at a time.
+        /// <see cref="G711Codec"/>. For <see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/>,
+        /// mono or stereo only, each incoming sample is at the native 16-bit range and is quantized into a
+        /// 4-bit nibble via <c>ImaAdpcmEncoder</c>/<c>ImaAdpcmDecoder.QuantizeNibble</c> or
+        /// <c>MsAdpcmEncoder</c>/<c>MsAdpcmDecoder.CompressSample</c> respectively, buffered internally into
+        /// fixed-size blocks (see their own doc comments) rather than written one sample at a time.
         /// </param>
         public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer)
         {
@@ -82,6 +105,7 @@ namespace EggEncoder.Codecs.Wav
             var isALaw = sampleFormat == WavSampleFormat.ALaw;
             var isMuLaw = sampleFormat == WavSampleFormat.MuLaw;
             var isImaAdpcm = sampleFormat == WavSampleFormat.ImaAdpcm;
+            var isMsAdpcm = sampleFormat == WavSampleFormat.MsAdpcm;
 
             if (isFloatFormat && bitsPerSample != 32)
             {
@@ -103,7 +127,17 @@ namespace EggEncoder.Codecs.Wav
                 throw new NotSupportedException($"'{filePath}' requests {channels} channels; IMA ADPCM encoding supports only mono and stereo");
             }
 
-            if (!isFloatFormat && !isALaw && !isMuLaw && !isImaAdpcm && bitsPerSample is not 8 and not 16 and not 24 and not 32)
+            if (isMsAdpcm && bitsPerSample != 16)
+            {
+                throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; MS ADPCM encoding requires 16-bit input samples");
+            }
+
+            if (isMsAdpcm && channels is not 1 and not 2)
+            {
+                throw new NotSupportedException($"'{filePath}' requests {channels} channels; MS ADPCM encoding supports only mono and stereo");
+            }
+
+            if (!isFloatFormat && !isALaw && !isMuLaw && !isImaAdpcm && !isMsAdpcm && bitsPerSample is not 8 and not 16 and not 24 and not 32)
             {
                 throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
             }
@@ -114,6 +148,11 @@ namespace EggEncoder.Codecs.Wav
                 if (isImaAdpcm)
                 {
                     return CreateImaAdpcm(stream, filePath, channels, sampleRate, totalFrames);
+                }
+
+                if (isMsAdpcm)
+                {
+                    return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames);
                 }
 
                 // G.711 is always 1 byte/sample on disk regardless of the 16-bit input scale its
@@ -160,7 +199,7 @@ namespace EggEncoder.Codecs.Wav
                 writer.Write("data"u8);
                 writer.Write((uint)dataSize);
 
-                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0);
+                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0);
             }
             catch
             {
@@ -207,7 +246,66 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0);
+        }
+
+        // MS ADPCM's block structure mirrors IMA ADPCM's own CreateImaAdpcm above in shape (a
+        // fixed-size header, a block-align derived sample count, a 'fact' chunk carrying the true
+        // frame total), but the header itself is genuinely different: a 1-byte predictor index per
+        // channel (always 0 here, see MsAdpcmEncoder's own doc comment), plus the file-level 'fmt '
+        // chunk extension additionally carries the full standard 7-pair coefficient table every real
+        // MS ADPCM file includes, which IMA ADPCM's own extension has no equivalent of at all.
+        private static WavWriter CreateMsAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames)
+        {
+            const int headerBytesPerChannel = 7;
+            var coeffCount = MsAdpcmEncoder.Coeff1Table.Length;
+
+            // Mono wastes the last nibble of its final data byte when the remaining sample count is
+            // odd (the same "wasted trailing nibble" pattern IMA ADPCM has) -- filling to capacity
+            // here always yields an even remaining count regardless (see the class-level reasoning
+            // this mirrors from ImaAdpcmBlockAlignBytes), so this encoder never actually needs to
+            // reason about that odd case itself, only WavReader's own decode side does.
+            var remainingBytes = MsAdpcmBlockAlignBytes - (headerBytesPerChannel * channels);
+            var samplesPerBlock = channels == 1 ? 2 + (remainingBytes * 2) : 2 + remainingBytes;
+
+            var blockCount = (totalFrames + samplesPerBlock - 1) / samplesPerBlock; // ceiling division -- 0 blocks for 0 frames
+            var dataSize = blockCount * MsAdpcmBlockAlignBytes;
+            var needsPadByte = dataSize % 2 != 0;
+
+            // base(16) + cbSize(2) + wSamplesPerBlock(2) + wNumCoef(2) + coeffCount * (Coeff1(2) + Coeff2(2))
+            var fmtChunkPayloadSize = 22 + (coeffCount * 4);
+            const int factChunkSize = 8 + 4;
+            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)riffSize);
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)fmtChunkPayloadSize);
+            writer.Write((ushort)MsAdpcmFormatTag);
+            writer.Write((ushort)channels);
+            writer.Write((uint)sampleRate);
+            writer.Write((uint)((long)sampleRate * MsAdpcmBlockAlignBytes / samplesPerBlock)); // nAvgBytesPerSec
+            writer.Write((ushort)MsAdpcmBlockAlignBytes);
+            writer.Write((ushort)4); // wBitsPerSample -- the coded width; WavReader reports the decoded 16-bit resolution instead
+            writer.Write((ushort)(4 + (coeffCount * 4))); // cbSize: wSamplesPerBlock(2) + wNumCoef(2) + the coefficient pairs themselves
+            writer.Write((ushort)samplesPerBlock);
+            writer.Write((ushort)coeffCount);
+            for (var i = 0; i < coeffCount; i++)
+            {
+                writer.Write(MsAdpcmEncoder.Coeff1Table[i]);
+                writer.Write(MsAdpcmEncoder.Coeff2Table[i]);
+            }
+
+            writer.Write("fact"u8);
+            writer.Write((uint)4);
+            writer.Write((uint)totalFrames);
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -220,6 +318,12 @@ namespace EggEncoder.Codecs.Wav
             if (_isImaAdpcm)
             {
                 WriteImaAdpcmInterleavedSamples(buffer, frameCount);
+                return;
+            }
+
+            if (_isMsAdpcm)
+            {
+                WriteMsAdpcmInterleavedSamples(buffer, frameCount);
                 return;
             }
 
@@ -318,11 +422,58 @@ namespace EggEncoder.Codecs.Wav
             _adpcmPendingCount = 0;
         }
 
+        // Mirrors WriteImaAdpcmInterleavedSamples exactly, just driving MS ADPCM's own pending buffer
+        // and block-align byte count instead.
+        private void WriteMsAdpcmInterleavedSamples(int[] buffer, int frameCount)
+        {
+            var framesConsumed = 0;
+            while (framesConsumed < frameCount)
+            {
+                var framesToBuffer = Math.Min(frameCount - framesConsumed, _msAdpcmSamplesPerBlock - _msAdpcmPendingCount);
+
+                Array.Copy(buffer, framesConsumed * _channels, _msAdpcmPendingSamples, _msAdpcmPendingCount * _channels, framesToBuffer * _channels);
+
+                _msAdpcmPendingCount += framesToBuffer;
+                framesConsumed += framesToBuffer;
+
+                if (_msAdpcmPendingCount == _msAdpcmSamplesPerBlock)
+                {
+                    EncodeAndWriteMsAdpcmBlock();
+                }
+            }
+        }
+
+        // Mirrors EncodeAndWriteImaAdpcmBlock exactly -- same "pad a short final block by repeating
+        // its own last real frame" reasoning applies unchanged, since WavReader stops reporting
+        // samples at the 'fact' chunk's true count for MS ADPCM too.
+        private void EncodeAndWriteMsAdpcmBlock()
+        {
+            for (var i = _msAdpcmPendingCount; i < _msAdpcmSamplesPerBlock; i++)
+            {
+                Array.Copy(_msAdpcmPendingSamples, (_msAdpcmPendingCount - 1) * _channels, _msAdpcmPendingSamples, i * _channels, _channels);
+            }
+
+            if (_rawBytes.Length < MsAdpcmBlockAlignBytes)
+            {
+                _rawBytes = new byte[MsAdpcmBlockAlignBytes];
+            }
+
+            MsAdpcmEncoder.EncodeBlock(_msAdpcmPendingSamples, _channels, _msAdpcmSamplesPerBlock, _msAdpcmChannelStates, _rawBytes.AsSpan(0, MsAdpcmBlockAlignBytes));
+            _stream.Write(_rawBytes, 0, MsAdpcmBlockAlignBytes);
+
+            _msAdpcmPendingCount = 0;
+        }
+
         public void Finish()
         {
             if (_isImaAdpcm && _adpcmPendingCount > 0)
             {
                 EncodeAndWriteImaAdpcmBlock();
+            }
+
+            if (_isMsAdpcm && _msAdpcmPendingCount > 0)
+            {
+                EncodeAndWriteMsAdpcmBlock();
             }
         }
 
