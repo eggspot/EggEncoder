@@ -678,7 +678,28 @@ namespace EggEncoder.Codecs.Wav
                     }
                     else
                     {
-                        _yamahaPendingByte = _stream.ReadByte();
+                        var b = _stream.ReadByte();
+                        if (b < 0)
+                        {
+                            // Genuinely truncated file -- the data chunk's own declared size (what
+                            // the framesAvailable bound above was computed from) claimed more bytes
+                            // than are actually present on disk. Stop cleanly at the last complete
+                            // frame rather than storing ReadByte's -1 EOF sentinel into
+                            // _yamahaPendingByte: confirmed by mutation testing that doing so doesn't
+                            // just decode a wrong-but-harmless nibble -- `(-1) & 0x0F` masks fine to
+                            // 15 for a LOW nibble, but a later `(-1) >> 4` for the matching HIGH
+                            // nibble is a signed arithmetic shift that stays -1, indexing
+                            // DiffLookup/IndexScale with a negative index and throwing
+                            // IndexOutOfRangeException. Mirrors the same "stop at a whole unit
+                            // boundary, never emit a partial one" contract
+                            // ReadFullyAdpcmBlock/ReadFullyMsAdpcmBlock already establish for IMA/MS
+                            // ADPCM's own block-level short reads.
+                            _bytesRead += bytesConsumedThisCall;
+                            _yamahaFramesProduced += frame;
+                            return frame;
+                        }
+
+                        _yamahaPendingByte = b;
                         bytesConsumedThisCall++;
                         nibble = _yamahaPendingByte & 0x0F;
                         _yamahaHasPendingHighNibble = true;

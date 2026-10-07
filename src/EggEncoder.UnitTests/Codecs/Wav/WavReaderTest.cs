@@ -889,6 +889,71 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_YamahaAdpcm_WithFewerBytesPhysicallyOnDiskThanTheDataChunkDeclares_Should_Stop_Without_Throwing_Or_DecodingGarbage()
+        {
+            // A genuinely different malformation from the test above: there, the 'data' chunk's own
+            // declared size was itself accurate (matched the real bytes on disk), just smaller than
+            // what the 'fact' chunk separately claimed. Here, the 'data' chunk's own declared size
+            // -- what ReadYamahaAdpcmInterleavedSamples' framesAvailable bound is computed from --
+            // overstates the file's real, physical length (e.g. a write that was interrupted after
+            // the header was already flushed). Without an explicit check, Stream.ReadByte()'s -1 EOF
+            // sentinel would get stored as a pending byte: its LOW nibble masks fine via `& 0x0F`,
+            // but the matching HIGH nibble read next is a signed `>> 4` that stays -1 (arithmetic
+            // shift, not masked) -- confirmed via mutation testing that this throws
+            // IndexOutOfRangeException indexing DiffLookup/IndexScale with a negative index, not just
+            // a quiet wrong-value bug. Mirrors the same short-read guard
+            // ReadFullyAdpcmBlock/ReadFullyMsAdpcmBlock already have for IMA/MS ADPCM's own
+            // block-level reads.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    const int declaredDataSize = 100; // the header claims 100 bytes...
+
+                    writer.Write("RIFF"u8);
+                    writer.Write((uint)(4 + (8 + 18) + (8 + declaredDataSize))); // WAVE + fmt chunk + data chunk header+payload
+                    writer.Write("WAVE"u8);
+                    writer.Write("fmt "u8);
+                    writer.Write((uint)18);
+                    writer.Write((ushort)32); // Yamaha ADPCM format tag
+                    writer.Write((ushort)1); // mono
+                    writer.Write((uint)44100);
+                    writer.Write((uint)22050);
+                    writer.Write((ushort)4);
+                    writer.Write((ushort)4);
+                    writer.Write((ushort)0); // cbSize
+                    writer.Write("data"u8);
+                    writer.Write((uint)declaredDataSize);
+                    writer.Write(new byte[10]); // ...but only 10 real bytes ever get written
+                }
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.TotalSamples.Should().Be(200, "the data-chunk-derived fallback total (10 declared bytes * 2 nibbles/byte) is itself computed from the declared size, same as any other malformed-header case");
+
+                var buffer = new int[4096];
+                var totalDecoded = 0;
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                        totalDecoded += framesRead;
+                    }
+                };
+
+                act.Should().NotThrow();
+                totalDecoded.Should().Be(20, "only the 10 real bytes on disk (20 nibbles) can ever be decoded, regardless of what the header's own declared data chunk size claimed");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_WithUnsupportedFormatTag_Should_Throw()
         {
             // Format tag 20 (ITU G.723 ADPCM) is a real, legitimately different, still-unsupported
