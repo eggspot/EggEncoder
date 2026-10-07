@@ -102,7 +102,7 @@ namespace EggEncoder.Codecs.Wav
         /// <param name="filePath">Destination path.</param>
         /// <param name="channels">Number of interleaved channels.</param>
         /// <param name="sampleRate">Sample rate in Hz.</param>
-        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/the ADPCM variants are always 8/4 bits on disk).</param>
+        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/>/<see cref="WavSampleFormat.YamahaAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/the ADPCM variants are always 8/4 bits on disk).</param>
         /// <param name="totalFrames">Exact total frame count that will be written -- required up front since the RIFF header's size fields are written at creation time.</param>
         /// <param name="sampleFormat">
         /// Selects the on-disk encoding (see <see cref="WavSampleFormat"/>). For <see cref="WavSampleFormat.Float32"/>,
@@ -115,7 +115,12 @@ namespace EggEncoder.Codecs.Wav
         /// mono or stereo only, each incoming sample is at the native 16-bit range and is quantized into a
         /// 4-bit nibble via <c>ImaAdpcmEncoder</c>/<c>ImaAdpcmDecoder.QuantizeNibble</c> or
         /// <c>MsAdpcmEncoder</c>/<c>MsAdpcmDecoder.CompressSample</c> respectively, buffered internally into
-        /// fixed-size blocks (see their own doc comments) rather than written one sample at a time.
+        /// fixed-size blocks (see their own doc comments) rather than written one sample at a time. For
+        /// <see cref="WavSampleFormat.YamahaAdpcm"/>, also mono or stereo only and quantized into a 4-bit
+        /// nibble via <c>YamahaAdpcmEncoder</c>/<c>YamahaAdpcmEncoder.CompressSample</c>, but unlike
+        /// <see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> there's no block
+        /// structure at all -- two samples are written per byte continuously as they arrive, with at most
+        /// one trailing nibble (mono, odd frame count) held pending until <see cref="Finish"/>.
         /// </param>
         public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer)
         {
