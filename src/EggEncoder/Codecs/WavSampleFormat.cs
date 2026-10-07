@@ -46,6 +46,16 @@ namespace EggEncoder.Codecs
         /// coefficient pair written into the file's own <c>fmt</c> chunk extension, rather than
         /// <see cref="ImaAdpcm"/>'s universal fixed step table -- see <c>MsAdpcmEncoder</c>.
         /// </summary>
-        MsAdpcm
+        MsAdpcm,
+
+        /// <summary>
+        /// Yamaha ADPCM (<c>WAVE_FORMAT_YAMAHA_ADPCM</c>, 4 bits on disk). Requires the destination's
+        /// bit depth to be 16 (the input scale its quantizer expects) and mono or stereo only,
+        /// matching <c>WavReader</c>'s own decode-side restriction. Unlike <see cref="ImaAdpcm"/>/
+        /// <see cref="MsAdpcm"/>, this format has no block structure at all -- predictor/step state
+        /// carries continuously for the whole stream, with no per-block header or
+        /// <c>wSamplesPerBlock</c> 'fmt' chunk extension -- see <c>YamahaAdpcmEncoder</c>.
+        /// </summary>
+        YamahaAdpcm
     }
 }

@@ -10,6 +10,7 @@ namespace EggEncoder.Codecs.Wav
         private const int ALawFormatTag = 6;
         private const int MuLawFormatTag = 7;
         private const int ImaAdpcmFormatTag = 17;
+        private const int YamahaAdpcmFormatTag = 32;
         private const int WaveFormatExtensibleTag = 0xFFFE;
 
         private readonly FileStream _stream;
@@ -28,6 +29,17 @@ namespace EggEncoder.Codecs.Wav
         private readonly short[] _msAdpcmCoeff1 = [];
         private readonly short[] _msAdpcmCoeff2 = [];
         private readonly MsAdpcmDecoder.ChannelState[] _msAdpcmChannelStates = [];
+
+        // Yamaha ADPCM has no block structure at all (see YamahaAdpcmDecoder's own doc comment), so
+        // there's no block-align/samples-per-block pair or pending-block buffer to track here, unlike
+        // IMA/MS ADPCM above -- just per-channel state that carries continuously for the whole stream,
+        // plus the one nibble left over whenever an odd number of nibbles has been consumed so far
+        // (only possible for mono, since stereo always consumes nibbles in complete pairs per frame).
+        private readonly bool _isYamahaAdpcm;
+        private readonly YamahaAdpcmDecoder.ChannelState[] _yamahaChannelStates = [];
+        private int _yamahaPendingByte;
+        private bool _yamahaHasPendingHighNibble;
+        private long _yamahaFramesProduced;
 
         private long _bytesRead;
         private byte[] _rawBytes = [];
@@ -49,7 +61,7 @@ namespace EggEncoder.Codecs.Wav
         private int _msAdpcmPendingCount;
         private long _msAdpcmFramesProduced;
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2)
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2, bool isYamahaAdpcm)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
@@ -64,6 +76,7 @@ namespace EggEncoder.Codecs.Wav
             _msAdpcmSamplesPerBlock = msAdpcmSamplesPerBlock;
             _msAdpcmCoeff1 = msAdpcmCoeff1;
             _msAdpcmCoeff2 = msAdpcmCoeff2;
+            _isYamahaAdpcm = isYamahaAdpcm;
 
             Channels = channels;
             SampleRate = sampleRate;
@@ -80,6 +93,11 @@ namespace EggEncoder.Codecs.Wav
             {
                 _msAdpcmChannelStates = new MsAdpcmDecoder.ChannelState[channels];
                 _msAdpcmPendingSamples = new int[msAdpcmSamplesPerBlock * channels];
+            }
+
+            if (isYamahaAdpcm)
+            {
+                _yamahaChannelStates = new YamahaAdpcmDecoder.ChannelState[channels];
             }
 
             _stream.Seek(dataChunkStart, SeekOrigin.Begin);
@@ -102,6 +120,8 @@ namespace EggEncoder.Codecs.Wav
         public bool IsImaAdpcm => _isAdpcm;
 
         public bool IsMsAdpcm => _isMsAdpcm;
+
+        public bool IsYamahaAdpcm => _isYamahaAdpcm;
 
         public static WavReader Open(string filePath)
         {
@@ -134,6 +154,7 @@ namespace EggEncoder.Codecs.Wav
                 var msAdpcmSamplesPerBlock = 0;
                 var msAdpcmCoeff1 = Array.Empty<short>();
                 var msAdpcmCoeff2 = Array.Empty<short>();
+                var isYamahaAdpcm = false;
                 long dataChunkStart = 0;
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
@@ -148,9 +169,9 @@ namespace EggEncoder.Codecs.Wav
                     if (chunkId == "fmt ")
                     {
                         var formatTag = reader.ReadUInt16();
-                        if (formatTag != PcmFormatTag && formatTag != MsAdpcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ALawFormatTag && formatTag != MuLawFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
+                        if (formatTag != PcmFormatTag && formatTag != MsAdpcmFormatTag && formatTag != IeeeFloatFormatTag && formatTag != ALawFormatTag && formatTag != MuLawFormatTag && formatTag != ImaAdpcmFormatTag && formatTag != YamahaAdpcmFormatTag && formatTag != WaveFormatExtensibleTag)
                         {
-                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, G.711 A-law/mu-law, IMA ADPCM, and MS ADPCM are supported");
+                            throw new NotSupportedException($"'{filePath}' uses unsupported WAV format tag {formatTag}; only PCM, IEEE float, G.711 A-law/mu-law, IMA ADPCM, MS ADPCM, and Yamaha ADPCM are supported");
                         }
 
                         isFloatFormat = formatTag == IeeeFloatFormatTag;
@@ -158,6 +179,7 @@ namespace EggEncoder.Codecs.Wav
                         isMuLaw = formatTag == MuLawFormatTag;
                         isAdpcm = formatTag == ImaAdpcmFormatTag;
                         isMsAdpcm = formatTag == MsAdpcmFormatTag;
+                        isYamahaAdpcm = formatTag == YamahaAdpcmFormatTag;
 
                         channels = reader.ReadUInt16();
                         sampleRate = (int)reader.ReadUInt32();
@@ -273,7 +295,7 @@ namespace EggEncoder.Codecs.Wav
                     // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
                 }
 
                 if (isMsAdpcm)
@@ -309,7 +331,29 @@ namespace EggEncoder.Codecs.Wav
                     // back to the data chunk's own block count only if it's missing entirely.
                     var msAdpcmTotalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * msAdpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false);
+                }
+
+                if (isYamahaAdpcm)
+                {
+                    if (channels is not 1 and not 2)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has {channels} channels; only mono and stereo Yamaha ADPCM are supported");
+                    }
+
+                    // No block structure, so no block-align-derived bound to check here (unlike IMA/MS
+                    // ADPCM above) -- every nibble in the data chunk is real audio data (or, for mono
+                    // with an odd total frame count, one trailing zero-pad nibble YamahaAdpcmEncoder's
+                    // own Finish() path writes) with no larger block padding to reason about.
+                    //
+                    // Same 'fact' chunk convention as every other non-PCM format here -- authoritative
+                    // when present; the fallback derives frames from the raw nibble count (two nibbles
+                    // per byte) divided across channels, which undercounts by at most the one trailing
+                    // pad nibble mono can have, matching the real on-disk data exactly whenever 'fact'
+                    // is absent.
+                    var yamahaTotalSamples = factChunkTotalSamples ?? (dataChunkLength * 2) / channels.Value;
+
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true);
                 }
 
                 if (isALaw || isMuLaw)
@@ -327,7 +371,7 @@ namespace EggEncoder.Codecs.Wav
                     // byte count divided evenly across channels.
                     var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
                 }
 
                 if (isFloatFormat)
@@ -344,7 +388,7 @@ namespace EggEncoder.Codecs.Wav
 
                 var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: []);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
             }
             catch
             {
@@ -363,6 +407,11 @@ namespace EggEncoder.Codecs.Wav
             if (_isMsAdpcm)
             {
                 return ReadMsAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
+            }
+
+            if (_isYamahaAdpcm)
+            {
+                return ReadYamahaAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
             }
 
             // G.711 always decodes to 16-bit resolution (BitsPerSample) but is only ever 1 coded byte
@@ -593,6 +642,56 @@ namespace EggEncoder.Codecs.Wav
 
                 return totalBytesRead;
             }
+        }
+
+        // Yamaha ADPCM has no block structure (see YamahaAdpcmDecoder's own doc comment), so unlike
+        // ReadAdpcmInterleavedSamples/ReadMsAdpcmInterleavedSamples there's no pending-block buffer
+        // here -- just the one leftover high nibble carried across calls whenever an odd number of
+        // nibbles has been consumed so far (only possible for mono; stereo always consumes nibbles in
+        // complete pairs per frame). Bounds the frame count to decode by both the 'fact'-chunk-
+        // authoritative remaining total AND the bytes actually left in the data chunk (plus any
+        // already-buffered pending nibble), so a truncated/malformed file degrades to returning fewer
+        // frames rather than reading past the data chunk.
+        private int ReadYamahaAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
+        {
+            var remainingBytes = _dataChunkLength - _bytesRead;
+            var availableNibbles = (remainingBytes * 2) + (_yamahaHasPendingHighNibble ? 1 : 0);
+            var framesAvailable = availableNibbles / Channels;
+            var framesToRead = (int)Math.Min(Math.Min(maxSamplesPerChannel, TotalSamples - _yamahaFramesProduced), framesAvailable);
+
+            if (framesToRead <= 0)
+            {
+                return 0;
+            }
+
+            var bytesConsumedThisCall = 0;
+
+            for (var frame = 0; frame < framesToRead; frame++)
+            {
+                for (var channel = 0; channel < Channels; channel++)
+                {
+                    int nibble;
+                    if (_yamahaHasPendingHighNibble)
+                    {
+                        nibble = _yamahaPendingByte >> 4;
+                        _yamahaHasPendingHighNibble = false;
+                    }
+                    else
+                    {
+                        _yamahaPendingByte = _stream.ReadByte();
+                        bytesConsumedThisCall++;
+                        nibble = _yamahaPendingByte & 0x0F;
+                        _yamahaHasPendingHighNibble = true;
+                    }
+
+                    buffer[(frame * Channels) + channel] = YamahaAdpcmDecoder.ExpandNibble(ref _yamahaChannelStates[channel], nibble);
+                }
+            }
+
+            _bytesRead += bytesConsumedThisCall;
+            _yamahaFramesProduced += framesToRead;
+
+            return framesToRead;
         }
 
         public void Dispose()

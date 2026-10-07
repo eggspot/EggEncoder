@@ -741,12 +741,161 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_YamahaAdpcmMono_Should_Decode_BitExact_Against_FfmpegGroundTruth()
+        {
+            // Same rationale as the IMA/MS ADPCM cross-checks above -- a from-scratch implementation
+            // of a well-standardized algorithm, bit-exact against a real ffmpeg-produced file decoded
+            // by ffmpeg's own independent decoder.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(1);
+            wavReader.SampleRate.Should().Be(44100);
+            wavReader.BitsPerSample.Should().Be(16, "Yamaha ADPCM decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            wavReader.TotalSamples.Should().Be(88200, "the file's own 'fact' chunk is the authoritative total, trimming the data chunk's own trailing padding");
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcmStereo_Should_Decode_BitExact_Against_FfmpegGroundTruth()
+        {
+            // Same rationale as the mono case, but this is the one real file that exercises the
+            // low-nibble=channel-0/high-nibble=channel-1 per-frame interleaving specifically (two
+            // different source tones, so a channel-swap or cross-contamination bug would be
+            // immediately visible as wrong pitch/phase in one channel, not just a subtly-off sample).
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_stereo.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_stereo_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(2);
+            wavReader.TotalSamples.Should().Be(88200);
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            // Yamaha ADPCM has no block structure at all, so unlike the IMA/MS ADPCM analogues of this
+            // test, the thing actually being exercised here is the one-nibble-pending-across-calls
+            // carry (YamahaAdpcmDecoder's own doc comment) at arbitrary, non-byte-aligned buffer
+            // boundaries -- a buffer size that's odd relative to channel count forces a high nibble to
+            // be carried from one ReadInterleavedSamples call into the next repeatedly.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37];
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcmWav_IsYamahaAdpcm_Should_Be_True_And_OtherFormatFlags_Should_Be_False()
+        {
+            using var wavReader = WavReader.Open(Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav"));
+
+            wavReader.IsYamahaAdpcm.Should().BeTrue();
+            wavReader.IsImaAdpcm.Should().BeFalse();
+            wavReader.IsMsAdpcm.Should().BeFalse();
+            wavReader.IsALaw.Should().BeFalse();
+            wavReader.IsMuLaw.Should().BeFalse();
+            wavReader.IsFloatFormat.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_With_UnsupportedChannelCount_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 3, sampleRate: 44100, totalSamples: 1, dataSize: 4);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_WithoutFactChunk_Should_FallBack_To_DataChunkDerivedTotal()
+        {
+            // The 'fact' chunk is the preferred, authoritative source for TotalSamples, but it's not
+            // structurally required by the format tag itself -- a file missing it entirely should
+            // still decode using the raw nibble-count-derived formula instead of failing outright.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // mono: 100 bytes -> 200 nibbles -> 200 frames (channels=1).
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, totalSamples: null, dataSize: 100);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.TotalSamples.Should().Be(200);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_WithTruncatedData_Should_Stop_Without_Throwing()
+        {
+            // A genuinely malformed input -- a 'fact' chunk total claiming far more frames than the
+            // data chunk's own byte count can actually supply -- is one this project doesn't try to
+            // recover partial data from: ReadInterleavedSamples should just stop cleanly (return 0
+            // once exhausted) rather than throw or read out of bounds.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // mono: 10 bytes -> only 20 real frames available, but 'fact' claims 1000.
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, totalSamples: 1000, dataSize: 10);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[4096];
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                    }
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_WithUnsupportedFormatTag_Should_Throw()
         {
             // Format tag 20 (ITU G.723 ADPCM) is a real, legitimately different, still-unsupported
-            // format -- confirms the validation that lets PCM/float/G.711/IMA-ADPCM/MS-ADPCM through
-            // continues to reject everything else, now that MS ADPCM's own tag (2) has been added to
-            // that allow-list (format tag 2 was this test's own example before MS ADPCM landed).
+            // format -- confirms the validation that lets PCM/float/G.711/IMA-ADPCM/MS-ADPCM/Yamaha-
+            // ADPCM through continues to reject everything else, now that MS ADPCM's own tag (2) has
+            // been added to that allow-list (format tag 2 was this test's own example before MS ADPCM
+            // landed).
             var filePath = Path.GetTempFileName();
             try
             {
