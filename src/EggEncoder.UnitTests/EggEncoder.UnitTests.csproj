@@ -93,6 +93,14 @@
     <None Include="Codecs\Wav\sample_ms_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ms_adpcm_stereo.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ms_adpcm_stereo_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_yamaha_adpcm_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_yamaha_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_yamaha_adpcm_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\sample_yamaha_adpcm_stereo_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\yamaha_adpcm_encoded_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\yamaha_adpcm_encoded_mono_expected.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\yamaha_adpcm_encoded_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Wav\yamaha_adpcm_encoded_stereo_expected.pcm" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>

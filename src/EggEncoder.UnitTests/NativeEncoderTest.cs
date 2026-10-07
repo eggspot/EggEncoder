@@ -18,6 +18,7 @@ namespace EggEncoder.UnitTests
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _msAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
+        private static readonly string _yamahaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
         private static readonly string _muLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
         private static readonly string _aLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
         private static readonly string _movFixturePath = Path.GetFullPath("Codecs/Mov/test.mov");
@@ -96,6 +97,28 @@ namespace EggEncoder.UnitTests
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.DurationInSamples.Should().Be(44100);
             probeResult.TimeBase.Should().Be("1/22050");
+        }
+
+        [Fact]
+        public async Task Probe_YamahaAdpcmWavFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var probeResult = await _nativeEncoder.Probe(_yamahaAdpcmWavFixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_yamahaAdpcmWavFixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("adpcm_yamaha");
+            probeResult.CodecLongName.Should().Be("ADPCM Yamaha");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(88200);
+            probeResult.TimeBase.Should().Be("1/44100");
         }
 
         [Fact]

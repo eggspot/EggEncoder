@@ -11,6 +11,7 @@ namespace EggEncoder.Codecs.Wav
         private const int MuLawFormatTag = 7;
         private const int ImaAdpcmFormatTag = 17;
         private const int MsAdpcmFormatTag = 2;
+        private const int YamahaAdpcmFormatTag = 32;
 
         // A fixed block-align byte count (the whole multi-channel block, matching WAVEFORMATEX's own
         // nBlockAlign convention) rather than a caller-configurable one -- this project's other
@@ -49,10 +50,20 @@ namespace EggEncoder.Codecs.Wav
         private int[] _msAdpcmPendingSamples = [];
         private int _msAdpcmPendingCount;
 
+        // Yamaha ADPCM has no block structure (see YamahaAdpcmDecoder's own doc comment), so there's
+        // no pending-block buffer here, unlike IMA/MS ADPCM above -- just per-channel state carried
+        // continuously for the whole stream, plus the one nibble left over whenever an odd number of
+        // nibbles has been written so far (only possible for mono; stereo always writes nibbles in
+        // complete pairs per frame), flushed zero-padded by Finish().
+        private readonly bool _isYamahaAdpcm;
+        private readonly YamahaAdpcmDecoder.ChannelState[] _yamahaChannelStates = [];
+        private int _yamahaPendingNibble;
+        private bool _yamahaHasPendingNibble;
+
         private byte[] _rawBytes = [];
         private bool _disposed;
 
-        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock)
+        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock, bool isYamahaAdpcm)
         {
             _stream = stream;
             _channels = channels;
@@ -79,12 +90,19 @@ namespace EggEncoder.Codecs.Wav
                 _msAdpcmChannelStates = new MsAdpcmDecoder.ChannelState[channels];
                 _msAdpcmPendingSamples = new int[msAdpcmSamplesPerBlock * channels];
             }
+
+            _isYamahaAdpcm = isYamahaAdpcm;
+
+            if (isYamahaAdpcm)
+            {
+                _yamahaChannelStates = new YamahaAdpcmDecoder.ChannelState[channels];
+            }
         }
 
         /// <param name="filePath">Destination path.</param>
         /// <param name="channels">Number of interleaved channels.</param>
         /// <param name="sampleRate">Sample rate in Hz.</param>
-        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/the ADPCM variants are always 8/4 bits on disk).</param>
+        /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32 for <see cref="WavSampleFormat.Integer"/>; must be 32 for <see cref="WavSampleFormat.Float32"/>; must be 16 for <see cref="WavSampleFormat.MuLaw"/>/<see cref="WavSampleFormat.ALaw"/>/<see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/>/<see cref="WavSampleFormat.YamahaAdpcm"/> (the native range their companding formula/quantizer expects, even though G.711/the ADPCM variants are always 8/4 bits on disk).</param>
         /// <param name="totalFrames">Exact total frame count that will be written -- required up front since the RIFF header's size fields are written at creation time.</param>
         /// <param name="sampleFormat">
         /// Selects the on-disk encoding (see <see cref="WavSampleFormat"/>). For <see cref="WavSampleFormat.Float32"/>,
@@ -97,7 +115,12 @@ namespace EggEncoder.Codecs.Wav
         /// mono or stereo only, each incoming sample is at the native 16-bit range and is quantized into a
         /// 4-bit nibble via <c>ImaAdpcmEncoder</c>/<c>ImaAdpcmDecoder.QuantizeNibble</c> or
         /// <c>MsAdpcmEncoder</c>/<c>MsAdpcmDecoder.CompressSample</c> respectively, buffered internally into
-        /// fixed-size blocks (see their own doc comments) rather than written one sample at a time.
+        /// fixed-size blocks (see their own doc comments) rather than written one sample at a time. For
+        /// <see cref="WavSampleFormat.YamahaAdpcm"/>, also mono or stereo only and quantized into a 4-bit
+        /// nibble via <c>YamahaAdpcmEncoder.CompressSample</c>, but unlike
+        /// <see cref="WavSampleFormat.ImaAdpcm"/>/<see cref="WavSampleFormat.MsAdpcm"/> there's no block
+        /// structure at all -- two samples are written per byte continuously as they arrive, with at most
+        /// one trailing nibble (mono, odd frame count) held pending until <see cref="Finish"/>.
         /// </param>
         public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer)
         {
@@ -106,6 +129,7 @@ namespace EggEncoder.Codecs.Wav
             var isMuLaw = sampleFormat == WavSampleFormat.MuLaw;
             var isImaAdpcm = sampleFormat == WavSampleFormat.ImaAdpcm;
             var isMsAdpcm = sampleFormat == WavSampleFormat.MsAdpcm;
+            var isYamahaAdpcm = sampleFormat == WavSampleFormat.YamahaAdpcm;
 
             if (isFloatFormat && bitsPerSample != 32)
             {
@@ -137,7 +161,17 @@ namespace EggEncoder.Codecs.Wav
                 throw new NotSupportedException($"'{filePath}' requests {channels} channels; MS ADPCM encoding supports only mono and stereo");
             }
 
-            if (!isFloatFormat && !isALaw && !isMuLaw && !isImaAdpcm && !isMsAdpcm && bitsPerSample is not 8 and not 16 and not 24 and not 32)
+            if (isYamahaAdpcm && bitsPerSample != 16)
+            {
+                throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; Yamaha ADPCM encoding requires 16-bit input samples");
+            }
+
+            if (isYamahaAdpcm && channels is not 1 and not 2)
+            {
+                throw new NotSupportedException($"'{filePath}' requests {channels} channels; Yamaha ADPCM encoding supports only mono and stereo");
+            }
+
+            if (!isFloatFormat && !isALaw && !isMuLaw && !isImaAdpcm && !isMsAdpcm && !isYamahaAdpcm && bitsPerSample is not 8 and not 16 and not 24 and not 32)
             {
                 throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
             }
@@ -153,6 +187,11 @@ namespace EggEncoder.Codecs.Wav
                 if (isMsAdpcm)
                 {
                     return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames);
+                }
+
+                if (isYamahaAdpcm)
+                {
+                    return CreateYamahaAdpcm(stream, channels, sampleRate, totalFrames);
                 }
 
                 // G.711 is always 1 byte/sample on disk regardless of the 16-bit input scale its
@@ -199,7 +238,7 @@ namespace EggEncoder.Codecs.Wav
                 writer.Write("data"u8);
                 writer.Write((uint)dataSize);
 
-                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0);
+                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false);
             }
             catch
             {
@@ -246,7 +285,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false);
         }
 
         // MS ADPCM's block structure mirrors IMA ADPCM's own CreateImaAdpcm above in shape (a
@@ -305,7 +344,55 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock, isYamahaAdpcm: false);
+        }
+
+        // Yamaha ADPCM has no block structure at all (see YamahaAdpcmDecoder's own doc comment), so --
+        // unlike CreateImaAdpcm/CreateMsAdpcm above -- the data chunk's exact size is known directly
+        // from totalFrames with no block-quantization padding to reason about: two nibbles per byte,
+        // rounded up by at most the one trailing zero-pad nibble mono needs for an odd total frame
+        // count (stereo always has an even total nibble count, one frame per byte, so it never pads).
+        // No 'fmt' chunk extension is needed either -- confirmed directly from a real ffmpeg-produced
+        // fixture's own bytes, whose 'fmt' chunk carries cbSize=0 with no further extension data.
+        private static WavWriter CreateYamahaAdpcm(FileStream stream, int channels, int sampleRate, long totalFrames)
+        {
+            var totalNibbles = totalFrames * channels;
+            var dataSize = (totalNibbles + 1) / 2; // ceiling division
+            var needsPadByte = dataSize % 2 != 0;
+
+            const int fmtChunkPayloadSize = 18; // base(16) + cbSize(2)
+            const int factChunkSize = 8 + 4;
+            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+
+            // Purely informational -- this format has no real block structure to align to, so no
+            // decode logic depends on this value at all (unlike IMA/MS ADPCM's own nBlockAlign, which
+            // WavReader needs to size its block buffer). 4 bytes/sample-pair-of-channels at 4 bits/
+            // sample is a reasonable, self-consistent choice; real-world tools only ever treat it as
+            // advisory metadata for this format.
+            const int blockAlign = 4;
+            var byteRate = (long)sampleRate * channels / 2; // 4 bits/sample on disk
+
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)riffSize);
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)fmtChunkPayloadSize);
+            writer.Write((ushort)YamahaAdpcmFormatTag);
+            writer.Write((ushort)channels);
+            writer.Write((uint)sampleRate);
+            writer.Write((uint)byteRate);
+            writer.Write((ushort)blockAlign);
+            writer.Write((ushort)4); // wBitsPerSample -- the coded width; WavReader reports the decoded 16-bit resolution instead
+            writer.Write((ushort)0); // cbSize: no further 'fmt ' extension data for Yamaha ADPCM
+            writer.Write("fact"u8);
+            writer.Write((uint)4);
+            writer.Write((uint)totalFrames);
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: true);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -324,6 +411,12 @@ namespace EggEncoder.Codecs.Wav
             if (_isMsAdpcm)
             {
                 WriteMsAdpcmInterleavedSamples(buffer, frameCount);
+                return;
+            }
+
+            if (_isYamahaAdpcm)
+            {
+                WriteYamahaAdpcmInterleavedSamples(buffer, frameCount);
                 return;
             }
 
@@ -464,6 +557,49 @@ namespace EggEncoder.Codecs.Wav
             _msAdpcmPendingCount = 0;
         }
 
+        // Yamaha ADPCM has no block structure, so there's no WriteImaAdpcmInterleavedSamples-style
+        // pending-block buffer to drive -- just the nibble stream itself. Each sample's nibble is
+        // computed directly via YamahaAdpcmEncoder.CompressSample (a closed-form formula, not a
+        // search -- see its own doc comment) and packed two-per-byte in the exact order
+        // YamahaAdpcmDecoder consumes them (channel = sample index % channels, matching the flat
+        // interleaved buffer's own frame-major/channel-minor layout): low nibble first, high nibble
+        // second. A nibble left pending across calls (only possible for mono with an odd total frame
+        // count so far) is carried in _yamahaPendingNibble/_yamahaHasPendingNibble and flushed,
+        // zero-padded, by Finish() below.
+        private void WriteYamahaAdpcmInterleavedSamples(int[] buffer, int frameCount)
+        {
+            var sampleCount = frameCount * _channels;
+
+            // +1 slack byte to always have room for a nibble carried in from a previous call plus
+            // this call's own first nibble landing in the same byte.
+            var maxByteCount = (sampleCount / 2) + 1;
+            if (_rawBytes.Length < maxByteCount)
+            {
+                _rawBytes = new byte[maxByteCount];
+            }
+
+            var byteCount = 0;
+
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var channel = i % _channels;
+                var nibble = YamahaAdpcmEncoder.CompressSample(ref _yamahaChannelStates[channel], buffer[i]);
+
+                if (_yamahaHasPendingNibble)
+                {
+                    _rawBytes[byteCount++] = (byte)(_yamahaPendingNibble | (nibble << 4));
+                    _yamahaHasPendingNibble = false;
+                }
+                else
+                {
+                    _yamahaPendingNibble = nibble;
+                    _yamahaHasPendingNibble = true;
+                }
+            }
+
+            _stream.Write(_rawBytes, 0, byteCount);
+        }
+
         public void Finish()
         {
             if (_isImaAdpcm && _adpcmPendingCount > 0)
@@ -474,6 +610,12 @@ namespace EggEncoder.Codecs.Wav
             if (_isMsAdpcm && _msAdpcmPendingCount > 0)
             {
                 EncodeAndWriteMsAdpcmBlock();
+            }
+
+            if (_isYamahaAdpcm && _yamahaHasPendingNibble)
+            {
+                _stream.WriteByte((byte)_yamahaPendingNibble);
+                _yamahaHasPendingNibble = false;
             }
         }
 

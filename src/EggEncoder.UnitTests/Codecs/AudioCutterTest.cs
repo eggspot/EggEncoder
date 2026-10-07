@@ -21,6 +21,8 @@ namespace EggEncoder.UnitTests.Codecs
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _imaAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono_expected.pcm");
+        private static readonly string _yamahaAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+        private static readonly string _yamahaAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono_expected.pcm");
         private static readonly string _msAdpcmMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
         private static readonly string _msAdpcmMonoExpectedPcmPath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono_expected.pcm");
         private static readonly string _muLawMonoFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
@@ -1771,6 +1773,101 @@ namespace EggEncoder.UnitTests.Codecs
 
                 var expected = ReadGroundTruthPcm16(_msAdpcmMonoExpectedPcmPath);
                 buffer.Should().Equal(expected[0..22050]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_YamahaAdpcmWavToWav_Should_Reproduce_BitExact_Samples()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(_yamahaAdpcmMonoFixturePath, destWavPath);
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.TotalSamples.Should().Be(88200);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                buffer.Should().Equal(ReadGroundTruthPcm16(_yamahaAdpcmMonoExpectedPcmPath).Take(buffer.Length));
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_YamahaAdpcmWav_Should_Extract_Exact_Sample_Range()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var destWavPath = Path.Combine(tempDirectory, "cut.wav");
+
+                AudioCutter.Cut(_yamahaAdpcmMonoFixturePath, destWavPath, startInSeconds: 0, endInSeconds: 1).Should().BeTrue();
+
+                using var wavReader = WavReader.Open(destWavPath);
+                wavReader.Channels.Should().Be(1);
+                wavReader.SampleRate.Should().Be(44100);
+                wavReader.TotalSamples.Should().Be(44100);
+
+                var buffer = new int[wavReader.TotalSamples * wavReader.Channels];
+                wavReader.ReadInterleavedSamples(buffer, (int)wavReader.TotalSamples);
+
+                var expected = ReadGroundTruthPcm16(_yamahaAdpcmMonoExpectedPcmPath);
+                buffer.Should().Equal(expected[0..44100]);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WavToYamahaAdpcmWav_Should_Round_Trip_WithinQuantizationTolerance()
+        {
+            // Mirrors Convert_WavToImaAdpcmWav_Should_Round_Trip_WithinQuantizationTolerance's own
+            // role for IMA ADPCM, now that Yamaha ADPCM has gained encode support too. Unlike IMA/MS
+            // ADPCM, there's no verbatim header sample to skip -- every sample, including the first,
+            // goes through the quantizer (see WavWriterTest's own analogous round-trip test for why).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, WavSampleFormat.YamahaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsYamahaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(3000);
+                }
             }
             finally
             {

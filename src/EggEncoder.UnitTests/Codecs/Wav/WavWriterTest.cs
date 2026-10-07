@@ -558,6 +558,284 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Create_YamahaAdpcm_With_NonSixteenBit_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: 1, WavSampleFormat.YamahaAdpcm);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(3)]
+        [InlineData(4)]
+        public void Create_YamahaAdpcm_WithUnsupportedChannelCount_Should_Throw(int channels)
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1, WavSampleFormat.YamahaAdpcm);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_Mono_Should_Round_Trip_Through_WavReader_WithinQuantizationTolerance()
+        {
+            // Yamaha ADPCM is inherently lossy, same as IMA/MS ADPCM -- a smooth, slowly-varying signal
+            // (YamahaAdpcmEncoderTest's own CompressSample_CalledRepeatedly_Should_Track_A_Slowly_
+            // Varying_Signal_Closely already proves the quantizer itself tracks such a signal within a
+            // few thousand units once adapted) going through the real WavWriter -> WavReader round
+            // trip should do the same. Unlike IMA/MS ADPCM, there's no per-block header to skip here --
+            // every single sample, including the first, goes through the same continuous quantizer.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(i * 0.05));
+                }
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.YamahaAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.IsYamahaAdpcm.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(16);
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(3000, $"sample {i} should reconstruct within a reasonable quantization tolerance");
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_Stereo_Should_Keep_Channels_Independent()
+        {
+            // Two genuinely different per-channel signals (different frequency and amplitude) --
+            // confirms the encoder's own per-channel ChannelState array indexing (channel = sample
+            // index % channels) doesn't cross-contaminate. Both start at 0 and ramp up smoothly
+            // (deliberately NOT using e.g. a cosine, which starts at its own peak amplitude): unlike
+            // IMA/MS ADPCM, Yamaha ADPCM has no verbatim first-sample header at all, so every sample
+            // -- including the first -- goes through the quantizer from its own cold-start step floor
+            // (127); a signal that starts already at a large amplitude would need several samples
+            // just to ramp the adaptive step up before it can track at all, which is a real, inherent
+            // property of this format (confirmed bit-exact against ffmpeg's own independent decode
+            // elsewhere in this file), not something a channel-independence test should be measuring.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                const int frameCount = 300;
+                var samples = new int[frameCount * 2];
+                for (var i = 0; i < frameCount; i++)
+                {
+                    samples[i * 2] = (int)(8000 * Math.Sin(i * 0.05));
+                    samples[(i * 2) + 1] = (int)(4000 * Math.Sin(i * 0.1));
+                }
+
+                using (var writer = WavWriter.Create(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount, WavSampleFormat.YamahaAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[frameCount * 2];
+                reader.ReadInterleavedSamples(buffer, frameCount);
+
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_WithOddMonoFrameCount_Should_PadTheTrailingNibble()
+        {
+            // Yamaha ADPCM has no block structure, so unlike IMA/MS ADPCM there's no "pad the final
+            // block" concern -- but mono's own 2-samples-per-byte packing means an ODD total frame
+            // count leaves exactly one nibble pending at the very end, which Finish() must flush,
+            // zero-padded, for the file to contain the true number of on-disk nibbles.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, 37).Select(i => i * 100).ToArray(); // odd frame count
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.YamahaAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                var framesRead = reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                framesRead.Should().Be(samples.Length);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_WithoutCallingFinish_Should_Not_Write_The_Pending_Nibble()
+        {
+            // Mirrors WriteInterleavedSamples_ImaAdpcm_WithoutCallingFinish_Should_Not_Write_The_
+            // Pending_Partial_Block's own role for IMA ADPCM's block buffer, just for the one pending
+            // nibble an odd mono frame count leaves behind instead of a whole block. Unlike that IMA
+            // ADPCM test, WriteInterleavedSamples here DOES write real bytes to the stream before
+            // Finish() (5 complete byte-pairs for 11 samples) rather than nothing at all, so a naive
+            // "snapshot the length mid-stream, before Dispose" comparison is unreliable -- the
+            // FileStream's own internal buffer may not have reached the OS yet at that point, only
+            // becoming visible to a fresh FileInfo once Dispose() flushes and closes it. Both lengths
+            // compared below are instead taken only AFTER their own stream's Dispose() has fully
+            // flushed, from two otherwise-identical files (same channels/totalFrames, so the same
+            // fixed header layout), so the only difference between them is the 5 real bytes actually
+            // written.
+            var filePath = Path.GetTempFileName();
+            var headerOnlyPath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, 11).Select(i => i * 100).ToArray(); // 11 nibbles -> 5 full bytes + 1 pending nibble
+
+                using (WavWriter.Create(headerOnlyPath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.YamahaAdpcm))
+                {
+                    // Nothing written at all -- this file exists only to measure the fixed header size.
+                }
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.YamahaAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    // Finish() deliberately not called -- the 11th sample's own nibble must stay pending.
+                }
+
+                var headerOnlyLength = new FileInfo(headerOnlyPath).Length;
+                new FileInfo(filePath).Length.Should().Be(headerOnlyLength + 5, "5 complete byte-pairs should have been written; the 11th sample's own nibble was left pending and never flushed since Finish() was never called");
+            }
+            finally
+            {
+                File.Delete(filePath);
+                File.Delete(headerOnlyPath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_WithZeroFrames_Should_Produce_An_Empty_DataChunk()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: 0, WavSampleFormat.YamahaAdpcm))
+                {
+                    writer.Finish();
+                }
+
+                var dataBytes = ReadDataChunkBytes(filePath);
+                dataBytes.Should().BeEmpty();
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(0);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_YamahaAdpcm_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw()
+        {
+            // End-to-end version of YamahaAdpcmEncoderTest's own
+            // CompressSample_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw -- confirms the full
+            // public WavWriter.Create + WriteInterleavedSamples path doesn't crash either, not just the
+            // internal quantizer method in isolation.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[10];
+                samples[1] = int.MinValue;
+                samples[5] = int.MaxValue;
+
+                var act = () =>
+                {
+                    using var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.YamahaAdpcm);
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData("yamaha_adpcm_encoded_mono.wav", "yamaha_adpcm_encoded_mono_expected.pcm")]
+        [InlineData("yamaha_adpcm_encoded_stereo.wav", "yamaha_adpcm_encoded_stereo_expected.pcm")]
+        public void WriteInterleavedSamples_YamahaAdpcm_FixtureEncodedByThisProject_Should_Decode_BitExact_Against_RealFfmpegsIndependentDecode(string fixtureFileName, string expectedPcmFileName)
+        {
+            // Mirrors WriteInterleavedSamples_ImaAdpcm_FixtureEncodedByThisProject_...'s own role for
+            // this format: both fixture files here were produced by THIS project's own WavWriter
+            // (checked in exactly as generated, not regenerated at test time), then fed through real
+            // ffmpeg once during this feature's own development -- ffmpeg correctly identified both as
+            // genuine adpcm_yamaha and decoded them (codec_name=adpcm_yamaha, confirmed via ffprobe);
+            // the expected .pcm files here are ffmpeg's own decode of those exact bytes. Unlike IMA
+            // ADPCM's own analogous test, this format has no block padding at all -- the data chunk's
+            // size is exactly ceil(totalFrames * channels / 2) bytes, so ffmpeg's own decode is exactly
+            // totalFrames long with nothing to trim.
+            var fixturePath = Path.GetFullPath($"Codecs/Wav/{fixtureFileName}");
+            var expectedPath = Path.GetFullPath($"Codecs/Wav/{expectedPcmFileName}");
+            var ffmpegDecoded = ReadGroundTruthPcm16(expectedPath);
+
+            using var reader = WavReader.Open(fixturePath);
+            reader.IsYamahaAdpcm.Should().BeTrue();
+
+            var buffer = new int[reader.TotalSamples * reader.Channels];
+            reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+
+            buffer.Should().Equal(ffmpegDecoded);
+        }
+
+        [Fact]
         public void Create_MsAdpcm_With_NonSixteenBit_Should_Throw()
         {
             var filePath = Path.GetTempFileName();

@@ -147,7 +147,7 @@ namespace EggEncoder
             }
 
             var durationSeconds = wavReader.SampleRate > 0 ? (double)wavReader.TotalSamples / wavReader.SampleRate : 0;
-            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat, wavReader.IsImaAdpcm, wavReader.IsALaw, wavReader.IsMuLaw, wavReader.IsMsAdpcm);
+            var (codecName, codecLongName) = DescribeWavCodec(wavReader.BitsPerSample, wavReader.IsFloatFormat, wavReader.IsImaAdpcm, wavReader.IsALaw, wavReader.IsMuLaw, wavReader.IsMsAdpcm, wavReader.IsYamahaAdpcm);
 
             return new ProbeResult
             {
@@ -606,7 +606,7 @@ namespace EggEncoder
             public required IReadOnlyList<double> Waveform { get; init; }
         }
 
-        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm, bool isALaw, bool isMuLaw, bool isMsAdpcm)
+        private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm, bool isALaw, bool isMuLaw, bool isMsAdpcm, bool isYamahaAdpcm)
         {
             if (isImaAdpcm)
             {
@@ -616,6 +616,11 @@ namespace EggEncoder
             if (isMsAdpcm)
             {
                 return ("adpcm_ms", "ADPCM Microsoft");
+            }
+
+            if (isYamahaAdpcm)
+            {
+                return ("adpcm_yamaha", "ADPCM Yamaha");
             }
 
             if (isALaw)

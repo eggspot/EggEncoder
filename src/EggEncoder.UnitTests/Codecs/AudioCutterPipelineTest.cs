@@ -1312,6 +1312,83 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithYamahaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Mirrors Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding's
+            // own role for IMA ADPCM, now that Yamaha ADPCM has gained encode support too. Unlike IMA/
+            // MS ADPCM, there's no verbatim header sample to skip -- every sample goes through the
+            // quantizer (see AudioCutterTest's own analogous round-trip test for why).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.YamahaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsYamahaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Compare against the doubled samples directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail outside tolerance.
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithYamahaAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // Mirrors Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own
+            // role for MS ADPCM as a source, proving a PcmTransform genuinely runs on Yamaha ADPCM's
+            // decoded output (not just that a Yamaha ADPCM source happens to be readable at all,
+            // already proven by AudioCutterTest's own bit-exact decode coverage).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = WavReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithRealAifcFixtureSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
             // AIFC decode wires into the existing WAV-family decode path with no dispatch changes
