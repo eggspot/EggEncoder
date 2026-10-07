@@ -191,5 +191,72 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             act.Should().NotThrow();
             states[0].Coeff1.Should().Be(256, "clamped to the only valid index, 0");
         }
+
+        [Fact]
+        public void CompressSample_Should_Commit_A_Nibble_That_ExpandNibble_Reconstructs_Close_To_Target()
+        {
+            var state = new MsAdpcmDecoder.ChannelState { Sample1 = 100, Sample2 = 50, Coeff1 = 256, Coeff2 = 0, Delta = 16 };
+
+            var nibble = MsAdpcmDecoder.CompressSample(ref state, sample: 180);
+
+            nibble.Should().BeInRange(0, 15);
+            Math.Abs(state.Sample1 - 180).Should().BeLessThan(16, "the committed nibble's reconstruction should land within one delta step of the target");
+        }
+
+        [Fact]
+        public void CompressSample_WithNegativeDelta_Should_Set_The_SignBit()
+        {
+            var state = new MsAdpcmDecoder.ChannelState { Sample1 = 1000, Sample2 = 1000, Coeff1 = 256, Coeff2 = 0, Delta = 16 };
+
+            var nibble = MsAdpcmDecoder.CompressSample(ref state, sample: 0);
+
+            (nibble & 8).Should().Be(8, "the target sample is below the predictor, so the sign bit must be set");
+            state.Sample1.Should().BeLessThan(1000);
+        }
+
+        [Fact]
+        public void CompressSample_WithPositiveDelta_Should_Clear_The_SignBit()
+        {
+            var state = new MsAdpcmDecoder.ChannelState { Sample1 = 0, Sample2 = 0, Coeff1 = 256, Coeff2 = 0, Delta = 16 };
+
+            var nibble = MsAdpcmDecoder.CompressSample(ref state, sample: 1000);
+
+            (nibble & 8).Should().Be(0, "the target sample is above the predictor, so the sign bit must be clear");
+            state.Sample1.Should().BeGreaterThan(0);
+        }
+
+        [Fact]
+        public void CompressSample_CalledRepeatedly_Should_Track_A_Slowly_Varying_Signal_Closely()
+        {
+            var state = new MsAdpcmDecoder.ChannelState { Sample1 = 0, Sample2 = 0, Coeff1 = 256, Coeff2 = 0, Delta = 16 };
+            var maxAbsoluteError = 0;
+
+            for (var i = 0; i < 200; i++)
+            {
+                var target = (int)(8000 * Math.Sin(i * 0.05));
+                MsAdpcmDecoder.CompressSample(ref state, target);
+                maxAbsoluteError = Math.Max(maxAbsoluteError, Math.Abs(target - state.Sample1));
+            }
+
+            maxAbsoluteError.Should().BeLessThan(2000, "a smooth, slowly-varying signal should stay well within the quantizer's adaptive delta range once it has ramped up");
+        }
+
+        [Theory]
+        [InlineData(int.MinValue)]
+        [InlineData(int.MaxValue)]
+        public void CompressSample_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw(int extremeSample)
+        {
+            // This format's own documented contract is 16-bit input, but nothing stops a caller from
+            // passing an out-of-range int anyway. Without clamping, a sample of int.MinValue or
+            // int.MaxValue combined with a predictor near the opposite extreme could overflow the
+            // (diff + bias) addition or the nibble clamp's own arithmetic -- the same class of bug
+            // IMA ADPCM's own QuantizeNibble needed fixing for (see its own doc comment), checked for
+            // proactively here rather than waiting for a real crash to reveal it.
+            var state = new MsAdpcmDecoder.ChannelState { Sample1 = short.MinValue, Sample2 = short.MaxValue, Coeff1 = 460, Coeff2 = -208, Delta = 16 };
+
+            var act = () => MsAdpcmDecoder.CompressSample(ref state, extremeSample);
+
+            act.Should().NotThrow();
+        }
     }
 }

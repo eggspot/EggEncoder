@@ -558,6 +558,328 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Create_MsAdpcm_With_NonSixteenBit_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: 1, WavSampleFormat.MsAdpcm);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(3)]
+        [InlineData(4)]
+        public void Create_MsAdpcm_WithUnsupportedChannelCount_Should_Throw(int channels)
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1, WavSampleFormat.MsAdpcm);
+
+                act.Should().Throw<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_Mono_Should_Round_Trip_Through_WavReader_WithinQuantizationTolerance()
+        {
+            // MS ADPCM is inherently lossy -- exact equality is the wrong bar, the same reasoning
+            // already applied to IMA ADPCM's own round-trip tests above.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(i * 0.05));
+                }
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.IsMsAdpcm.Should().BeTrue();
+                reader.BitsPerSample.Should().Be(16);
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Skip each block's own first two frames: those are verbatim, bit-exact header
+                // samples by construction (see MsAdpcmEncoder), so including them would understate
+                // the real quantization tolerance being exercised here.
+                for (var i = 2; i < samples.Length; i++)
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(2000, $"sample {i} should reconstruct within a reasonable quantization tolerance");
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_Stereo_Should_Keep_Channels_Independent()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                const int frameCount = 300;
+                var samples = new int[frameCount * 2];
+                for (var i = 0; i < frameCount; i++)
+                {
+                    samples[i * 2] = (int)(8000 * Math.Sin(i * 0.05));
+                    samples[(i * 2) + 1] = (int)(4000 * Math.Cos(i * 0.1));
+                }
+
+                using (var writer = WavWriter.Create(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[frameCount * 2];
+                reader.ReadInterleavedSamples(buffer, frameCount);
+
+                for (var i = 4; i < samples.Length; i++) // skip both channels' verbatim header frames (frame 0 and frame 1)
+                {
+                    Math.Abs(buffer[i] - samples[i]).Should().BeLessThan(2000);
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_WithFrameCountNotMultipleOfSamplesPerBlock_Should_PadFinalBlock()
+        {
+            // The MS ADPCM block size this encoder uses (1024-byte block align) gives 2036
+            // samples/block for mono -- deliberately using far fewer frames than that here, so the
+            // only block written is a short, padded one.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, 37).Select(i => i * 100).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                var framesRead = reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                framesRead.Should().Be(samples.Length);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        public void WriteInterleavedSamples_MsAdpcm_WithFewerThanTwoRealFrames_Should_Not_Throw(int frameCount)
+        {
+            // MS ADPCM's own block header needs TWO raw verbatim samples (Sample2, then Sample1) --
+            // a genuinely distinct boundary condition from IMA ADPCM's own single-verbatim-sample
+            // header: a file with only 1 real frame needs the padding loop to supply BOTH header
+            // samples' worth of data (not just nibble-encoded ones), and even 2 real frames leaves
+            // zero samples for the nibble-encoding loop to run at all. Confirmed via a real
+            // WavWriter.Create + WriteInterleavedSamples call before writing this test, not assumed.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, frameCount).Select(i => (i + 1) * 100).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[frameCount];
+                var framesRead = reader.ReadInterleavedSamples(buffer, frameCount);
+
+                framesRead.Should().Be(frameCount);
+                buffer.Should().Equal(samples, "both header samples are written verbatim, so even a file this short should reconstruct bit-exactly");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_SpanningMultipleBlocks_Should_Reset_Sample1Sample2_At_Each_Block_Boundary()
+        {
+            // Mirrors WriteInterleavedSamples_ImaAdpcm_SpanningMultipleBlocks_Should_Reset_Predictor_
+            // At_Each_Block_Boundary's own reasoning for IMA ADPCM: every round-trip/tolerance test
+            // above uses fewer frames than one block (2036 samples/block for mono), so none of them
+            // exercise what happens at a SECOND block's own boundary, and the real-ffmpeg bit-exact
+            // cross-check doesn't catch a broken reset either (decode always reads each block's
+            // header verbatim regardless of the encoder's own internal state). Uses a genuine
+            // discontinuity exactly at the block boundary: silence for block 0, then a large,
+            // sustained jump starting at block 1's own first sample.
+            const int samplesPerBlockMono = 2036;
+            var samples = new int[samplesPerBlockMono + 50];
+            for (var i = samplesPerBlockMono; i < samples.Length; i++)
+            {
+                samples[i] = 12000;
+            }
+
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer[samplesPerBlockMono].Should().Be(12000, "block 1's own header sample2 is always its own raw first sample, verbatim");
+                buffer[samplesPerBlockMono + 1].Should().Be(12000, "block 1's own header sample1 is always its own raw second sample, verbatim");
+
+                for (var i = samplesPerBlockMono + 2; i < samplesPerBlockMono + 10; i++)
+                {
+                    Math.Abs(buffer[i] - 12000).Should().BeLessThan(500, $"sample {i}, early in block 1, should already track the jump closely -- only possible if Sample1/Sample2 were reset to block 1's own first two samples at the block boundary, not left near block 0's own ending state");
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_WithoutCallingFinish_Should_Not_Write_The_Pending_Partial_Block()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, 10).Select(i => i * 100).ToArray();
+                long headerOnlyLength;
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.MsAdpcm))
+                {
+                    headerOnlyLength = new FileInfo(filePath).Length;
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                new FileInfo(filePath).Length.Should().Be(headerOnlyLength, "the pending block was never flushed, so no bytes should have been appended after the header");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_WithZeroFrames_Should_Produce_An_Empty_DataChunk()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: 0, WavSampleFormat.MsAdpcm))
+                {
+                    writer.Finish();
+                }
+
+                var dataBytes = ReadDataChunkBytes(filePath);
+                dataBytes.Should().BeEmpty();
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(0);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void WriteInterleavedSamples_MsAdpcm_WithOutOfContractExtremeSample_Should_Clamp_Not_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[10];
+                samples[1] = int.MinValue;
+                samples[5] = int.MaxValue;
+
+                var act = () =>
+                {
+                    using var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.MsAdpcm);
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Theory]
+        [InlineData("ms_adpcm_encoded_mono.wav", "ms_adpcm_encoded_mono_expected.pcm")]
+        [InlineData("ms_adpcm_encoded_stereo.wav", "ms_adpcm_encoded_stereo_expected.pcm")]
+        public void WriteInterleavedSamples_MsAdpcm_FixtureEncodedByThisProject_Should_Decode_BitExact_Against_RealFfmpegsIndependentDecode(string fixtureFileName, string expectedPcmFileName)
+        {
+            // Mirrors WriteInterleavedSamples_ImaAdpcm_FixtureEncodedByThisProject_...'s own role for
+            // IMA ADPCM: both fixtures here were produced by THIS project's own WavWriter, then fed
+            // through real ffmpeg once during this feature's own development -- ffmpeg correctly
+            // identified both as genuine adpcm_ms and decoded them (confirmed via ffprobe); the
+            // expected .pcm files are ffmpeg's own decode of those exact bytes. This project's own
+            // WavReader decode of the identical bytes must match bit-exactly.
+            var fixturePath = Path.GetFullPath($"Codecs/Wav/{fixtureFileName}");
+            var expectedPath = Path.GetFullPath($"Codecs/Wav/{expectedPcmFileName}");
+            var ffmpegDecoded = ReadGroundTruthPcm16(expectedPath);
+
+            using var reader = WavReader.Open(fixturePath);
+            reader.IsMsAdpcm.Should().BeTrue();
+
+            var buffer = new int[reader.TotalSamples * reader.Channels];
+            reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+
+            buffer.Should().Equal(ffmpegDecoded[..buffer.Length]);
+        }
+
+        [Fact]
         public void WriteInterleavedSamples_Called_Repeatedly_With_Varying_Sizes_Should_Not_Leak_Stale_Bytes()
         {
             var filePath = Path.GetTempFileName();
