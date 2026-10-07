@@ -1131,10 +1131,11 @@ namespace EggEncoder.UnitTests.Codecs
         [InlineData(WavSampleFormat.ALaw)]
         public void Convert_WithG711Destination_Should_Apply_Pipeline_Transform_Before_Encoding(WavSampleFormat sampleFormat)
         {
-            // Unlike MS ADPCM (decode-only, so a pipeline could only ever run with it as the
-            // SOURCE), G.711 supports the encode direction too -- this proves a PcmTransform
-            // genuinely runs before the companding step, not just that the generic WavSampleFormat
-            // destination routing (already proven for Float32) happens to compile for G.711 too.
+            // Unlike AIFC's own ima4 compressionType (decode-only, so a pipeline could only ever run
+            // with it as the SOURCE), G.711 supports the encode direction too -- this proves a
+            // PcmTransform genuinely runs before the companding step, not just that the generic
+            // WavSampleFormat destination routing (already proven for Float32) happens to compile
+            // for G.711 too.
             var tempDirectory = CreateTempDirectory();
             try
             {
@@ -1193,8 +1194,7 @@ namespace EggEncoder.UnitTests.Codecs
         [Fact]
         public void Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
         {
-            // Unlike MS ADPCM (decode-only), IMA ADPCM now supports the encode direction too -- this
-            // proves a PcmTransform genuinely runs before the quantization step, not just that the
+            // Proves a PcmTransform genuinely runs before the quantization step, not just that the
             // generic WavSampleFormat destination routing (already proven for Float32/G.711) happens
             // to compile for IMA ADPCM too. A tolerance is used for the final comparison rather than
             // exact equality -- IMA ADPCM is lossy, the same reasoning AudioCutterTest's own
@@ -1237,14 +1237,50 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithMsAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Mirrors Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding's
+            // own role for IMA ADPCM, now that MS ADPCM has gained encode support too.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.MsAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsMsAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                for (var i = 2; i < samples.Length; i++) // skip the first block's two verbatim header samples
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(2000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
-            // MS ADPCM is decode-only (IMA ADPCM has since gained encode support -- see
-            // Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding below),
-            // so it can only ever be the pipeline's SOURCE, never its destination -- this proves a
-            // PcmTransform genuinely runs on its decoded output, not just that an MS ADPCM source
-            // happens to be readable at all (already proven by AudioCutterTest's own bit-exact decode
-            // coverage).
+            // This proves a PcmTransform genuinely runs on its decoded output, not just that an MS
+            // ADPCM source happens to be readable at all (already proven by AudioCutterTest's own
+            // bit-exact decode coverage).
             var tempDirectory = CreateTempDirectory();
             try
             {
@@ -1315,12 +1351,12 @@ namespace EggEncoder.UnitTests.Codecs
         [Fact]
         public void Convert_WithIma4AifcSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
-            // ima4 is decode-only (like WAV's own IMA/MS ADPCM), so it can only ever be the
-            // pipeline's SOURCE, never its destination -- mirrors
-            // Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own role for
-            // MS ADPCM, proving a PcmTransform genuinely runs on ima4's decoded output (not just that
-            // an ima4 source happens to be readable at all, already proven by AudioCutterTest's own
-            // bit-exact decode coverage).
+            // ima4 is decode-only (unlike WAV's own IMA/MS ADPCM, which have since both gained
+            // encode support), so it can only ever be the pipeline's SOURCE, never its destination --
+            // mirrors Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own
+            // role for MS ADPCM as a source, proving a PcmTransform genuinely runs on ima4's decoded
+            // output (not just that an ima4 source happens to be readable at all, already proven by
+            // AudioCutterTest's own bit-exact decode coverage).
             var tempDirectory = CreateTempDirectory();
             try
             {
