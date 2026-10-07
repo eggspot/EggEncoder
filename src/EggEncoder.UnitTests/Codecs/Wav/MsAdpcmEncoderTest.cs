@@ -149,10 +149,10 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         [InlineData(int.MaxValue, short.MaxValue)]
         public void EncodeBlock_WithOutOfContractExtremeFirstSample_Should_Saturate_Not_Wrap(int extremeFirstSample, short expectedSaturated)
         {
-            // Mirrors ImaAdpcmEncoderTest's own analogous test: the block's own header predictor
-            // samples -- the block's first two raw samples, written directly without going through
-            // CompressSample's own separate clamp -- must saturate to the native 16-bit range instead
-            // of wrapping via a raw (short) cast.
+            // Mirrors ImaAdpcmEncoderTest's own analogous test: the block's own header sample2 (this
+            // block's own first raw sample, written directly without going through CompressSample's
+            // own separate clamp) must saturate to the native 16-bit range instead of wrapping via a
+            // raw (short) cast.
             var samples = new int[10];
             samples[0] = extremeFirstSample;
             var encodeStates = new MsAdpcmDecoder.ChannelState[1];
@@ -165,6 +165,31 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
 
             decoded[0].Should().Be(expectedSaturated);
+        }
+
+        [Theory]
+        [InlineData(int.MinValue, short.MinValue)]
+        [InlineData(int.MaxValue, short.MaxValue)]
+        public void EncodeBlock_WithOutOfContractExtremeSecondSample_Should_Saturate_Not_Wrap(int extremeSecondSample, short expectedSaturated)
+        {
+            // Sample1 (this block's own SECOND raw sample) has its own, separate clamp line from
+            // Sample2's -- confirmed this needed its own dedicated test, not just reuse of the
+            // Sample2 one above, by temporarily removing just the Sample1 clamp and rerunning the
+            // whole suite: every other test here (including the one above, and WavWriterTest's own
+            // end-to-end extreme-sample test, which only checks "doesn't throw" and a raw (short)
+            // cast never does) still passed.
+            var samples = new int[10];
+            samples[1] = extremeSecondSample;
+            var encodeStates = new MsAdpcmDecoder.ChannelState[1];
+            var block = new byte[7 + 4];
+
+            MsAdpcmEncoder.EncodeBlock(samples, channels: 1, samplesPerBlock: 10, encodeStates, block);
+
+            var decodeStates = new MsAdpcmDecoder.ChannelState[1];
+            var decoded = new int[10];
+            MsAdpcmDecoder.DecodeBlock(block, channels: 1, samplesPerBlock: 10, decodeStates, MsAdpcmEncoder.Coeff1Table, MsAdpcmEncoder.Coeff2Table, decoded);
+
+            decoded[1].Should().Be(expectedSaturated);
         }
 
         [Fact]

@@ -702,6 +702,43 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             }
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        public void WriteInterleavedSamples_MsAdpcm_WithFewerThanTwoRealFrames_Should_Not_Throw(int frameCount)
+        {
+            // MS ADPCM's own block header needs TWO raw verbatim samples (Sample2, then Sample1) --
+            // a genuinely distinct boundary condition from IMA ADPCM's own single-verbatim-sample
+            // header: a file with only 1 real frame needs the padding loop to supply BOTH header
+            // samples' worth of data (not just nibble-encoded ones), and even 2 real frames leaves
+            // zero samples for the nibble-encoding loop to run at all. Confirmed via a real
+            // WavWriter.Create + WriteInterleavedSamples call before writing this test, not assumed.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = Enumerable.Range(0, frameCount).Select(i => (i + 1) * 100).ToArray();
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount, WavSampleFormat.MsAdpcm))
+                {
+                    writer.WriteInterleavedSamples(samples, frameCount);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.TotalSamples.Should().Be(frameCount);
+
+                var buffer = new int[frameCount];
+                var framesRead = reader.ReadInterleavedSamples(buffer, frameCount);
+
+                framesRead.Should().Be(frameCount);
+                buffer.Should().Equal(samples, "both header samples are written verbatim, so even a file this short should reconstruct bit-exactly");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Fact]
         public void WriteInterleavedSamples_MsAdpcm_SpanningMultipleBlocks_Should_Reset_Sample1Sample2_At_Each_Block_Boundary()
         {
