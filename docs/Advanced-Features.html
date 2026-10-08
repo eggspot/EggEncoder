@@ -54,8 +54,10 @@ while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) &gt; 0)
     calculator.AddBlock(new ReadOnlySpan&lt;int&gt;(buffer, 0, framesRead * channels));
 }
 
-List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 windows</code></pre>
-      <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once.</p>
+List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 windows
+double peak = calculator.GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, in [0, 1]
+double rms = calculator.GetNormalizedRmsLevel();       // root-mean-square across every sample, in [0, 1]</code></pre>
+      <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. <code>GetNormalizedPeakAmplitude</code>/<code>GetNormalizedRmsLevel</code> need no flushing step the way <code>GetNormalizedWindows</code> does (its own trailing partial window) — both are fully up to date after every <code>AddBlock</code> call, and back <code>ProbeResult.PeakAmplitude</code>/<code>RmsLevel</code> the same way <code>GetNormalizedWindows</code> backs <code>ProbeResult.Waveform</code>. <code>RmsLevel</code> is a rough loudness indicator, not an ITU-R BS.1770 perceptual loudness measurement.</p>
 
       <h2>Sample-Accurate Cutting</h2>
       <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack, or MOV/MP4 with a mono AAC-LC audio track) and writes any supported destination format without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
