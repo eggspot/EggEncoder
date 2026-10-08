@@ -37,5 +37,20 @@ namespace EggEncoder.Results
         public int? Height { get; init; }
 
         public IReadOnlyList<double>? Waveform { get; init; }
+
+        /// <summary>
+        /// The single loudest absolute sample value across the whole decoded audio, normalized to
+        /// 0.0..1.0 (1.0 = the bit depth's own full-scale maximum). Null for a file this probe
+        /// couldn't decode audio from (e.g. MOV/MP4 with no matching audio track).
+        /// </summary>
+        public double? PeakAmplitude { get; init; }
+
+        /// <summary>
+        /// Root-mean-square level across every individual sample of the whole decoded audio,
+        /// normalized the same way <see cref="PeakAmplitude"/> is. A rough loudness indicator --
+        /// not a perceptual/ITU-R BS.1770 loudness measurement. Null for a file this probe
+        /// couldn't decode audio from.
+        /// </summary>
+        public double? RmsLevel { get; init; }
     }
 }

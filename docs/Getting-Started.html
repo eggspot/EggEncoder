@@ -104,8 +104,10 @@ Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationSeconds}s")
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
     public IReadOnlyList&lt;double&gt;? Waveform { get; init; }  // normalized peak windows, or null
+    public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
+    public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1]
 }</code></pre>
-      <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation, sample-accurate cutting, and the <a href="Advanced-Features.html#pcm-transform-pipeline">PCM transform pipeline</a> (resampling, normalization, remix, fades, parametric EQ, FIR filtering, mixing) details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
+      <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation, sample-accurate cutting, and the <a href="Advanced-Features.html#pcm-transform-pipeline">PCM transform pipeline</a> (resampling, normalization, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
     </div>
   </main>
 </div>
