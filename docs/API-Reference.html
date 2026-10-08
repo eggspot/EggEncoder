@@ -217,6 +217,14 @@ public sealed class PeakNormalizationTransform : IPcmTransform
     public static long ComputeMaxAbsoluteSample(ReadOnlySpan&lt;int&gt; samples);
 }
 
+public sealed class PanTransform : IPcmTransform
+{
+    public PanTransform(double pan, PanLaw law = PanLaw.Linear); // pan: -1.0 (full left) .. +1.0 (full right)
+    public double Pan { get; }
+    public PanLaw Law { get; }
+}
+public enum PanLaw { Linear, EqualPower }
+
 public sealed class ChannelRemixTransform : IPcmTransform
 {
     public ChannelRemixTransform(int inputChannels, int outputChannels, ChannelRemixMode mixMode = ChannelRemixMode.Auto);
