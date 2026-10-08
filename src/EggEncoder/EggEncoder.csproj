@@ -8,12 +8,12 @@
     <Authors>Eggspot</Authors>
     <Company>Eggspot</Company>
     <Product>EggEncoder</Product>
-    <Description>Audio encoding/decoding toolkit for .NET — native MP3 (LAME) and FLAC codec bindings, managed AAC and WMA decode/encode, waveform generation, and audio probing/cutting, fully in-process. Built for high-throughput music distribution pipelines.</Description>
+    <Description>Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF/AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), fully in-process behind one IMediaEncoder interface. No ffmpeg, no subprocess. Built for high-throughput music distribution pipelines.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/eggspot/EggEncoder</PackageProjectUrl>
     <RepositoryUrl>https://github.com/eggspot/EggEncoder</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;codec;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
+    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;alac;aiff;au;opus;vorbis;tta;wavpack;adpcm;pcm;codec;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Copyright>Copyright © Eggspot</Copyright>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
