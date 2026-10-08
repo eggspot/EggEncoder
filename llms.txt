@@ -58,7 +58,7 @@ var probeResult = await encoder.Probe("track.flac");
 - `NativeEncoder` — the sole implementation, Windows x64 only (P/Invoke to libmp3lame/libFLAC/wavpackdll); also implements `IPcmTransformEncoder`
 - `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), normalized waveform peak windows
 - `AudioCutter` — format-dispatching convert/cut/mix/concatenate, used internally by `NativeEncoder`
-- `WaveformCalculator` — streams decoded blocks into normalized peak windows
+- `WaveformCalculator` — streams decoded blocks into normalized peak windows, plus an overall peak amplitude and RMS level (all normalized to [0,1]) -- backs `ProbeResult.Waveform`/`PeakAmplitude`/`RmsLevel`
 - `IPcmTransformEncoder` — DI-friendly PCM pipeline entry point (`ConvertFile`, `CutFile`, `MixFiles`, `ConcatenateFiles`), implemented by `NativeEncoder`
 - `PcmTransformPipeline` / `IPcmTransform` — ordered list of composable transforms run on each decoded block
 - `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `PanTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform`, `BiquadTransform`, `ButterworthTransform`, `FirFilterTransform` — the built-in transforms

@@ -5,6 +5,7 @@ using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
+using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -53,6 +54,28 @@ namespace EggEncoder.UnitTests
             probeResult.ChannelLayout.Should().Be("stereo");
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
+        public async Task Probe_WavFile_Should_Return_PeakAmplitude_And_RmsLevel_Matching_An_Independent_Decode()
+        {
+            // Cross-checks Probe's new PeakAmplitude/RmsLevel fields against values computed
+            // independently here from the exact same fixture's own decoded samples (via WavReader
+            // directly, not WaveformCalculator), rather than trusting a hand-picked expected
+            // constant -- if NativeEncoder ever stopped actually feeding every real sample into the
+            // same WaveformCalculator instance it reads these back from, this would catch it.
+            var probeResult = await _nativeEncoder.Probe(_wavFixturePath);
+
+            using var reader = WavReader.Open(_wavFixturePath);
+            var buffer = new int[reader.TotalSamples * reader.Channels];
+            reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+
+            var maxAmplitude = 1 << (reader.BitsPerSample - 1);
+            var expectedPeak = (double)buffer.Max(sample => Math.Abs((long)sample)) / maxAmplitude;
+            var expectedRms = Math.Sqrt(buffer.Average(sample => (double)sample * sample)) / maxAmplitude;
+
+            probeResult.PeakAmplitude.Should().BeApproximately(expectedPeak, 1e-9);
+            probeResult.RmsLevel.Should().BeApproximately(expectedRms, 1e-9);
         }
 
         [Fact]
@@ -563,6 +586,8 @@ namespace EggEncoder.UnitTests
             var probeResult = await _nativeEncoder.Probe(_movFixturePath);
 
             probeResult.Waveform.Should().BeNull();
+            probeResult.PeakAmplitude.Should().BeNull();
+            probeResult.RmsLevel.Should().BeNull();
 
             probeResult.FormatName.Should().Be("mov");
             probeResult.DurationSeconds.Should().BeApproximately(5, 0.1);
@@ -577,6 +602,8 @@ namespace EggEncoder.UnitTests
             var probeResult = await _nativeEncoder.Probe(_mp4FixturePath);
 
             probeResult.Waveform.Should().BeNull();
+            probeResult.PeakAmplitude.Should().BeNull();
+            probeResult.RmsLevel.Should().BeNull();
             probeResult.Width.Should().Be(640);
             probeResult.Height.Should().Be(360);
 
@@ -616,6 +643,19 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 AssertNonEmptyWaveform(probeResult.Waveform);
+
+                // Proves the DecodedAudioTrack -> ProbeResult forwarding path (ProbeVideo's own,
+                // separate from every other codec's direct WaveformCalculator -> ProbeResult path)
+                // actually carries PeakAmplitude/RmsLevel through too, not just Waveform. Structural
+                // sanity rather than a predicted value: AAC's own lossy quantization/windowing
+                // didn't preserve this signal's pre-encode peak closely enough for a tight tolerance
+                // to be meaningful (confirmed by actually measuring it, not assumed -- the real
+                // round-tripped peak landed well under half of the original 10000/32768).
+                probeResult.PeakAmplitude.Should().NotBeNull();
+                probeResult.PeakAmplitude!.Value.Should().BeInRange(0.0, 1.0);
+                probeResult.RmsLevel.Should().NotBeNull();
+                probeResult.RmsLevel!.Value.Should().BeInRange(0.0, 1.0);
+                probeResult.RmsLevel!.Value.Should().BeLessThanOrEqualTo(probeResult.PeakAmplitude!.Value, "RMS can never exceed the peak for any real signal");
             }
             finally
             {
