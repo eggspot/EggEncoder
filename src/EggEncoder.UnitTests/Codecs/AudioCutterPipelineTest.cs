@@ -45,6 +45,40 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithPanTransform_Should_Silence_The_OppositeChannel()
+        {
+            // Proves PanTransform genuinely runs through the real pipeline, not just that
+            // PanTransformTest's own unit tests pass it a buffer directly. CreateRampWav's own
+            // source has left=frame, right=-frame -- panning full left should leave the left
+            // channel untouched and zero the right channel entirely.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, samples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new PanTransform(-1.0)));
+
+                using var reader = WavReader.Open(destPath);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(100);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, 100);
+
+                for (var frame = 0; frame < 100; frame++)
+                {
+                    buffer[frame * 2].Should().Be(samples[frame * 2], "the left channel stays at unity gain when panned fully toward it");
+                    buffer[(frame * 2) + 1].Should().Be(0, "the right channel must be fully silenced when panned fully left");
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithVolumeTransform_SpanningMultipleDecodeBlocks_Should_Write_Every_Frame()
         {
             // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this
