@@ -70,7 +70,7 @@ namespace EggEncoder.UnitTests
             var buffer = new int[reader.TotalSamples * reader.Channels];
             reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
 
-            var maxAmplitude = 1 << (reader.BitsPerSample - 1);
+            var maxAmplitude = 1L << (reader.BitsPerSample - 1);
             var expectedPeak = (double)buffer.Max(sample => Math.Abs((long)sample)) / maxAmplitude;
             var expectedRms = Math.Sqrt(buffer.Average(sample => (double)sample * sample)) / maxAmplitude;
 
@@ -651,10 +651,15 @@ namespace EggEncoder.UnitTests
                 // didn't preserve this signal's pre-encode peak closely enough for a tight tolerance
                 // to be meaningful (confirmed by actually measuring it, not assumed -- the real
                 // round-tripped peak landed well under half of the original 10000/32768).
+                // BeGreaterThan(0.0), not just BeInRange: a range check alone would still pass even
+                // if the forwarding path silently regressed to always returning 0.0 (e.g. a future
+                // change that zeroed DecodedAudioTrack's own fields) -- confirmed this gap was real
+                // by temporarily weakening the assertions to range-only and seeing they'd still pass
+                // against a hard-coded 0.0, not assumed.
                 probeResult.PeakAmplitude.Should().NotBeNull();
-                probeResult.PeakAmplitude!.Value.Should().BeInRange(0.0, 1.0);
+                probeResult.PeakAmplitude!.Value.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
                 probeResult.RmsLevel.Should().NotBeNull();
-                probeResult.RmsLevel!.Value.Should().BeInRange(0.0, 1.0);
+                probeResult.RmsLevel!.Value.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
                 probeResult.RmsLevel!.Value.Should().BeLessThanOrEqualTo(probeResult.PeakAmplitude!.Value, "RMS can never exceed the peak for any real signal");
             }
             finally

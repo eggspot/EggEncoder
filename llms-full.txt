@@ -48,6 +48,8 @@ public class ProbeResult
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
+    public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
+    public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
 }
 ```
 
@@ -276,6 +278,8 @@ public sealed class WaveformCalculator
     public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
     public void AddBlock(ReadOnlySpan<int> interleavedSamples); // call repeatedly across decode callbacks
     public List<double> GetNormalizedWindows(); // each value in [0, 1]
+    public double GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, in [0, 1] -- no flush step needed
+    public double GetNormalizedRmsLevel();      // root-mean-square across every sample seen so far, in [0, 1]
 }
 ```
 
