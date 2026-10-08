@@ -110,6 +110,7 @@ namespace EggEncoder.Codecs.Wma
                     throw new NotSupportedException($"WMA format tag 0x{formatTag:X4} is not supported; only WMAv2 (0x0161) is supported");
                 }
 
+                EnsureBytesAvailable(fileBytes, position, extraDataSize);
                 var extraData = new byte[extraDataSize];
                 Array.Copy(fileBytes, position, extraData, 0, extraDataSize);
 
@@ -127,8 +128,7 @@ namespace EggEncoder.Codecs.Wma
 
             static void ReadPacketPayloads(byte[] fileBytes, ref int position, int packetSize, List<byte[]> framePayloads)
             {
-                var errorCorrectionFlags = fileBytes[position];
-                position += 1;
+                var errorCorrectionFlags = ReadByte(fileBytes, ref position);
 
                 byte lengthFlags;
                 if ((errorCorrectionFlags & ErrorCorrectionPresentFlag) != 0)
@@ -138,16 +138,14 @@ namespace EggEncoder.Codecs.Wma
                         position += errorCorrectionFlags & ErrorCorrectionDataSizeMask;
                     }
 
-                    lengthFlags = fileBytes[position];
-                    position += 1;
+                    lengthFlags = ReadByte(fileBytes, ref position);
                 }
                 else
                 {
                     lengthFlags = errorCorrectionFlags;
                 }
 
-                var propertyFlags = fileBytes[position];
-                position += 1;
+                var propertyFlags = ReadByte(fileBytes, ref position);
 
                 ReadVariableLengthField(fileBytes, ref position, lengthFlags, PacketLengthFieldSizeMask, 0x20, 0x40, 0x60);
                 ReadVariableLengthField(fileBytes, ref position, lengthFlags, SequenceFieldSizeMask, 0x02, 0x04, 0x06);
@@ -160,8 +158,7 @@ namespace EggEncoder.Codecs.Wma
                     throw new NotSupportedException("ASF packets without the multiple-payloads flag are not supported");
                 }
 
-                var payloadFlags = fileBytes[position];
-                position += 1;
+                var payloadFlags = ReadByte(fileBytes, ref position);
                 var payloadCount = payloadFlags & NumberOfPayloadsMask;
 
                 for (var i = 0; i < payloadCount; i++)
@@ -182,6 +179,7 @@ namespace EggEncoder.Codecs.Wma
                     }
 
                     var payloadLength = ReadUInt16(fileBytes, ref position);
+                    EnsureBytesAvailable(fileBytes, position, payloadLength);
                     var payload = new byte[payloadLength];
                     Array.Copy(fileBytes, position, payload, 0, payloadLength);
                     position += payloadLength;
@@ -195,7 +193,7 @@ namespace EggEncoder.Codecs.Wma
                 var maskedValue = flags & mask;
                 if (maskedValue == byteFlag)
                 {
-                    return fileBytes[position++];
+                    return ReadByte(fileBytes, ref position);
                 }
 
                 if (maskedValue == wordFlag)
@@ -212,8 +210,18 @@ namespace EggEncoder.Codecs.Wma
             }
         }
 
+        private static byte ReadByte(byte[] fileBytes, ref int position)
+        {
+            EnsureBytesAvailable(fileBytes, position, 1);
+            var value = fileBytes[position];
+            position += 1;
+
+            return value;
+        }
+
         private static Guid ReadGuid(byte[] fileBytes, ref int position)
         {
+            EnsureBytesAvailable(fileBytes, position, 16);
             var guid = new Guid(fileBytes.AsSpan(position, 16));
             position += 16;
 
@@ -222,6 +230,7 @@ namespace EggEncoder.Codecs.Wma
 
         private static ushort ReadUInt16(byte[] fileBytes, ref int position)
         {
+            EnsureBytesAvailable(fileBytes, position, 2);
             var value = BitConverter.ToUInt16(fileBytes, position);
             position += 2;
 
@@ -230,6 +239,7 @@ namespace EggEncoder.Codecs.Wma
 
         private static uint ReadUInt32(byte[] fileBytes, ref int position)
         {
+            EnsureBytesAvailable(fileBytes, position, 4);
             var value = BitConverter.ToUInt32(fileBytes, position);
             position += 4;
 
@@ -238,10 +248,29 @@ namespace EggEncoder.Codecs.Wma
 
         private static ulong ReadUInt64(byte[] fileBytes, ref int position)
         {
+            EnsureBytesAvailable(fileBytes, position, 8);
             var value = BitConverter.ToUInt64(fileBytes, position);
             position += 8;
 
             return value;
+        }
+
+        // Every read in this file funnels through here (or through Array.Copy call sites that call
+        // this directly themselves) -- confirmed by a truncated/corrupted real file previously
+        // throwing ArgumentOutOfRangeException (BitConverter.ToUInt16/32/64, Guid's own span
+        // constructor) or even an un-typed IndexOutOfRangeException (the raw fileBytes[position]
+        // indexing ReadByte now replaces), neither of which is the clear, typed
+        // InvalidDataException every other reader in this codebase (WavReader/AiffReader/AuReader's
+        // own ReadFully loops, CafReader/TtaReader's own explicit short-read checks) already gives
+        // for this exact class of malformed input. (long)position avoids the position+count
+        // addition itself overflowing int range first, for a position already corrupted by a
+        // bogus file-declared size field upstream.
+        private static void EnsureBytesAvailable(byte[] fileBytes, int position, int count)
+        {
+            if (position < 0 || (long)position + count > fileBytes.Length)
+            {
+                throw new InvalidDataException($"ASF file is truncated or corrupted: expected {count} more byte(s) at position {position}, but the file is only {fileBytes.Length} byte(s) long");
+            }
         }
     }
 
