@@ -77,6 +77,7 @@ using EggEncoder.Pcm;
 var pipeline = new PcmTransformPipeline(
     new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 2),
     new CompressorTransform(sampleRate: 48000, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 150),
+    new NoiseGateTransform(sampleRate: 48000, thresholdDb: -40, ratio: 10, attackMs: 5, releaseMs: 100),
     new PanTransform(pan: -0.3, PanLaw.EqualPower),
     new ChannelRemixTransform(inputChannels: 2, outputChannels: 1),
     new VolumeTransform(gain: 1.5),

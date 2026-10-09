@@ -1,6 +1,6 @@
 # EggEncoder — Full Reference
 
-> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack P/Invoke bindings, built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack P/Invoke bindings, built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## Overview
 
@@ -146,6 +146,7 @@ using EggEncoder.Pcm;
 var pipeline = new PcmTransformPipeline(
     new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 2),
     new CompressorTransform(sampleRate: 48000, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 150),
+    new NoiseGateTransform(sampleRate: 48000, thresholdDb: -40, ratio: 10, attackMs: 5, releaseMs: 100),
     new VolumeTransform(gain: 1.5));
 
 AudioCutter.Convert(sourcePath, destPath, pipeline);
@@ -169,7 +170,7 @@ public interface IPcmTransform
 }
 ```
 
-### The eleven built-in transforms
+### The twelve built-in transforms
 
 ```csharp
 public sealed class ResamplingTransform : IPcmTransform
@@ -196,6 +197,13 @@ public sealed class PeakNormalizationTransform : IPcmTransform
 public sealed class CompressorTransform : IPcmTransform
 {
     public CompressorTransform(int sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs, double makeupGainDb = 0.0);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
+public sealed class NoiseGateTransform : IPcmTransform
+{
+    // The mirror image of CompressorTransform: gain reduction below threshold instead of above.
+    public NoiseGateTransform(int sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs);
     public void Reset(); // clear the envelope follower back to silence
 }
 
@@ -248,6 +256,7 @@ public sealed class FirFilterTransform : IPcmTransform
 
 - **Gain / peak normalization**: `VolumeTransform` is a flat linear multiplier. `PeakNormalizationTransform` measures the peak `|sample|` then applies `gain = targetPeakLinear * bitDepthMax / peak`; dropped into a pipeline without pre-measuring, it self-measures from whatever block `Apply` first sees -- driven by `AudioCutter.Convert`/`Cut`, that's one ~4096-frame decode block, **not the whole file**. For a true whole-file measurement: call `AudioCutter.MeasurePeakAmplitude(sourcePath)` first, then `peakTransform.MeasurePeak(peak, bitsPerSample)` before running the pipeline.
 - **Dynamics compression**: `CompressorTransform` is a standard feedforward design (threshold dBFS / ratio / attack / release / makeup gain). Its envelope follower is **stereo-linked** -- one scalar tracking the loudest channel per frame, not independent per-channel envelopes, so a transient in one channel doesn't shift the stereo image. Tracked in linear scale via a one-pole filter with separate attack/release coefficients, converted to dB once per frame for the reduction computation. Channel-count-agnostic (no per-channel state, derives `channels` fresh from each `Apply` call, the same way `FadeTransform` does), but fixes `sampleRate` at construction (the attack/release coefficients depend on it) the same way `BiquadTransform` does.
+- **Noise gating**: `NoiseGateTransform` is the mirror image of `CompressorTransform` -- gain reduction below threshold instead of above, via the same stereo-linked envelope follower, one-pole attack/release tracking, and `ratio` convention (`>= 1.0`, where `1.0` is an explicit no-op at every level). Unlike the compressor, true digital silence (`envelopeDb == -Infinity`) is this transform's own common case rather than a boundary condition, so `ratio == 1.0` combined with silence is handled as its own branch rather than falling through the general `(threshold - envelopeDb) * (1 - 1/ratio)` formula -- that combination would otherwise compute `Infinity * 0`, which is `NaN` under IEEE 754, not 0.
 - **Pan/balance**: `PanTransform` scales left/right gain independently from a single `pan` value. Stereo (2-channel) input only -- throws `ArgumentException` for any other channel count. `PanLaw.Linear` is balance-style (only the opposite channel attenuates; no volume dip at center). `PanLaw.EqualPower` is constant-power (`left^2 + right^2 == 1` everywhere, including a -3dB-per-channel center) -- how a true pan pot behaves in most DAWs.
 - **Channel remix**: `ChannelRemixTransform` handles mono<->stereo and general N<->M (equal-weight downmix, cyclic upmix).
 - **Bit-depth / float conversion**: `BitDepthFormatTransform` rescales between the native ranges of 8/16/24/32-bit samples -- this codebase has no separate "normalized" scale; every bit depth is signed and sign-extended to its own native range (e.g. 8-bit is -128..127).
@@ -258,7 +267,7 @@ public sealed class FirFilterTransform : IPcmTransform
 
 ### Important limits an LLM should surface when recommending this
 
-- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain, compressor envelope, biquad/Butterworth/FIR filter history) -- build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
+- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain, compressor/gate envelope, biquad/Butterworth/FIR filter history) -- build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
 - Any transform implementing `IPcmTransform.Flush` (currently only `ResamplingTransform`) holds output back until it has enough lookahead, and needs `pipeline.Flush(channels, sampleRate, bitsPerSample)` called once after the last block to drain its tail. `AudioCutter.Convert(pipeline)`/`Cut(options)` call this automatically; only code driving `PcmTransformPipeline` directly needs to call it itself.
 - `Mix`/`Concatenate` require every source to share channels/sample rate/bit depth (mismatches throw `NotSupportedException`).
 - `ResamplingTransform` is a Kaiser-windowed-sinc polyphase filter (anti-aliasing on downsample, band-limited reconstruction on upsample), not linear interpolation. It tracks a cumulative `floor(sourceFrames * ratio)` target so total output frame count is exact regardless of block splits; downsampling scales the filter's half-width up to preserve anti-aliasing quality, capped at 256 taps for extreme ratios.
@@ -705,6 +714,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 - **ALAC/TTA/WavPack/Opus/Vorbis are each scoped to mono/stereo** and their own specific bit-depth/sample-rate constraints (see each codec's own section above) -- all throw `NotSupportedException` outside that scope, rather than silently producing something subtly wrong.
 - **`PcmTransformPipeline` instances carry cross-block state** -- build a fresh one per `Convert`/`Cut`/`Mix` call (see "PCM Transform Pipeline" above for the full list of stateful transforms and the `Flush()` contract).
 - **`PanTransform` requires stereo (2-channel) input** -- throws `ArgumentException` for mono or any other channel count.
+- **`NoiseGateTransform` with `ratio == 1.0` is an explicit no-op at every level, including true digital silence** -- guarded so it never hits an `Infinity * 0` intermediate (which would otherwise be `NaN` under IEEE 754, not 0).
 - **`Mix` decodes every input fully into memory, concurrently** -- clip-length material, not multi-hour streams.
 
 ## License
