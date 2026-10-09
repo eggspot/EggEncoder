@@ -79,6 +79,40 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithCompressorTransform_Should_Reduce_A_SustainedAboveThresholdSignal()
+        {
+            // Proves CompressorTransform genuinely runs through the real pipeline, not just that
+            // CompressorTransformTest's own unit tests pass it a buffer directly.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = Enumerable.Repeat((int)short.MaxValue, 50).ToArray();
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                const double thresholdDb = -6;
+                const double ratio = 4;
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new CompressorTransform(sampleRate: 1000, thresholdDb, ratio, attackMs: 0, releaseMs: 0)));
+
+                using var reader = WavReader.Open(destPath);
+                reader.TotalSamples.Should().Be(50);
+
+                var buffer = new int[50];
+                reader.ReadInterleavedSamples(buffer, 50);
+
+                var reductionDb = (0 - thresholdDb) * (1.0 - (1.0 / ratio));
+                var expectedGain = Math.Pow(10.0, -reductionDb / 20.0);
+                var expected = (int)Math.Clamp(short.MaxValue * expectedGain, short.MinValue, short.MaxValue);
+                buffer.Should().OnlyContain(sample => sample == expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithVolumeTransform_SpanningMultipleDecodeBlocks_Should_Write_Every_Frame()
         {
             // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this

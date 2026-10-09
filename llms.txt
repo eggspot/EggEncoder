@@ -1,6 +1,6 @@
 # EggEncoder
 
-> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, pan/balance, remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, pan/balance, remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## What is EggEncoder?
 
@@ -61,7 +61,7 @@ var probeResult = await encoder.Probe("track.flac");
 - `WaveformCalculator` — streams decoded blocks into normalized peak windows, plus an overall peak amplitude and RMS level (all normalized to [0,1]) -- backs `ProbeResult.Waveform`/`PeakAmplitude`/`RmsLevel`
 - `IPcmTransformEncoder` — DI-friendly PCM pipeline entry point (`ConvertFile`, `CutFile`, `MixFiles`, `ConcatenateFiles`), implemented by `NativeEncoder`
 - `PcmTransformPipeline` / `IPcmTransform` — ordered list of composable transforms run on each decoded block
-- `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `PanTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform`, `BiquadTransform`, `ButterworthTransform`, `FirFilterTransform` — the built-in transforms
+- `ResamplingTransform`, `VolumeTransform`, `PeakNormalizationTransform`, `CompressorTransform`, `PanTransform`, `ChannelRemixTransform`, `BitDepthFormatTransform`, `FadeTransform`, `BiquadTransform`, `ButterworthTransform`, `FirFilterTransform` — the built-in transforms
 - `FloatSampleConverter` — int PCM ↔ normalized IEEE-float sample conversion at application boundaries (not itself a pipeline transform; the pipeline is exclusively int[]-based)
 - `CutOptions` / `MixInput` — options for the pipeline-aware `Cut`/`Mix` overloads
 - `WavSampleFormat` (`Integer`/`Float32`/`MuLaw`/`ALaw`) — selects a `.wav` destination's on-disk encoding for `Convert`/`Cut` (via `CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate`; ignored for non-WAV destinations. `Float32` requires the destination's bit depth to be 32; `MuLaw`/`ALaw` (G.711) require it to be 16
@@ -78,7 +78,7 @@ var pipeline = new PcmTransformPipeline(
 AudioCutter.Convert(sourcePath, destPath, pipeline);
 ```
 
-Covers all ten built-in `IPcmTransform`s: resampling, gain (`VolumeTransform`), peak normalization (`PeakNormalizationTransform`), stereo pan/balance (`PanTransform` -- `PanLaw.Linear`, balance-style with no center volume dip, or `PanLaw.EqualPower`, constant-power with a -3dB-per-channel center), channel remix, bit-depth/float PCM conversion, fades on a cut (`CutOptions.FadeInSeconds`/`FadeOutSeconds`), parametric EQ via `BiquadTransform` (RBJ Audio EQ Cookbook low/high pass, band pass, notch, all pass, peaking EQ, low/high shelf) or `ButterworthTransform` (steeper cascaded low/high pass), and general FIR convolution (`FirFilterTransform`, arbitrary caller-supplied taps) -- that's 10 counting gain and peak normalization, biquad and Butterworth, separately. Mixing (`AudioCutter.Mix`) and concatenation (`AudioCutter.Concatenate`) are separate, non-transform capabilities available through the same opt-in API.
+Covers all eleven built-in `IPcmTransform`s: resampling, gain (`VolumeTransform`), peak normalization (`PeakNormalizationTransform`), dynamics compression (`CompressorTransform` -- threshold/ratio/attack/release/makeup gain, stereo-linked envelope follower, standard feedforward design), stereo pan/balance (`PanTransform` -- `PanLaw.Linear`, balance-style with no center volume dip, or `PanLaw.EqualPower`, constant-power with a -3dB-per-channel center), channel remix, bit-depth/float PCM conversion, fades on a cut (`CutOptions.FadeInSeconds`/`FadeOutSeconds`), parametric EQ via `BiquadTransform` (RBJ Audio EQ Cookbook low/high pass, band pass, notch, all pass, peaking EQ, low/high shelf) or `ButterworthTransform` (steeper cascaded low/high pass), and general FIR convolution (`FirFilterTransform`, arbitrary caller-supplied taps) -- that's 11 counting gain and peak normalization, biquad and Butterworth, separately. Mixing (`AudioCutter.Mix`) and concatenation (`AudioCutter.Concatenate`) are separate, non-transform capabilities available through the same opt-in API.
 
 Important limits an LLM should surface when recommending this:
 - A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain, biquad/Butterworth/FIR filter history) — build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
