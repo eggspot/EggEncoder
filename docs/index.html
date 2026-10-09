@@ -45,7 +45,7 @@
     <section class="hero">
       <div class="hero-badge">Free &amp; MIT Licensed</div>
       <h1>Audio encode/decode <span class="accent">without the ceremony</span></h1>
-      <p class="hero-sub">One <code>IMediaEncoder</code> interface, fully native and in-process. 12 formats — AAC, AIFF, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA, plus MOV/MP4 probing — mostly pure C# alongside direct P/Invoke bindings to LAME, libFLAC, and WavPack, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) — no ffmpeg, no subprocess.</p>
+      <p class="hero-sub">One <code>IMediaEncoder</code> interface, fully native and in-process. 12 formats — AAC, AIFF, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA, plus MOV/MP4 probing — mostly pure C# alongside direct P/Invoke bindings to LAME, libFLAC, and WavPack, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, noise gating, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) — no ffmpeg, no subprocess.</p>
       <div class="btn-group">
         <a class="btn btn-primary" href="Getting-Started.html">Get Started</a>
         <a class="btn btn-outline" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">View on GitHub</a>
@@ -127,7 +127,7 @@ public class MediaService(IMediaEncoder mediaEncoder)
         <div class="feature-card">
           <div class="feature-icon">&#127926;</div>
           <div class="feature-title">PCM Transform Pipeline</div>
-          <p class="feature-desc">Opt-in resampling, gain/peak normalization, dynamics compression, stereo pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth), general FIR filtering, mixing, and concatenation — layered onto <code>Convert</code>/<code>Cut</code> without touching the original API. See <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a>.</p>
+          <p class="feature-desc">Opt-in resampling, gain/peak normalization, dynamics compression, noise gating, stereo pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth), general FIR filtering, mixing, and concatenation — layered onto <code>Convert</code>/<code>Cut</code> without touching the original API. See <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a>.</p>
         </div>
       </div>
 

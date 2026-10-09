@@ -227,6 +227,13 @@ public sealed class CompressorTransform : IPcmTransform
     public void Reset(); // clear the envelope follower back to silence
 }
 
+public sealed class NoiseGateTransform : IPcmTransform
+{
+    // The mirror image of CompressorTransform: gain reduction below threshold instead of above.
+    public NoiseGateTransform(int sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
 public sealed class PanTransform : IPcmTransform
 {
     public PanTransform(double pan, PanLaw law = PanLaw.Linear); // pan: -1.0 (full left) .. +1.0 (full right)
