@@ -256,7 +256,7 @@ commitments.
   - **Test plan**: same sample-exactness bar as item 2, plus a regression check that LPC output is
     never *larger* than the FIXED-only baseline for the same input (fall back to FIXED if LPC
     doesn't win) and is measurably smaller on real music-like fixtures.
-  - Status: done. Orders 1-8, a fixed 14-bit coefficient precision (not itself searched), and a
+  - Status: done — https://github.com/eggspot/EggEncoder/pull/76. Orders 1-8, a fixed 14-bit coefficient precision (not itself searched), and a
     Welch window before autocorrelation (confirmed empirically necessary -- without it, LPC lost to
     FIXED on every tested signal; with it, LPC correctly wins on tonal/resonant content and loses
     gracefully to FIXED's own exact-zero-residual case on a pure linear ramp). "Never larger than
