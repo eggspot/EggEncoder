@@ -81,6 +81,7 @@ var pipeline = new PcmTransformPipeline(
     new PanTransform(pan: -0.3, PanLaw.EqualPower),
     new ChannelRemixTransform(inputChannels: 2, outputChannels: 1),
     new VolumeTransform(gain: 1.5),
+    new LimiterTransform(sampleRate: 48000, ceilingDb: -0.3, releaseMs: 50), // guarantee the final ceiling after everything above it
     new BitDepthFormatTransform(fromBits: 16, toBits: 24));
 
 AudioCutter.Convert(sourcePath, destPath, pipeline);</code></pre>
