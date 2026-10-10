@@ -191,6 +191,16 @@ namespace EggEncoder.Codecs.WavPack
         private static int ReadEscapedUnaryTail(WavPackBitReader reader, int unaryValue)
         {
             var extraBits = unaryValue - 1;
+            // A 32-bit int physically cannot represent "an implicit leading bit at position 31 or
+            // 32" (C#'s shift operators mask the shift count to 0-31 besides, so `1 << 32` would
+            // silently wrap to `1 << 0` rather than overflow or throw) -- reject outright rather
+            // than silently producing a wrong value. No realistic 16/24-bit lossless WavPack
+            // content ever needs a class index or zero-run length anywhere near this large.
+            if (extraBits >= 31)
+            {
+                throw new InvalidDataException("A WavPack escaped-unary code's magnitude is too large to represent -- the file is corrupt.");
+            }
+
             var x = (int)reader.ReadBits(extraBits);
             return x | (1 << extraBits);
         }

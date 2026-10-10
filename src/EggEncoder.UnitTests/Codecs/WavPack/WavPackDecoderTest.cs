@@ -273,6 +273,62 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
+        public void Decode_WithTruncatedSampleRateMetadata_Should_Throw()
+        {
+            // sample_nonstandard_rate_wavpack.wv's genuine WP_ID_SAMPLE_RATE sub-block (confirmed
+            // at byte offset 148, declaring 2 words = 3 bytes since its own "odd length" flag is
+            // set) always carries exactly 3 bytes; shrinking its declared word count to 1 (1 byte)
+            // exercises the guard against a sub-block too short to hold the 24-bit rate value.
+            var corruptBytes = File.ReadAllBytes(_nonStandardRateFixturePath);
+            const int sampleRateSizeOffset = 148 + 1;
+            corruptBytes[sampleRateSizeOffset] = 1;
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_shortrate_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, corruptBytes);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("WP_ID_SAMPLE_RATE metadata is");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithFormatChangingBetweenBlocksInTheSameSequence_Should_Throw()
+        {
+            // sample_split_mono_blocks_wavpack.wv's two sibling blocks (same per-frame sequence)
+            // both describe lossless (non-hybrid) audio; flipping the second block's own "hybrid"
+            // flag bit, without touching anything else about it, exercises the guard against a
+            // later block's format silently diverging from the one the file's first block already
+            // established, rather than a genuinely different channel count (already covered by
+            // Decode_WithChannelCountChangingMidStream_Should_Throw).
+            var corruptBytes = File.ReadAllBytes(_splitMonoBlocksFixturePath);
+            const int secondBlockFlagsOffset = 190 + 24;
+            corruptBytes[secondBlockFlagsOffset] |= 0x08;
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_formatchange_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, corruptBytes);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("format doesn't match the file's first block");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Decode_WithNonInitialBlockWhereSequenceStartExpected_Should_Throw()
         {
             // Takes a genuine single standalone block (the first block of sample_mono_ffmpeg.wv) and

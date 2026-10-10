@@ -82,7 +82,7 @@ namespace EggEncoder.Codecs.WavPack
                         throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
                     }
 
-                    if (isFirstGroupInFile)
+                    if (firstHeader is null)
                     {
                         firstHeader = header;
 
@@ -105,6 +105,15 @@ namespace EggEncoder.Codecs.WavPack
                         groupSampleRate = header.StandardSampleRate ?? FindNonStandardSampleRate(data, offset + WavPackBlockHeader.ByteLength, blockEnd)
                             ?? throw new NotSupportedException($"'{filePath}' has a non-standard sample rate but is missing the metadata that would specify it");
                         groupTotalSamples = header.TotalSamples;
+                    }
+                    // Every block after the true first one (whether a sibling in this same
+                    // per-frame sequence or the start of a later one) must match the format the
+                    // very first block established -- per spec, "the first block... determines the
+                    // format of the entire file" -- rather than being silently decoded as if it
+                    // still had the first block's own (by now stale) format.
+                    else if (header.IsFloat != firstHeader.IsFloat || header.IsHybrid != firstHeader.IsHybrid || header.BitsPerSample != firstHeader.BitsPerSample)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block whose format doesn't match the file's first block -- the file is corrupt (format can't change mid-stream).");
                     }
 
                     var blockChannelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var scale);
@@ -193,6 +202,11 @@ namespace EggEncoder.Codecs.WavPack
                 if (subBlock.FunctionId == WavPackMetadataSubBlock.IdSampleRate)
                 {
                     var d = subBlock.Data;
+                    if (d.Count < 3)
+                    {
+                        throw new InvalidDataException($"A WavPack block's WP_ID_SAMPLE_RATE metadata is {d.Count} bytes, but this sub-block always carries exactly 3.");
+                    }
+
                     return d[0] | (d[1] << 8) | (d[2] << 16);
                 }
             }
