@@ -55,6 +55,23 @@ namespace EggEncoder.Transform
             return value;
         }
 
+        public int ReadSignedBits(int count)
+        {
+            var shift = 32 - count;
+            return (int)(ReadBits(count) << shift) >> shift;
+        }
+
+        public uint ReadUnary()
+        {
+            var zeros = 0u;
+            while (ReadBits(1) == 0)
+            {
+                zeros++;
+            }
+
+            return zeros;
+        }
+
         public void SkipBits(int bitCount)
         {
             if (RemainingBits < bitCount)

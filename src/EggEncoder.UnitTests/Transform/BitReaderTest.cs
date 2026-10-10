@@ -94,6 +94,75 @@ namespace EggEncoder.UnitTests.Transform
         }
 
         [Fact]
+        public void ReadSignedBits_WithHighBitSet_Should_SignExtendToNegative()
+        {
+            var reader = new BitReader([0b10000000]);
+
+            reader.ReadSignedBits(4).Should().Be(-8);
+        }
+
+        [Fact]
+        public void ReadSignedBits_WithHighBitClear_Should_ReturnPositiveValue()
+        {
+            var reader = new BitReader([0b01110000]);
+
+            reader.ReadSignedBits(4).Should().Be(7);
+        }
+
+        [Fact]
+        public void ReadSignedBits_FullWidth32_Should_ReturnTheRawTwosComplementValue()
+        {
+            var reader = new BitReader([0xFF, 0xFF, 0xFF, 0xFF]);
+
+            reader.ReadSignedBits(32).Should().Be(-1);
+        }
+
+        [Fact]
+        public void ReadSignedBits_SingleBit_Should_ReadMinusOneOrZero()
+        {
+            var reader = new BitReader([0b10000000]);
+
+            reader.ReadSignedBits(1).Should().Be(-1);
+            reader.ReadSignedBits(1).Should().Be(0);
+        }
+
+        [Fact]
+        public void ReadUnary_Should_CountLeadingZeros_And_ConsumeTheTerminatingOne()
+        {
+            var reader = new BitReader([0b00010000]);
+
+            reader.ReadUnary().Should().Be(3u);
+            reader.BitPosition.Should().Be(4);
+        }
+
+        [Fact]
+        public void ReadUnary_WithNoLeadingZeros_Should_ReturnZero()
+        {
+            var reader = new BitReader([0b10000000]);
+
+            reader.ReadUnary().Should().Be(0u);
+            reader.BitPosition.Should().Be(1);
+        }
+
+        [Fact]
+        public void ReadUnary_AcrossByteBoundary_Should_CountCorrectly()
+        {
+            var reader = new BitReader([0b00000000, 0b00000001]);
+
+            reader.ReadUnary().Should().Be(15u);
+            reader.BitPosition.Should().Be(16);
+        }
+
+        [Fact]
+        public void ReadUnary_WithNoTerminatingOne_Should_Throw()
+        {
+            var reader = new BitReader([0b00000000]);
+
+            var act = () => reader.ReadUnary();
+            act.Should().ThrowExactly<EndOfStreamException>();
+        }
+
+        [Fact]
         public void ReadBits_PastEndOfBuffer_Should_Throw()
         {
             var reader = new BitReader([0xFF]);
