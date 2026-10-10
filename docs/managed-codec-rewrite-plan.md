@@ -201,7 +201,7 @@ commitments.
 
 ### Phase 1 — FLAC (best precedent: a real reference decoder exists to study)
 
-- [ ] **1. FLAC decode (managed)** — replaces `FlacDecoder.Decode` and the `StreamDecoder*`/
+- [x] **1. FLAC decode (managed)** — replaces `FlacDecoder.Decode` and the `StreamDecoder*`/
   write-callback half of `FlacNative.cs`.
   - **Scope**: STREAMINFO + frame-header parsing, Rice/escape residual decoding, FIXED (orders 0–4)
     and LPC (up to order 32) reconstruction, all four stereo decorrelation modes (independent,
@@ -225,7 +225,7 @@ commitments.
     unhandled exception or silent wrong output.
   - **Picked up immediately once this plan document itself merges** — a separate PR, tracked here
     (checked off) once it lands.
-  - Status: not started.
+  - Status: done — https://github.com/eggspot/EggEncoder/pull/74.
 
 - [ ] **2. FLAC encode, fixed predictors (managed)** — replaces the `StreamEncoder*` half of
   `FlacNative.cs` and `FlacEncoder`/`FlacEncoderSession`, MVP cut.
