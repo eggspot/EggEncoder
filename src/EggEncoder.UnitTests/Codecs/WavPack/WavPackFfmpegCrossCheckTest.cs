@@ -168,9 +168,11 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         // Exercises WavPack's multi-block-per-frame sequence: a stereo stream with no explicit
-        // channel layout (matching what this project's own native WavPackEncoderSession produces,
-        // since it never sets WavpackConfig's ChannelMask) is split by the reference encoder into
-        // two single-channel blocks per frame (initial + final) rather than one combined block.
+        // channel layout (matching what this project's own encoder used to produce back when it
+        // was native-backed and never set WavpackConfig's ChannelMask -- this fixture predates the
+        // managed rewrite, which always writes one combined block instead, see
+        // WavPackBlockWriter's own doc comment) is split by the reference encoder into two
+        // single-channel blocks per frame (initial + final) rather than one combined block.
         [Fact]
         public void Decode_ReferenceEncoderSplitMonoBlocksWavPack_Should_Match_Original_Wav_Samples()
         {
@@ -212,10 +214,10 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
             try
             {
-                var nativeWvPath = Path.Combine(tempDirectory, "native.wv");
-                WavPackEncoder.Encode(_wavFixturePath, nativeWvPath);
+                var encodedWvPath = Path.Combine(tempDirectory, "encoded.wv");
+                WavPackEncoder.Encode(_wavFixturePath, encodedWvPath);
 
-                var (_, decodedSamples) = WavPackTestDecoder.DecodeAll(nativeWvPath);
+                var (_, decodedSamples) = WavPackTestDecoder.DecodeAll(encodedWvPath);
 
                 decodedSamples.Should().Equal(expectedSamples);
             }

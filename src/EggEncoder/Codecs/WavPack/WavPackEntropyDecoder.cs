@@ -148,15 +148,15 @@ namespace EggEncoder.Codecs.WavPack
         // median[n]>>4 + 1 is the "effective step size" derived from the raw (finer-grained)
         // tracked value -- always at least 1, which is what lets the tracker move at all starting
         // from a freshly-seeded (or reset) value of 0.
-        private static long Band(long rawMedian) => (rawMedian >> 4) + 1;
+        internal static long Band(long rawMedian) => (rawMedian >> 4) + 1;
 
-        private static void IncreaseMedian(long[] median, int index)
+        internal static void IncreaseMedian(long[] median, int index)
         {
             var stepDenominator = 128 >> index;
             median[index] += 5 * ((median[index] + stepDenominator) / stepDenominator);
         }
 
-        private static void DecreaseMedian(long[] median, int index)
+        internal static void DecreaseMedian(long[] median, int index)
         {
             var stepDenominator = 128 >> index;
             median[index] -= 2 * ((median[index] + stepDenominator - 2) / stepDenominator);

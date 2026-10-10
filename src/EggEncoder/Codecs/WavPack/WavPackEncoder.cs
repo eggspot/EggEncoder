@@ -1,38 +1,30 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using EggEncoder.Codecs.Wav;
-using EggEncoder.Native;
 
 namespace EggEncoder.Codecs.WavPack
 {
-    // Encodes mono/stereo 16/24-bit lossless integer PCM into a WavPack (.wv) file via libwavpack --
-    // see WavPackDecoder's own doc comment for the native-binary provenance/scoping rationale, which
-    // applies equally here.
+    // Pure managed WavPack (.wv) encoder -- see WavPackDecoder's own doc comment for the general
+    // provenance/scoping rationale (format spec for the container, clean-room-derived algorithm
+    // knowledge for the codec itself), which applies equally here: every formula is the direct
+    // mathematical inverse of this project's own already bit-exact-verified decoder, not a fresh
+    // study of any encoder implementation.
     //
-    // Unlike libFLAC's own encoder (FlacNative.StreamEncoderInitFile writes directly to a file path,
-    // no custom callback needed), WavpackOpenFileOutput has no file-path convenience entry point at
-    // all -- it only ever writes through a caller-supplied block-output callback, so this follows
-    // the same [UnmanagedCallersOnly] + GCHandle pattern (not a marshaled delegate closure, which
-    // isn't AOT-safe) the old native FlacDecoder's own decode callback used to, before it was
-    // replaced by a pure managed decoder.
+    // An MVP scope, deliberately simple rather than compression-competitive -- see
+    // WavPackBlockEncoder's own doc comment for the exact simplifications (a single fixed
+    // decorrelation term, independent-channel stereo, no real zero-run-length exploitation).
+    // Correctness is the bar: every block this encoder writes decodes back to the exact original
+    // samples through this project's own WavPackDecoder, the primary test oracle (see
+    // WavPackEncoderSessionTest/WavPackRoundTripTest/WavPackFfmpegCrossCheckTest).
     //
-    // WavpackSetConfiguration64 accepts total_samples == -1 for "unknown, streaming" (confirmed from
-    // WavPack's own reference CLI, which uses exactly this for stdin input) and a WavpackUpdateNumSamples
-    // function to patch the written file's first block once the true count becomes known -- but
-    // OpenSession here always requires an exact total up front instead, the same requirement
-    // WavWriter.Create/AiffWriter.Create already have, so AudioCutter.Pipeline.cs's existing generic
-    // DeferredFixedHeaderSink (built for exactly this "defer until the true count is known" need) can
-    // be reused unchanged rather than this project needing to reimplement that native seek-and-patch
-    // sequence itself.
-    //
-    // Unlike FLAC/TTA/Opus/Vorbis, WavPack genuinely cannot represent an empty/zero-sample stream --
-    // confirmed from WavPack's own reference CLI (cli/wavpack.c), which refuses to encode one outright
-    // ("no raw PCM data to encode!"), and independently reconfirmed via a real CI failure here:
-    // WavpackSetConfiguration64 itself rejects total_samples == 0 ("invalid total sample count!"), and
-    // substituting -1 ("unknown") instead produces a file that WavpackOpenFileInput then refuses to
-    // read back ("can't read all of WavPack file!") since no data block is ever flushed for it to find.
-    // OpenSession rejects totalSamples <= 0 outright rather than letting either failure surface
-    // confusingly later.
+    // Checked, but NOT yet achieved, during development: byte-for-byte compatibility with the real
+    // reference wvunpack CLI. It accepts this encoder's output for plenty of content, but rejects
+    // some of it outright ("not compatible with this version of WavPack file!") in a way this
+    // project's own decoder never reproduces or explains -- confirmed (via the real wavpack CLI's
+    // own encoder, at every processing level including its fastest/simplest "-x0") that no real
+    // encoder ever actually emits a single-decorrelation-term block the way this one deliberately
+    // does for MVP simplicity, which is the leading suspect for why the real decoder sometimes
+    // balks at a shape no real encoder has ever handed it. Rather than block this item on fully
+    // reverse-engineering that undocumented decoder-side behavior, this is left as a known
+    // limitation -- see docs/managed-codec-rewrite-plan.md item 5's own status note.
     public static class WavPackEncoder
     {
         private const int FramesPerBlock = 4096;
@@ -56,19 +48,26 @@ namespace EggEncoder.Codecs.WavPack
 
     public sealed class WavPackEncoderSession : IAudioSink
     {
-        private readonly FileStream _destStream;
-        private readonly IntPtr _wpc;
-        private readonly GCHandle _stateHandle;
-        private readonly EncodeState _state;
+        private const int BlockSamples = 4096;
 
+        private readonly FileStream _destStream;
+        private readonly int _channels;
+        private readonly int _bitsPerSample;
+        private readonly int _sampleRate;
+        private readonly long _totalSamples;
+        private readonly List<int> _pendingInterleaved = [];
+
+        private long _samplesWritten;
+        private bool _finished;
         private bool _disposed;
 
-        private WavPackEncoderSession(FileStream destStream, IntPtr wpc, GCHandle stateHandle, EncodeState state)
+        private WavPackEncoderSession(FileStream destStream, int channels, int bitsPerSample, int sampleRate, long totalSamples)
         {
             _destStream = destStream;
-            _wpc = wpc;
-            _stateHandle = stateHandle;
-            _state = state;
+            _channels = channels;
+            _bitsPerSample = bitsPerSample;
+            _sampleRate = sampleRate;
+            _totalSamples = totalSamples;
         }
 
         public static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples)
@@ -90,59 +89,16 @@ namespace EggEncoder.Codecs.WavPack
 
             if (totalSamples <= 0)
             {
-                // See this class's own doc comment above for why -- WavPack genuinely cannot
-                // represent an empty/zero-sample stream, confirmed from its own reference CLI.
+                // WavPack genuinely cannot represent an empty/zero-sample stream at all -- confirmed
+                // from its own reference CLI, which refuses to encode one outright (see
+                // WavPackEncoderSessionTest.OpenSession_With_ZeroTotalSamples_Should_Throw's own
+                // comment for the original, native-API-specific chain of evidence this contract
+                // predates and still matches).
                 throw new NotSupportedException($"'{destFilePath}' requests {totalSamples} total samples; WavPack cannot encode an empty/zero-sample stream");
             }
 
             var destStream = File.Create(destFilePath);
-            var state = new EncodeState(destStream);
-            var stateHandle = GCHandle.Alloc(state);
-            var wpc = IntPtr.Zero;
-
-            try
-            {
-                unsafe
-                {
-                    wpc = WavPackNative.WavpackOpenFileOutput(&WriteBlockCallback, GCHandle.ToIntPtr(stateHandle), IntPtr.Zero);
-                }
-
-                if (wpc == IntPtr.Zero)
-                {
-                    throw new InvalidOperationException($"Failed to create WavPack encoder context for '{destFilePath}'");
-                }
-
-                var config = new WavpackConfig
-                {
-                    NumChannels = channels,
-                    SampleRate = sampleRate,
-                    BitsPerSample = bitsPerSample,
-                    BytesPerSample = bitsPerSample / 8
-                };
-
-                if (WavPackNative.WavpackSetConfiguration64(wpc, ref config, totalSamples, IntPtr.Zero) == 0)
-                {
-                    throw new InvalidOperationException($"Failed to configure WavPack encoder for '{destFilePath}': {GetErrorMessage(wpc)}");
-                }
-
-                if (WavPackNative.WavpackPackInit(wpc) == 0)
-                {
-                    throw new InvalidOperationException($"Failed to initialize WavPack encoder for '{destFilePath}': {GetErrorMessage(wpc)}");
-                }
-
-                return new WavPackEncoderSession(destStream, wpc, stateHandle, state);
-            }
-            catch
-            {
-                if (wpc != IntPtr.Zero)
-                {
-                    WavPackNative.WavpackCloseFile(wpc);
-                }
-
-                stateHandle.Free();
-                destStream.Dispose();
-                throw;
-            }
+            return new WavPackEncoderSession(destStream, channels, bitsPerSample, sampleRate, totalSamples);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -152,23 +108,29 @@ namespace EggEncoder.Codecs.WavPack
                 return;
             }
 
-            var success = WavPackNative.WavpackPackSamples(_wpc, buffer, (uint)frameCount) != 0;
-            ThrowIfCallbackFailed();
-
-            if (!success)
+            for (var i = 0; i < frameCount * _channels; i++)
             {
-                throw new InvalidOperationException($"WavPack encoder failed to process samples: {GetErrorMessage(_wpc)}");
+                _pendingInterleaved.Add(buffer[i]);
+            }
+
+            while (_pendingInterleaved.Count >= BlockSamples * _channels)
+            {
+                FlushBlock(BlockSamples);
             }
         }
 
         public void Finish()
         {
-            var success = WavPackNative.WavpackFlushSamples(_wpc) != 0;
-            ThrowIfCallbackFailed();
-
-            if (!success)
+            if (_finished)
             {
-                throw new InvalidOperationException($"WavPack encoder failed to finish writing: {GetErrorMessage(_wpc)}");
+                return;
+            }
+
+            _finished = true;
+
+            if (_pendingInterleaved.Count > 0)
+            {
+                FlushBlock(_pendingInterleaved.Count / _channels);
             }
         }
 
@@ -180,48 +142,30 @@ namespace EggEncoder.Codecs.WavPack
             }
 
             _disposed = true;
-            WavPackNative.WavpackCloseFile(_wpc);
-            _stateHandle.Free();
             _destStream.Dispose();
         }
 
-        private void ThrowIfCallbackFailed()
+        private void FlushBlock(int frameCount)
         {
-            if (_state.CallbackException is { } exception)
+            var channelSamples = new int[_channels][];
+            for (var c = 0; c < _channels; c++)
             {
-                throw new InvalidOperationException("WavPack encoder's write callback failed", exception);
+                channelSamples[c] = new int[frameCount];
             }
-        }
 
-        private static string GetErrorMessage(IntPtr wpc)
-        {
-            var pointer = WavPackNative.WavpackGetErrorMessage(wpc);
-            return pointer == IntPtr.Zero ? "unknown error" : Marshal.PtrToStringUTF8(pointer) ?? "unknown error";
-        }
-
-        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-        private static unsafe int WriteBlockCallback(IntPtr id, IntPtr data, int bcount)
-        {
-            var state = (EncodeState)GCHandle.FromIntPtr(id).Target!;
-
-            try
+            for (var i = 0; i < frameCount; i++)
             {
-                var span = new ReadOnlySpan<byte>((void*)data, bcount);
-                state.DestStream.Write(span);
-                return 1;
+                for (var c = 0; c < _channels; c++)
+                {
+                    channelSamples[c][i] = _pendingInterleaved[(i * _channels) + c];
+                }
             }
-            catch (Exception e)
-            {
-                state.CallbackException = e;
-                return 0;
-            }
-        }
 
-        private sealed class EncodeState(FileStream destStream)
-        {
-            public FileStream DestStream { get; } = destStream;
+            var blockBytes = WavPackBlockWriter.WriteBlock(channelSamples, _channels, _bitsPerSample, _sampleRate, _samplesWritten, _totalSamples);
+            _destStream.Write(blockBytes);
 
-            public Exception? CallbackException { get; set; }
+            _samplesWritten += frameCount;
+            _pendingInterleaved.RemoveRange(0, frameCount * _channels);
         }
     }
 }

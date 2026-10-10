@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside a native MP3 binding, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -12,11 +12,11 @@ Sponsored by [eggspot.app](https://eggspot.app)
 
 ## Overview
 
-EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertFile`, `CutFile` — implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations (AAC, WAV, AIFF, AU, ALAC, FLAC, TTA, WMA, Opus, Vorbis) plus native P/Invoke bindings to `libmp3lame` and `wavpackdll`. No external process, no ffmpeg install, no subprocess overhead.
+EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertFile`, `CutFile` — implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations (AAC, WAV, AIFF, AU, ALAC, FLAC, TTA, WMA, Opus, Vorbis, WavPack) plus a native P/Invoke binding to `libmp3lame`. No external process, no ffmpeg install, no subprocess overhead.
 
 ### Why EggEncoder?
 
-- 🚀 **Mostly pure managed, fully in-process** — only MP3 (decode+encode) and WavPack encode still shell out to native P/Invoke (LAME, WavPack); no subprocess/shell-out overhead anywhere
+- 🚀 **Mostly pure managed, fully in-process** — only MP3 (decode+encode) still shells out to native P/Invoke (LAME); no subprocess/shell-out overhead anywhere
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
@@ -24,7 +24,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
-- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC, BSD-style WavPack)
+- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC)
 
 ## Installation
 
@@ -32,7 +32,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 dotnet add package EggEncoder
 ```
 
-Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`, `wavpackdll.dll`) ship inside the package for `win-x64` and are copied to your output directory automatically.
+Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`) ship inside the package for `win-x64` and are copied to your output directory automatically.
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ⁴ Vorbis is lossy, mono/stereo, 16-bit PCM — unlike Opus, any sample rate is supported (no fixed-rate resampling requirement).
 
-⁵ WavPack supports 16-bit and 24-bit lossless integer PCM (its own lossy/hybrid and floating-point modes are out of scope). Mono and stereo only. WavPack *decode* is a pure managed implementation (clean-room from the WavPack 4/5 format spec plus, for the codec algorithm that spec doesn't itself document, an owner-approved arm's-length study of FFmpeg's own independently-written decoder — see THIRD-PARTY-NOTICES.md); WavPack *encode* still delegates to a native binary (`wavpackdll.dll`, the official WavPack project's own prebuilt library). Also unlike every other codec here, WavPack cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one) — encoding one throws `NotSupportedException` rather than producing a file.
+⁵ WavPack supports 16-bit and 24-bit lossless integer PCM (its own lossy/hybrid and floating-point modes are out of scope). Mono and stereo only. Both WavPack *decode* and *encode* are pure managed implementations (clean-room from the WavPack 4/5 format spec plus, for the codec algorithm that spec doesn't itself document, an owner-approved arm's-length study of FFmpeg's own independently-written decoder — see THIRD-PARTY-NOTICES.md); no native binary is involved for this codec any more. The encoder is a deliberately simple MVP (a single fixed decorrelation term, independent-channel stereo, not yet compression-competitive) whose output round-trips exactly through this project's own decoder, but has not yet achieved full compatibility with the real reference `wvunpack` CLI for arbitrary content. Also unlike every other codec here, WavPack cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one) — encoding one throws `NotSupportedException` rather than producing a file.
 
 ⁶ `WavReader` also decodes IMA ADPCM (`WAVE_FORMAT_IMA_ADPCM`, format tag 17) and MS ADPCM (`WAVE_FORMAT_ADPCM`, format tag 2, see footnote 8) — still a `.wav` file, just a different `fmt` chunk codec, so it's read automatically by `Probe`/`Convert`/`Cut`/pipeline sources with no extra API. Mono and stereo only; reports as 16-bit PCM once decoded (the coded width is 4 bits for both). `WavWriter` also encodes both (block-structured, buffered internally rather than one sample at a time — see `WavSampleFormat.ImaAdpcm`/`ImaAdpcmEncoder` and `WavSampleFormat.MsAdpcm`/`MsAdpcmEncoder`), selectable the same way `Float32`/`MuLaw`/`ALaw` are.
 
@@ -143,6 +143,6 @@ WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). EggEncoder bundles pre-built `libmp3lame.dll` (LGPL-2.1),
-`libFLAC.dll` (BSD-style), and `wavpackdll.dll` (BSD-style) as separate, dynamically-loaded
-native binaries; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
+MIT — see [LICENSE](LICENSE). EggEncoder bundles pre-built `libmp3lame.dll` (LGPL-2.1) and
+`libFLAC.dll` (BSD-style) as separate, dynamically-loaded native binaries; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.

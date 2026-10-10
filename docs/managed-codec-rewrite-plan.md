@@ -23,7 +23,9 @@ approved studying FFmpeg's independently-written WavPack decoder (`libavcodec/wa
 copying code or structure, with no FFmpeg source vendored, linked, or shipped. This keeps the "no
 GPL/LGPL dependency" guarantee intact (nothing from FFmpeg ships in this project) while relaxing
 the stricter "never even read copyleft source" posture for this one, spec-less item — see
-`THIRD-PARTY-NOTICES.md`'s "WavPack decode algorithm" entry for the full acknowledgment.
+`THIRD-PARTY-NOTICES.md`'s "WavPack algorithm" entry for the full acknowledgment (this same
+exception, and the same acknowledgment entry, also covers item 5's encode-side formulas — see that
+item's own status note for why no *second* sign-off was needed).
 
 This is a multi-session, multi-PR initiative. **This file is the source of truth for what's done,
 what's next, and why** — it exists so a fresh session can make real progress without re-deriving
@@ -301,7 +303,7 @@ commitments.
     familiarity with the WavPack reference project (standard "prior exposure, fresh rewrite"
     practice), then — once that alone proved insufficiently precise for bit-exactness — to also
     study FFmpeg's own independently-written decoder at arm's length (see
-    `THIRD-PARTY-NOTICES.md`'s "WavPack decode algorithm" entry for the full acknowledgment). CI
+    `THIRD-PARTY-NOTICES.md`'s "WavPack algorithm" entry for the full acknowledgment). CI
     against the real native encoder on Windows (this plan's own ffmpeg-fixture test plan above
     wasn't sufficient alone) surfaced several additional real-world cases beyond the original
     scope note: multi-block-per-frame mono/stereo sequences (this project's own
@@ -311,7 +313,7 @@ commitments.
     not just hybrid/>24-bit as general WavPack documentation describes) — all now implemented and
     covered by dedicated reference-encoder-produced fixtures, not just the ffmpeg ones.
 
-- [ ] **5. WavPack encode (managed)** — replaces `WavPackEncoder`/`WavPackEncoderSession` and the
+- [x] **5. WavPack encode (managed)** — replaces `WavPackEncoder`/`WavPackEncoderSession` and the
   encode half of `WavPackNative.cs`.
   - **Depends on**: 4.
   - **Size**: ~6–10 ticks.
@@ -319,7 +321,83 @@ commitments.
     decoder (and the real `sample_ffmpeg.wv` cross-check direction) reproduces exact original
     samples; the existing "WavPack can't represent zero samples" `NotSupportedException` contract
     (`OpenSession` with `totalSamples <= 0`) is preserved.
-  - Status: not started.
+  - Status: done. `WavPackNative.cs` and the bundled `wavpackdll.dll` have both been fully removed
+    (nothing references them any more — WavPack was the last direction still needing either).
+    Scope is a deliberately simple MVP (single fixed decorrelation term, independent-channel
+    stereo, no joint stereo or real zero-run-length exploitation), matching this plan's own
+    "correctness first, not yet compression-competitive" precedent from item 2/3's `FlacEncoder`.
+    Every formula (decorrelation weight update, the entropy coder's class/tail/sign write logic,
+    including the non-obvious one-symbol-lookahead carry-bit mechanism needed to invert the
+    decoder's own carry-shortcut reads) is the direct mathematical inverse of item 4's own
+    already-verified decode-side knowledge — no fresh study of any encoder was needed or done.
+    Two real bugs surfaced only once round-trip testing began (self-consistency alone, by
+    construction, couldn't have caught either):
+    1. The entropy coder's own median-update rule has a boundary case the encoder's first draft
+       missed: class exactly 2 (the "fits in band C's own first step" case) *decreases* median[2],
+       the same way classes 0/1 decrease their own boundary medians — but every class *above* 2
+       increases it. The encoder's first draft conflated "class ≥ 2" into one case and always
+       increased, which is silently wrong only once enough symbols pass through that boundary to
+       desync the two sides' median state — found via the same binary-search-on-content
+       methodology as item 4's own bugs (shrinking a failing random buffer down to the exact
+       symbol where it first diverges).
+    2. Cold-starting every block's entropy medians at 0 (legal per spec, and what the encoder's
+       first draft did) means content whose real magnitude is far from that starting point needs
+       an extremely deep escaped-unary class code for its first several symbols — mathematically
+       valid, self-consistent, and tolerated by this project's own decoder, but real encoders never
+       actually do this (confirmed directly: even the reference `wavpack` CLI's fastest/simplest
+       `-x0` mode always seeds non-zero medians and uses multiple decorrelation terms). Fixed by
+       measuring each block's own average residual magnitude and seeding `WP_ID_ENTROPY_VARS`
+       accordingly (`WavPackExp2.Compress`, a new approximate inverse of `Expand`) instead of
+       always writing zero.
+    **Known limitation, not resolved**: this encoder's output round-trips exactly through item 4's
+    own decoder (the primary oracle per this plan's own precedent) for every case this project's
+    test suite exercises, including large multi-block stereo content. It does **not** yet achieve
+    full byte-for-byte compatibility with the real reference `wvunpack` CLI for arbitrary content —
+    confirmed via extensive binary-search-on-content testing (the same methodology that found the
+    two bugs above) that the real decoder sometimes rejects this encoder's output outright
+    ("not compatible with this version of WavPack file!"), content-dependently, in a way this
+    project's own decoder never reproduces or explains. The leading suspect, not yet confirmed: no
+    real encoder — at any processing level, including its fastest/simplest one — ever actually
+    emits a genuinely single-decorrelation-term block the way this MVP deliberately does, so this
+    may be exercising a real-decoder code path no real-world file has ever reached rather than a
+    bug in this project's own bit-level formulas (which are, independently, confirmed correct
+    against this project's own decoder). Fully resolving this would mean either reverse-engineering
+    undocumented real-decoder validation behavior with no spec to check against, or implementing a
+    multi-term/joint-stereo encoder closer to what real encoders produce — both larger than this
+    item's own MVP scope. Not blocking: this plan's own "correctness is the bar: decodes back
+    exactly through this project's own decoder" precedent is met in full; real-CLI compatibility
+    was always scoped here as best-effort, checked during development, not a CI dependency.
+
+- [ ] **5a. WavPack encoder interop with official wvunpack (multi-term decorrelation blocks)**
+  — follow-up to item 5, not a dependency of anything else in this plan.
+  - **Problem**: item 5's encoder is a deliberately minimal single-decorrelation-term MVP. Its
+    output round-trips exactly through this project's own `WavPackDecoder` but is sometimes
+    rejected outright by the real reference `wvunpack` CLI ("not compatible with this version of
+    WavPack file!"), content-dependently. The leading (unconfirmed) theory: no real encoder, at
+    any processing level, ever actually emits a genuinely single-term block, so this may be
+    exercising a real-decoder code path no real-world file has ever reached.
+  - **Scope**: extend `WavPackBlockEncoder` to cascade multiple decorrelation terms (matching what
+    the real reference encoder's own fastest mode, `-x0`, already uses — confirmed at least 2 terms
+    even there) and write real `WP_ID_DECORR_WEIGHTS`/`WP_ID_DECORR_SAMPLES` metadata instead of
+    relying on the all-zero cold-start default. Joint stereo is a candidate addition too (the
+    encode-side formula — `encL = L-R; encR = R + ((L-R)>>1)`, verified by algebraic substitution
+    against `WavPackBlockDecoder.Decode`'s own un-mix — was already derived during item 5's
+    research but never implemented) but isn't required to close this gap; don't add it unless the
+    multi-term change alone doesn't resolve the real-decoder rejections.
+  - **Acceptance criteria (measurable, not vibes)**: encode a representative content matrix (silence,
+    full-scale random noise, a real music-like fixture, each at mono/stereo × 16/24-bit) and decode
+    every resulting `.wv` file with the real `wvunpack` CLI (installed via `brew install wavpack` on
+    a dev machine — this stays a local/manual check per item 5's own "not a CI dependency" scoping,
+    since CI runners don't have it installed) with zero "not compatible"/CRC-mismatch rejections,
+    *and* confirm `wvunpack`'s own decoded PCM output is byte-identical to the original source.
+    This project's own `WavPackDecoder` round-trip must keep passing throughout — this item adds
+    real-CLI compatibility, it doesn't trade away the existing correctness bar.
+  - **Depends on**: 5.
+  - **Size**: unestimated — genuinely open-ended until the multi-term change is tried and either
+    closes the gap or narrows down what else the real decoder actually requires.
+  - Status: not started. Lower priority than Phase 3 (MP3 encode) — this is a real-world-interop
+    polish item on an already-correct (per this project's own decoder) encoder, not a blocking
+    defect.
 
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 
@@ -359,9 +437,13 @@ commitments.
 ### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
 
 - [ ] **8. Delete native infrastructure, expand CI**
-  - **Scope**: delete `NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`, `WavPackNative.cs`,
-    `Native/win-x64/*.dll`; remove the three `<None>` packaging entries from `EggEncoder.csproj`;
-    remove the corresponding `THIRD-PARTY-NOTICES.md` sections; change `ci.yml`/`publish.yml` from
+  - **Scope**: `WavPackNative.cs` and `Native/win-x64/wavpackdll.dll` are already gone (removed
+    early, alongside item 5, rather than held for this item — WavPack was fully managed in both
+    directions at that point, so there was no reason to keep shipping a now-unreferenced binary).
+    Remaining: delete `NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`,
+    `Native/win-x64/*.dll` (the rest); remove the remaining `<None>` packaging entries from
+    `EggEncoder.csproj`; remove the corresponding `THIRD-PARTY-NOTICES.md` sections; change
+    `ci.yml`/`publish.yml` from
     `windows-latest`-only to a real `[windows-latest, ubuntu-latest, macos-latest]` matrix; update
     `EggEncoder.AotSmokeTest` to multi-RID and refresh its own doc comment (no more native-interop
     framing); full docs-sync pass across README/llms.txt/llms-full.txt/CLAUDE.md/docs/*.html
