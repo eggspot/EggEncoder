@@ -368,6 +368,37 @@ commitments.
     exactly through this project's own decoder" precedent is met in full; real-CLI compatibility
     was always scoped here as best-effort, checked during development, not a CI dependency.
 
+- [ ] **5a. WavPack encoder interop with official wvunpack (multi-term decorrelation blocks)**
+  — follow-up to item 5, not a dependency of anything else in this plan.
+  - **Problem**: item 5's encoder is a deliberately minimal single-decorrelation-term MVP. Its
+    output round-trips exactly through this project's own `WavPackDecoder` but is sometimes
+    rejected outright by the real reference `wvunpack` CLI ("not compatible with this version of
+    WavPack file!"), content-dependently. The leading (unconfirmed) theory: no real encoder, at
+    any processing level, ever actually emits a genuinely single-term block, so this may be
+    exercising a real-decoder code path no real-world file has ever reached.
+  - **Scope**: extend `WavPackBlockEncoder` to cascade multiple decorrelation terms (matching what
+    the real reference encoder's own fastest mode, `-x0`, already uses — confirmed at least 2 terms
+    even there) and write real `WP_ID_DECORR_WEIGHTS`/`WP_ID_DECORR_SAMPLES` metadata instead of
+    relying on the all-zero cold-start default. Joint stereo is a candidate addition too (the
+    encode-side formula — `encL = L-R; encR = R + ((L-R)>>1)`, verified by algebraic substitution
+    against `WavPackBlockDecoder.Decode`'s own un-mix — was already derived during item 5's
+    research but never implemented) but isn't required to close this gap; don't add it unless the
+    multi-term change alone doesn't resolve the real-decoder rejections.
+  - **Acceptance criteria (measurable, not vibes)**: encode a representative content matrix (silence,
+    full-scale random noise, a real music-like fixture, each at mono/stereo × 16/24-bit) and decode
+    every resulting `.wv` file with the real `wvunpack` CLI (installed via `brew install wavpack` on
+    a dev machine — this stays a local/manual check per item 5's own "not a CI dependency" scoping,
+    since CI runners don't have it installed) with zero "not compatible"/CRC-mismatch rejections,
+    *and* confirm `wvunpack`'s own decoded PCM output is byte-identical to the original source.
+    This project's own `WavPackDecoder` round-trip must keep passing throughout — this item adds
+    real-CLI compatibility, it doesn't trade away the existing correctness bar.
+  - **Depends on**: 5.
+  - **Size**: unestimated — genuinely open-ended until the multi-term change is tried and either
+    closes the gap or narrows down what else the real decoder actually requires.
+  - Status: not started. Lower priority than Phase 3 (MP3 encode) — this is a real-world-interop
+    polish item on an already-correct (per this project's own decoder) encoder, not a blocking
+    defect.
+
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 
 - [ ] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
