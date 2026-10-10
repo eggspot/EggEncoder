@@ -414,15 +414,74 @@ commitments.
   - **Measurable acceptance criteria** (confirm/adjust with the owner before starting, if real
     implementation experience suggests these numbers are wrong):
     - **Decodability**: 100% of encoded output decodes cleanly via this project's own `Mp3Decoder`
-      (NLayer, already managed) with no exceptions, correct channel count, correct sample rate.
+      (NLayer, already managed) with no exceptions, correct channel count, correct sample rate, for
+      every (mono/stereo) × (32/44.1/48 kHz) × (64/128/320 kbps, this project's own
+      `Mp3EncoderTest` fixtures already exercise 64 and 320) combination — this is the
+      non-negotiable bar, since bitstream *syntax* correctness (frame header, side info,
+      Huffman-coded data, bit reservoir field) is categorically different from, and more important
+      than, coding *quality* for this baseline (see Design below).
     - **Size**: output file size within ±10% of `bitRateKbps × durationSeconds / 8` (mirrors
-      `Mp3EncoderTest.Encode_WithLowerBitRate_Should_Produce_Smaller_File`'s existing spirit).
+      `Mp3EncoderTest.Encode_WithLowerBitRate_Should_Produce_Smaller_File`'s existing spirit), at
+      every bitrate in the matrix above.
     - **Quality**: decode the encoded output and measure SNR against the original PCM — the same
       methodology this codebase's own `VorbisEncoderSessionTest` round-trip SNR helper already uses
       for a lossy codec. Initial numeric floor TBD once a first working encoder gives real numbers
-      to calibrate against — not a claim of LAME-equivalent quality.
-    - **Explicitly not required**: VBR, joint-stereo/intensity-stereo modes, or matching LAME's
-      output size/quality at the same nominal bitrate.
+      to calibrate against — not a claim of LAME-equivalent quality; record the actual measured SNR
+      per bitrate in this item's own status note once implemented, so item 7 has a real baseline to
+      improve from instead of a guess. Silence/near-silence fixtures are exempt from this check (a
+      near-zero denominator makes dB meaningless there), the same way other codecs' own round-trip
+      tests already special-case silence.
+    - **Explicitly not required**: VBR, joint-stereo/intensity-stereo modes, block switching
+      (short/mixed blocks — long blocks only for the baseline), non-trivial bit-reservoir
+      borrowing, or matching LAME's output size/quality at the same nominal bitrate.
+  - **Design** (pipeline stages, left to right through one frame's two granules; ISO/IEC 11172-3
+    section references are to the publicly available format spec itself, consulted the same way
+    this plan's own FLAC/WavPack items already were — not to any encoder's source):
+    1. **Polyphase analysis filter bank** (§3-annex, 32 subbands) — splits each channel's PCM into
+       32 subbands via the spec's own 512-tap windowed filter coefficients (Annex B's analysis
+       window table, publicly tabulated, not derived from any encoder's source). Reuse `Mp3Probe`'s
+       own existing header-field knowledge (sync word, version/layer/bitrate-index/sample-rate-
+       index/mode layout) for the frame header rather than re-deriving it. New:
+       `Mp3PolyphaseFilter` (or similar name TBD at implementation time).
+    2. **Hybrid filter / MDCT** (§2.4.3.4) — each subband's 18 (long-block) samples per granule run
+       through a 36-point MDCT to produce 18 spectral coefficients. **Reuses `Transform.Mdct`
+       directly** (confirmed: already a generic, arbitrary-even-length direct-definition MDCT used
+       by AAC/WMA) rather than writing a new one — the same "don't duplicate shared infra"
+       precedent `FlacFrameDecoder.NeedsWideLpcAccumulator`/`WavPackEntropyDecoder.Band` etc.
+       already set elsewhere in this codebase. **Baseline simplification**: always use long blocks
+       (no block-switching/transient detection) — short/mixed blocks are a quality refinement for
+       item 7, not required for a valid, decodable baseline bitstream.
+    3. **Quantization** (§2.4.3.4.6) — the spec's own non-uniform (power-law) quantizer:
+       `ix = NINT((|xr| · 2^(-gain/4))^0.75 − 0.0946)`, with a `global_gain` and one `scalefactor`
+       per scalefactor band, chosen so the quantized values fit the frame's target bit budget.
+       **Baseline simplification**: a simple outer-loop binary search on `global_gain` alone (no
+       per-scalefactor-band noise-shaping/requantization loop, no psychoacoustic masking model at
+       all) to hit the target bit count — real encoders' own perceptual bit allocation is exactly
+       the "decades of tuning" gap item 7's own scope note already acknowledges may never fully
+       close; the baseline's job is a *valid, reasonably-sized* bitstream, not a *perceptually
+       optimal* one.
+    4. **Huffman coding** (§2.4.3.4.8, Annex B's Huffman tables) — entropy-codes the quantized
+       `big_values`/`count1` regions using the spec's own published code tables (table selection
+       per scalefactor-band region, same as any compliant decoder's own inverse tables — NLayer
+       already has the decode-side ones, encode needs their inverse, i.e. value → code rather than
+       code → value, tabulated the same way from the same spec annex).
+    5. **Bit reservoir** (§2.4.2.3) — even CBR mode's bitstream syntax requires `main_data_begin`
+       (a backpointer letting a frame borrow bits from the previous frame's unused budget).
+       **Baseline simplification**: never borrow — `main_data_begin = 0` on every frame, trivially
+       spec-legal (borrowing is optional per frame) and sidesteps the reservoir *accounting*
+       entirely for the first implementation; revisit if the ±10% size target proves hard to hit
+       without it.
+    6. **Bitstream formatting** (§2.4.1/2.4.2) — frame header (sync word, MPEG version/layer,
+       bitrate/sample-rate indices, mode) + side info + main data, byte-packed per the spec's own
+       layout. **Reuses `Transform.BitWriter` directly** — confirmed it already writes MSB-first
+       (`WriteBits` iterates `i` from `bitCount - 1` down to `0`), exactly MP3's own bitstream
+       convention (the opposite of WavPack's LSB-first one `WavPackBitWriter` had to write fresh
+       for), so no new bit writer is needed for this item at all. New: `Mp3FrameEncoder` to drive
+       it with the actual frame/side-info/Huffman-data layout.
+    - **Stereo mode**: "normal" (independent/dual-mono) stereo only for the baseline — no
+      joint/intensity stereo (already excluded above, repeated here since it affects quantization
+      scope too: independent stereo quantizes/Huffman-codes each channel's granule completely
+      separately, with no cross-channel step to design at all for this item).
   - Status: not started.
 
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
