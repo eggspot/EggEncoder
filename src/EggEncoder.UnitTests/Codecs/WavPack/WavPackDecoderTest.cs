@@ -9,6 +9,9 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         private static readonly string _threeChannelFixturePath = Path.GetFullPath("Codecs/WavPack/sample_3channel.wv");
         private static readonly string _floatFixturePath = Path.GetFullPath("Codecs/WavPack/sample_float.wv");
         private static readonly string _eightBitFixturePath = Path.GetFullPath("Codecs/WavPack/sample_8bit.wv");
+        private static readonly string _hybridFixturePath = Path.GetFullPath("Codecs/WavPack/sample_hybrid_wavpack.wv");
+        private static readonly string _nonStandardRateFixturePath = Path.GetFullPath("Codecs/WavPack/sample_nonstandard_rate_wavpack.wv");
+        private static readonly string _monoFixturePath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wv");
 
         [Fact]
         public void Decode_StereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()
@@ -89,6 +92,108 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
+        public void Decode_WithHybridLossyFile_Should_Throw()
+        {
+            // A genuine reference-encoder-produced hybrid (lossy) WavPack file (ffmpeg's own
+            // wavpack encoder has no hybrid mode at all, so this fixture was produced with the
+            // official wavpack CLI's -b<n> option instead), to exercise this decoder's
+            // lossless-only guard for real.
+            var act = () => WavPackDecoder.Decode(_hybridFixturePath, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Decode_WithNonStandardSampleRate_Should_Throw()
+        {
+            // A genuine reference-encoder-produced file at 37800 Hz, which isn't one of WavPack's
+            // 15 standard-sample-rate-table entries, so its block header's own sample rate index
+            // field is the reserved "non-standard rate" sentinel.
+            var act = () => WavPackDecoder.Decode(_nonStandardRateFixturePath, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Decode_WithFileTruncatedMidBlock_Should_Throw()
+        {
+            var fullBytes = File.ReadAllBytes(_monoFixturePath);
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_truncated_{Guid.NewGuid():N}.wv");
+            try
+            {
+                // Keep the full 32-byte block header (so it parses and reports a real total-sample
+                // count) but cut off partway through the metadata/bitstream payload it declares.
+                File.WriteAllBytes(filePath, fullBytes[..48]);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("truncated");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithCrcMismatch_Should_Throw()
+        {
+            var corruptBytes = File.ReadAllBytes(_monoFixturePath);
+
+            // Flip a bit well inside the first block's bitstream payload (past the 32-byte header
+            // and its metadata sub-blocks) so the file still parses structurally but decodes to
+            // the wrong samples, tripping the block's own recorded CRC check.
+            corruptBytes[100] ^= 0xFF;
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_crc_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, corruptBytes);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("CRC mismatch");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithTrailingNonBlockData_Should_Tolerate_It()
+        {
+            // A trailing APEv2 tag (or similar) after the last real WavPack block is normal in
+            // real-world files and must not be treated as corruption, as long as at least one
+            // real block was already found.
+            var originalBytes = File.ReadAllBytes(_monoFixturePath);
+            var withTrailingGarbage = new byte[originalBytes.Length + 16];
+            originalBytes.CopyTo(withTrailingGarbage, 0);
+            for (var i = 0; i < 16; i++)
+            {
+                withTrailingGarbage[originalBytes.Length + i] = 0xAB;
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_trailing_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, withTrailingGarbage);
+
+                var decoded = new List<int>();
+                var streamInfo = WavPackDecoder.Decode(filePath, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+                streamInfo.TotalSamples.Should().Be(13230);
+                decoded.Should().HaveCount(13230);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Decode_WithMissingOrMalformedFile_Should_Throw()
         {
             var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_malformed_{Guid.NewGuid():N}.wv");
@@ -98,13 +203,11 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
                 var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
 
-                // Asserting only the exception type would leave the native error-buffer round trip
-                // (WavpackOpenFileInput's byte[] error out-parameter, decoded by DecodeErrorBuffer)
-                // completely unverified -- a marshaling bug that silently left the buffer all-zero
-                // would still pass a type-only check. "as WavPack: " with nothing after it is exactly
-                // what the message would look like if DecodeErrorBuffer returned an empty string.
+                // Asserting only the exception type would leave the actual message text unverified --
+                // a bug that always threw the same bare "as WavPack: " prefix regardless of the real
+                // failure reason would still pass a type-only check.
                 act.Should().ThrowExactly<InvalidDataException>()
-                    .Which.Message.Should().NotEndWith("as WavPack: ", "the native error buffer should have decoded to a real, non-empty message");
+                    .Which.Message.Should().NotEndWith("as WavPack: ", "the exception message should include a real, non-empty reason");
             }
             finally
             {
@@ -120,7 +223,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
 
             act.Should().ThrowExactly<InvalidDataException>()
-                .Which.Message.Should().NotEndWith("as WavPack: ", "the native error buffer should have decoded to a real, non-empty message");
+                .Which.Message.Should().NotEndWith("as WavPack: ", "the exception message should include a real, non-empty reason");
         }
     }
 }

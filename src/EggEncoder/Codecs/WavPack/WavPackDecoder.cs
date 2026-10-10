@@ -1,85 +1,134 @@
-using System.Text;
-using EggEncoder.Native;
-
 namespace EggEncoder.Codecs.WavPack
 {
-    // Decodes a WavPack (.wv) file via libwavpack -- the official project's own native C library
-    // (NuGet has no pure-managed WavPack decoder, unlike NLayer/Concentus/NVorbis for MP3/Opus/Vorbis),
-    // loaded the same way libFLAC/libmp3lame already are (NativeLibraryLoader, win-x64 only). The
-    // bundled wavpackdll.dll is the official project's own prebuilt binary, downloaded from its GitHub
-    // release and checksum-verified against its own published sums.txt -- not a third-party rebuild.
+    // Pure managed WavPack (.wv) decoder, implemented from the official WavPack 4/5 binary file
+    // format specification (https://www.wavpack.com/WavPack5FileFormat.pdf) for the block/header/
+    // metadata container, plus the actual decorrelation and entropy-coding algorithms -- which
+    // that same official document does not describe at all -- reconstructed from FFmpeg's own
+    // independently-written WavPack decoder (libavcodec/wavpack.c/.h, LGPL 2.1+), studied at arm's
+    // length (never copied: every formula here is re-derived/re-expressed independently, and
+    // FFmpeg's own precomputed exp2 mantissa table is instead computed directly from its
+    // mathematical definition in WavPackExp2) per the owner's explicit sign-off on this specific
+    // approach; see docs/managed-codec-rewrite-plan.md item 4 and THIRD-PARTY-NOTICES.md.
     //
-    // Scoped to mono/stereo, 16/24-bit lossless integer PCM, matching every other codec's convention
-    // in this project -- WavPack itself also supports more channels, floating-point samples, and a
-    // lossy/hybrid mode, all rejected here rather than silently mishandled.
-    //
-    // WavpackUnpackSamples's int32 buffer convention already matches this project's own native
-    // per-bit-depth-range int PCM convention exactly (e.g. -32768..32767 for 16-bit, confirmed by
-    // reading WavPack's own reference CLI source, not assumed) -- no scaling needed on decode, unlike
-    // Vorbis's normalized-float convention.
+    // Scoped to mono/stereo, 16/24-bit lossless integer PCM only, matching this project's existing
+    // convention and the previous native-backed implementation's own contract exactly -- lossy/
+    // hybrid, floating-point, and more-than-stereo (multi-block-per-frame) WavPack are all rejected
+    // rather than silently mishandled.
     public static class WavPackDecoder
     {
-        private const int ReadBufferFrames = 4096;
-
         public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
-            var error = new byte[80];
-            var wpc = WavPackNative.WavpackOpenFileInput(filePath, error, WavPackNative.OpenFileUtf8, 0);
-            if (wpc == IntPtr.Zero)
-            {
-                throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: {DecodeErrorBuffer(error)}");
-            }
-
+            byte[] data;
             try
             {
-                var channels = WavPackNative.WavpackGetNumChannels(wpc);
-                if (channels is not 1 and not 2)
-                {
-                    throw new NotSupportedException($"'{filePath}' has {channels} channels; only mono and stereo WavPack are supported");
-                }
-
-                var bitsPerSample = WavPackNative.WavpackGetBitsPerSample(wpc);
-                if (bitsPerSample != 16 && bitsPerSample != 24)
-                {
-                    throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 16-bit and 24-bit WavPack are supported");
-                }
-
-                var mode = WavPackNative.WavpackGetMode(wpc);
-                if ((mode & WavPackNative.ModeLossless) == 0 || (mode & WavPackNative.ModeFloat) != 0)
-                {
-                    throw new NotSupportedException($"'{filePath}' is not lossless integer WavPack; lossy/hybrid and floating-point WavPack are not supported");
-                }
-
-                var sampleRate = (int)WavPackNative.WavpackGetSampleRate(wpc);
-                var totalSamples = WavPackNative.WavpackGetNumSamples64(wpc);
-
-                var buffer = new int[ReadBufferFrames * channels];
-
-                uint framesRead;
-                while ((framesRead = WavPackNative.WavpackUnpackSamples(wpc, buffer, ReadBufferFrames)) > 0)
-                {
-                    onBlockDecoded(new ReadOnlySpan<int>(buffer, 0, (int)framesRead * channels), channels, sampleRate, bitsPerSample, totalSamples);
-                }
-
-                return new WavPackStreamInfo
-                {
-                    Channels = channels,
-                    SampleRate = sampleRate,
-                    BitsPerSample = bitsPerSample,
-                    TotalSamples = totalSamples
-                };
+                data = File.ReadAllBytes(filePath);
             }
-            finally
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                WavPackNative.WavpackCloseFile(wpc);
+                throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: {e.Message}", e);
             }
-        }
 
-        private static string DecodeErrorBuffer(byte[] error)
-        {
-            var nullIndex = Array.IndexOf(error, (byte)0);
-            var length = nullIndex < 0 ? error.Length : nullIndex;
-            return Encoding.UTF8.GetString(error, 0, length);
+            if (data.Length < WavPackBlockHeader.ByteLength)
+            {
+                throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: the file is too short to contain even one block header.");
+            }
+
+            var offset = 0;
+            WavPackBlockHeader? firstHeader = null;
+            int channels = 0, bitsPerSample = 0, sampleRate = 0;
+            long totalSamples = 0;
+
+            while (offset + WavPackBlockHeader.ByteLength <= data.Length)
+            {
+                WavPackBlockHeader header;
+                try
+                {
+                    header = WavPackBlockHeader.Parse(data, offset);
+                }
+                catch (InvalidDataException) when (firstHeader is not null)
+                {
+                    // Trailing, non-block data (e.g. an APEv2 tag) after the last real block is
+                    // normal and must be tolerated, not treated as corruption.
+                    break;
+                }
+
+                if (firstHeader is null)
+                {
+                    firstHeader = header;
+
+                    if (!header.IsStandaloneMonoOrStereoBlock)
+                    {
+                        throw new NotSupportedException($"'{filePath}' splits more than 2 channels across multiple per-frame blocks; only mono and stereo WavPack are supported");
+                    }
+
+                    channels = header.IsMono ? 1 : 2;
+
+                    if (header.IsFloat)
+                    {
+                        throw new NotSupportedException($"'{filePath}' is floating-point WavPack; only lossless integer WavPack is supported");
+                    }
+
+                    if (header.IsHybrid)
+                    {
+                        throw new NotSupportedException($"'{filePath}' is hybrid (lossy) WavPack; only lossless WavPack is supported");
+                    }
+
+                    bitsPerSample = header.BitsPerSample;
+                    if (bitsPerSample != 16 && bitsPerSample != 24)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 16-bit and 24-bit WavPack are supported");
+                    }
+
+                    sampleRate = header.StandardSampleRate ?? throw new NotSupportedException($"'{filePath}' uses a non-standard sample rate, which is not supported");
+                    totalSamples = header.TotalSamples;
+                }
+
+                var blockEnd = offset + 8 + (int)header.CkSize;
+                if (blockEnd > data.Length)
+                {
+                    throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
+                }
+
+                var channelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var extraShift);
+                if (actualCrc != header.Crc)
+                {
+                    throw new InvalidDataException($"'{filePath}' has a WavPack block CRC mismatch (computed 0x{actualCrc:x8}, recorded 0x{header.Crc:x8}) -- the file is corrupt or truncated.");
+                }
+
+                var blockSamples = (int)header.BlockSamples;
+                var interleaved = new int[blockSamples * channels];
+                var shift = header.LeftShift + extraShift;
+                for (var i = 0; i < blockSamples; i++)
+                {
+                    for (var c = 0; c < channels; c++)
+                    {
+                        var sample = channelSamples[c][i];
+                        if (shift > 0)
+                        {
+                            sample <<= shift;
+                        }
+
+                        interleaved[(i * channels) + c] = sample;
+                    }
+                }
+
+                onBlockDecoded(interleaved, channels, sampleRate, bitsPerSample, totalSamples);
+
+                offset = blockEnd;
+            }
+
+            if (firstHeader is null)
+            {
+                throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: no valid block header found.");
+            }
+
+            return new WavPackStreamInfo
+            {
+                Channels = channels,
+                SampleRate = sampleRate,
+                BitsPerSample = bitsPerSample,
+                TotalSamples = totalSamples,
+            };
         }
     }
 

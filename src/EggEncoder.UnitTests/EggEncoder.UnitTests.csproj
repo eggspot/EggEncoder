@@ -73,6 +73,16 @@
     <None Include="Codecs\WavPack\sample_3channel.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_float.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_8bit.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_mono_ffmpeg.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_mono_ffmpeg.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_stereo_indep_ffmpeg.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_stereo_indep_ffmpeg.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_hybrid_wavpack.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_nonstandard_rate_wavpack.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_24bit_stereo_wavpack.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_24bit_stereo_wavpack.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_false_stereo_wavpack.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_false_stereo_wavpack.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ima_adpcm_mono.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ima_adpcm_mono_expected.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wav\sample_ima_adpcm_stereo.wav" CopyToOutputDirectory="Always" />

@@ -23,6 +23,72 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
+        public void Decode_FfmpegProducedMonoWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
+        // Exercises WavPack's independent-channel stereo decorrelation terms (unlike sample.wav/
+        // sample_ffmpeg.wv above, which ffmpeg encodes as joint/mid-side stereo by default).
+        [Fact]
+        public void Decode_FfmpegProducedIndependentStereoWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_stereo_indep_ffmpeg.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_stereo_indep_ffmpeg.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
+        // Exercises the 24-bit sample path (every other fixture above is 16-bit), encoded with the
+        // official reference wavpack CLI rather than ffmpeg (whose own encoder only emits 8/16/32-bit
+        // containers, never a real 24-bit one). Uses genuinely distinct left/right tones so the
+        // reference encoder doesn't take the "false stereo" shortcut exercised separately below.
+        [Fact]
+        public void Decode_ReferenceEncoder24BitStereoWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_24bit_stereo_wavpack.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_24bit_stereo_wavpack.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            streamInfo.BitsPerSample.Should().Be(24);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
+        // Exercises WavPack's "false stereo" block flag: a stereo-flagged block whose two channels
+        // happen to be identical, so the reference encoder only transmits one channel's worth of
+        // decorrelation/entropy data and the decoder must duplicate it into both outputs.
+        [Fact]
+        public void Decode_ReferenceEncoderFalseStereoWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_false_stereo_wavpack.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_false_stereo_wavpack.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
+        [Fact]
         public void Encode_SameSourceAsFfmpeg_Should_Also_Reproduce_Exact_Original_Samples()
         {
             var expectedSamples = ReadAllSamples(_wavFixturePath, out _, out _);
