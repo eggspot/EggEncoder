@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
-The package also redistributes three pre-built native codec libraries as separate, unmodified
+The package also redistributes pre-built native codec libraries as separate, unmodified
 binary files under `Native/win-x64/`. Their licenses apply to those files independently.
 
 ## libmp3lame.dll — LAME MP3 encoder
@@ -27,32 +27,22 @@ binary files under `Native/win-x64/`. Their licenses apply to those files indepe
   binary file under `Native/win-x64/`.
 - **Source availability**: FLAC source code is available at https://github.com/xiph/flac
 
-## wavpackdll.dll — WavPack reference library
+## WavPack algorithm (decode and encode) — clean-room acknowledgment (no code copied)
 
-- **Project**: [WavPack](https://github.com/dbry/WavPack) (David Bryant)
-- **License**: BSD-style license — full text at
-  https://github.com/dbry/WavPack/blob/master/COPYING
-- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
-  `Native/WavPackNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
-  binary file under `Native/win-x64/`. The bundled DLL is the official project's own prebuilt
-  binary from its GitHub release (`wavpack-5.9.0-dll.zip`, `x64/wavpackdll.dll`), checksum-verified
-  against that release's own published `sums.txt` before being committed here.
-- **Source availability**: WavPack source code is available at https://github.com/dbry/WavPack
-
-## WavPack decode algorithm — clean-room acknowledgment (no code copied)
-
-The managed WavPack decoder (`Codecs/WavPack/`, replacing the decode half of
-`wavpackdll.dll`/`WavPackNative.cs` described above) is original EggEncoder code, but its
-block/decorrelation/entropy-coding algorithm was derived with the owner's explicit sign-off from
-two sources beyond the official (and, for the codec itself, intentionally incomplete) WavPack 4/5
-file format specification:
+WavPack (`.wv`) decode and encode are both now pure managed EggEncoder code (`Codecs/WavPack/`) —
+no native binary is bundled or loaded for this codec any more (the previous `wavpackdll.dll` /
+`Native/WavPackNative.cs` native decode+encode path, the official WavPack project's own prebuilt
+library under a BSD-style license, has been fully removed now that neither direction needs it).
+The block/decorrelation/entropy-coding algorithm itself was derived with the owner's explicit
+sign-off from two sources beyond the official (and, for the codec itself, intentionally
+incomplete) WavPack 4/5 file format specification:
 
 - **General familiarity with the WavPack project's own reference implementation**
-  ([github.com/dbry/WavPack](https://github.com/dbry/WavPack), BSD-style license, see the
-  `wavpackdll.dll` entry above) informed the overall shape of the algorithm (cascaded
-  decorrelation passes, an adaptive median-based entropy coder). No source from that project was
-  read or copied during this implementation; this is a standard "prior exposure informs a
-  from-scratch rewrite" acknowledgment, not a derived-work claim.
+  ([github.com/dbry/WavPack](https://github.com/dbry/WavPack), BSD-style license) informed the
+  overall shape of the algorithm (cascaded decorrelation passes, an adaptive median-based entropy
+  coder). No source from that project was read or copied during this implementation; this is a
+  standard "prior exposure informs a from-scratch rewrite" acknowledgment, not a derived-work
+  claim.
 - **FFmpeg's independently-written WavPack decoder**
   (`libavcodec/wavpack.c`/`wavpack.h`, part of [FFmpeg](https://ffmpeg.org/), GNU Lesser General
   Public License v2.1 or later) was studied at arm's length to extract the precise formulas needed
@@ -61,6 +51,11 @@ file format specification:
   and describe the algorithm in this project's own words, never to copy code or structure. No
   FFmpeg source is vendored, linked, or reproduced; only the underlying facts/formulas (which are
   not themselves copyrightable) were carried over into an independent C# implementation.
+
+The managed **encoder**'s own formulas were not a second, separate study of either source above —
+every one of them (decorrelation weight update, the entropy coder's class/tail/carry write logic)
+is the direct mathematical inverse of this same already-documented decode-side knowledge, derived
+by this project itself rather than by consulting any encoder implementation.
 
 ## NLayer — managed MP3 decoder
 
