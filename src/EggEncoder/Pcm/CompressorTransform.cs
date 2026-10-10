@@ -45,8 +45,12 @@ public sealed class CompressorTransform : IPcmTransform
     {
         if (sampleRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive");
-        if (double.IsNaN(thresholdDb) || thresholdDb > 0)
-            throw new ArgumentOutOfRangeException(nameof(thresholdDb), thresholdDb, "Threshold must be <= 0 dBFS");
+        // double.IsFinite rejects -Infinity as well as NaN: with thresholdDb == -Infinity and
+        // ratio == 1.0 (an explicit no-op), Apply's `(envelopeDb - thresholdDb)` against any finite,
+        // nonzero envelopeDb computes +Infinity, and `* (1.0 - (1.0 / ratio))` -- 1.0 - 1.0 == 0.0 --
+        // then multiplies that by 0, which is NaN under IEEE 754, not 0.
+        if (!double.IsFinite(thresholdDb) || thresholdDb > 0)
+            throw new ArgumentOutOfRangeException(nameof(thresholdDb), thresholdDb, "Threshold must be a finite number <= 0 dBFS");
         if (double.IsNaN(ratio) || ratio < 1.0)
             throw new ArgumentOutOfRangeException(nameof(ratio), ratio, "Ratio must be >= 1.0");
         if (double.IsNaN(attackMs) || attackMs < 0)

@@ -190,8 +190,15 @@ namespace EggEncoder.UnitTests.Pcm
         [Theory]
         [InlineData(0.1)]
         [InlineData(double.NaN)]
-        public void Constructor_WithPositiveOrNaNThreshold_Should_Throw(double thresholdDb)
+        [InlineData(double.NegativeInfinity)]
+        public void Constructor_WithPositiveOrNonFiniteThreshold_Should_Throw(double thresholdDb)
         {
+            // -Infinity doesn't actually risk a NaN here the way it does for CompressorTransform's
+            // own thresholdDb (Apply's `envelopeDb >= _thresholdDb` short-circuit is always true
+            // against it, making the gate a permanent, silent no-op rather than hitting the
+            // reduction formula at all) -- it's rejected for the same validation shape as the
+            // compressor's mirror-image parameter, since a gate that can never gate is a confusing
+            // way to express "disabled" when ratio == 1.0 already says that explicitly.
             var act = () => new NoiseGateTransform(sampleRate: 44100, thresholdDb, ratio: 4, attackMs: 0, releaseMs: 0);
 
             act.Should().Throw<ArgumentOutOfRangeException>();
