@@ -113,6 +113,40 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithEchoTransform_Should_ExtendOutputPastTheSourceWithTheDecayingTail()
+        {
+            // Proves two things through the real pipeline, not just EchoTransformTest's own direct
+            // Apply()/Flush() calls: (1) AudioCutter.Convert actually calls Flush() and writes its
+            // tail, and (2) EchoTransform.CanChangeFrameCount correctly reports true so the
+            // destination WavWriter is sized for the true total (source + tail), not just the
+            // source's own frame count -- getting this wrong would either truncate the tail or
+            // produce a WAV file whose declared header size doesn't match what was actually written.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new[] { (int)short.MaxValue };
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 10, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new EchoTransform(sampleRate: 10, channels: 1, delaySeconds: 0.1, feedback: 0.5, wetGain: 1.0)));
+
+                using var reader = WavReader.Open(destPath);
+                // Hand-traced the same way EchoTransformTest's Flush test is: a single full-scale
+                // input frame produces a 10-frame decaying tail at feedback=0.5, delayFrames=1.
+                reader.TotalSamples.Should().Be(11, "1 source frame plus the 10-frame decaying tail Flush() produces");
+
+                var buffer = new int[11];
+                reader.ReadInterleavedSamples(buffer, 11);
+                buffer.Should().Equal(short.MaxValue, short.MaxValue, 16383, 8191, 4095, 2047, 1023, 511, 255, 127, 63);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithVolumeTransform_SpanningMultipleDecodeBlocks_Should_Write_Every_Frame()
         {
             // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this
