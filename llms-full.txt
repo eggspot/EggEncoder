@@ -1,10 +1,10 @@
 # EggEncoder — Full Reference
 
-> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack P/Invoke bindings, built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/WavPack P/Invoke bindings, built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## Overview
 
-EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: mostly pure .NET codec implementations (AAC, AIFF/AIFC, ALAC, AU, TTA, Opus, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) plus native P/Invoke bindings to `libmp3lame`, `libFLAC`, and `wavpackdll` for MP3, FLAC, and WavPack specifically. No external process, no ffmpeg install, no subprocess overhead. The native-binary-backed codecs (MP3, FLAC, WavPack) are Windows x64 only; the pure-managed codecs have no such restriction, but this library as a whole ships and is tested as a Windows x64 package.
+EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: mostly pure .NET codec implementations (AAC, AIFF/AIFC, ALAC, AU, FLAC, TTA, Opus, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) plus native P/Invoke bindings to `libmp3lame` and `wavpackdll` for MP3 and WavPack specifically. No external process, no ffmpeg install, no subprocess overhead. The native-binary-backed codecs (MP3, WavPack) are Windows x64 only; the pure-managed codecs (now including FLAC) have no such restriction, but this library as a whole ships and is tested as a Windows x64 package.
 
 ## Installation
 
@@ -376,7 +376,7 @@ public sealed class FlacEncoderSession : IDisposable
 }
 ```
 
-`FlacDecoder` is a pure managed decoder (RFC 9639, no native call); `FlacEncoder`/`FlacEncoderSession` still wrap native `libFLAC` P/Invoke bindings (`EggEncoder.Native.FlacNative`).
+FLAC is now fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder`'s own encoding strategy is a FIXED-predictors-only MVP (true LPC search is a follow-up), not yet compression-ratio-competitive with libFLAC's own encoder, though always fully spec-compliant and fully decodable. `EggEncoder.Native.FlacNative`'s P/Invoke declarations are consequently unused dead code, not yet removed (that's a later, batched cleanup alongside MP3/WavPack's own eventual migration -- see docs/managed-codec-rewrite-plan.md item 8).
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
@@ -738,7 +738,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 
 ## Constraints and Gotchas
 
-- **Native-binary-backed codecs (MP3 encode+decode, FLAC encode, WavPack encode+decode) are Windows x64 only.** FLAC *decode* (`FlacDecoder`) is a pure managed implementation with no such restriction (see `docs/managed-codec-rewrite-plan.md` for the in-progress rewrite of the rest). The pure-managed codecs (AAC, AIFF/AIFC, ALAC, AU, FLAC decode, Opus, TTA, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) have no such restriction in principle, but this library ships and is CI-tested as a Windows x64 package overall.
+- **Native-binary-backed codecs (MP3 encode+decode, WavPack encode+decode) are Windows x64 only.** FLAC (`FlacDecoder`/`FlacEncoder`, both decode and encode) is now a pure managed implementation with no such restriction (see `docs/managed-codec-rewrite-plan.md` for the in-progress rewrite of the rest). The pure-managed codecs (AAC, AIFF/AIFC, ALAC, AU, FLAC, Opus, TTA, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) have no such restriction in principle, but this library ships and is CI-tested as a Windows x64 package overall.
 - **WAV's three ADPCM variants and G.711** are genuinely different algorithms despite the shared 4-bit (ADPCM) or 8-bit (G.711) coded width -- see "WAV's own format-tag variants" above.
 - **`ProbeResult.Tags`/`WavReader.Tags` never throws on a malformed or truncated `'LIST'`/`'INFO'` chunk.** Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (`Mp4EsdsParser`, `AsfContainerReader`), this is optional, decorative metadata -- parsing just stops at the first inconsistency and returns whatever sub-chunks were read cleanly before it (or `null` if none were).
 - **`AudioCutter.Cut`/`Convert` can transcode while they trim/convert.** Source and destination extensions no longer need to match.

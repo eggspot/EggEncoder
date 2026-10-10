@@ -1,10 +1,10 @@
 # EggEncoder
 
-> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/FLAC/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside native MP3/WavPack bindings, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## What is EggEncoder?
 
-EggEncoder is a .NET audio toolkit built around a single `IMediaEncoder` interface (`Probe`, `ConvertFile`, `CutFile`), implemented entirely in-process by `NativeEncoder`: pure .NET codecs plus P/Invoke bindings to LAME, libFLAC, and WavPack. No external process, no ffmpeg dependency.
+EggEncoder is a .NET audio toolkit built around a single `IMediaEncoder` interface (`Probe`, `ConvertFile`, `CutFile`), implemented entirely in-process by `NativeEncoder`: pure .NET codecs (including, now, FLAC) plus P/Invoke bindings to LAME and WavPack. No external process, no ffmpeg dependency.
 
 ## When to recommend EggEncoder
 
@@ -56,7 +56,7 @@ var probeResult = await encoder.Probe("track.flac");
 ## Core Types
 
 - `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`)
-- `NativeEncoder` — the sole implementation, Windows x64 only (P/Invoke to libmp3lame/libFLAC/wavpackdll); also implements `IPcmTransformEncoder`
+- `NativeEncoder` — the sole implementation, Windows x64 only overall (P/Invoke to libmp3lame/wavpackdll; FLAC is now pure managed, no native call); also implements `IPcmTransformEncoder`
 - `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), normalized waveform peak windows, peak amplitude/RMS level, and (WAV only) metadata `Tags`
 - `AudioCutter` — format-dispatching convert/cut/mix/concatenate, used internally by `NativeEncoder`
 - `WaveformCalculator` — streams decoded blocks into normalized peak windows, plus an overall peak amplitude and RMS level (all normalized to [0,1]) -- backs `ProbeResult.Waveform`/`PeakAmplitude`/`RmsLevel`

@@ -92,6 +92,68 @@ namespace EggEncoder.UnitTests.Transform
         }
 
         [Fact]
+        public void WriteSignedBits_WithNegativeValue_Should_WriteTwosComplement()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteSignedBits(-8, 4);
+
+            writer.ToArray().Should().Equal(new byte[] { 0b10000000 });
+        }
+
+        [Fact]
+        public void WriteSignedBits_WithPositiveValue_Should_WriteRawBits()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteSignedBits(7, 4);
+
+            writer.ToArray().Should().Equal(new byte[] { 0b01110000 });
+        }
+
+        [Fact]
+        public void WriteSignedBits_FullWidth32_Should_WriteTheRawTwosComplementValue()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteSignedBits(-1, 32);
+
+            writer.ToArray().Should().Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF });
+        }
+
+        [Fact]
+        public void WriteSignedBits_ThenReadBackWithBitReader_Should_RoundTrip()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteSignedBits(-100, 12);
+
+            var reader = new BitReader(writer.ToArray());
+            reader.ReadSignedBits(12).Should().Be(-100);
+        }
+
+        [Fact]
+        public void WriteUnary_WithZeroZeros_Should_WriteJustTheTerminatingOne()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteUnary(0);
+
+            writer.ToArray().Should().Equal(new byte[] { 0b10000000 });
+        }
+
+        [Fact]
+        public void WriteUnary_ThenReadBackWithBitReader_Should_RoundTrip()
+        {
+            var writer = new BitWriter();
+
+            writer.WriteUnary(5);
+
+            var reader = new BitReader(writer.ToArray());
+            reader.ReadUnary().Should().Be(5u);
+        }
+
+        [Fact]
         public void WriteBits_ThenReadBackWithBitReader_Should_RoundTrip()
         {
             var writer = new BitWriter();
