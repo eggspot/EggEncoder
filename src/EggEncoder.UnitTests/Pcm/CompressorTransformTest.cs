@@ -209,8 +209,13 @@ namespace EggEncoder.UnitTests.Pcm
         [Theory]
         [InlineData(0.1)]
         [InlineData(double.NaN)]
-        public void Constructor_WithPositiveOrNaNThreshold_Should_Throw(double thresholdDb)
+        [InlineData(double.NegativeInfinity)]
+        public void Constructor_WithPositiveOrNonFiniteThreshold_Should_Throw(double thresholdDb)
         {
+            // -Infinity is rejected alongside NaN: combined with ratio == 1.0, Apply's
+            // `(envelopeDb - thresholdDb) * (1.0 - (1.0 / ratio))` would compute
+            // (finite - (-Infinity)) * 0 == Infinity * 0 == NaN under IEEE 754, not 0. Rejecting it
+            // here, at construction, is what makes that combination unreachable through Apply at all.
             var act = () => new CompressorTransform(sampleRate: 44100, thresholdDb, ratio: 4, attackMs: 0, releaseMs: 0);
 
             act.Should().Throw<ArgumentOutOfRangeException>();

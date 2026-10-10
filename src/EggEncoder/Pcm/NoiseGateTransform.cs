@@ -46,8 +46,15 @@ public sealed class NoiseGateTransform : IPcmTransform
     {
         if (sampleRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive");
-        if (double.IsNaN(thresholdDb) || thresholdDb > 0)
-            throw new ArgumentOutOfRangeException(nameof(thresholdDb), thresholdDb, "Threshold must be <= 0 dBFS");
+        // double.IsFinite rejects -Infinity as well as NaN. Unlike CompressorTransform's own
+        // thresholdDb, -Infinity here can't actually produce a NaN (Apply's `envelopeDb >=
+        // _thresholdDb` short-circuit is always true against a -Infinity threshold, so the gate
+        // becomes a permanent, silent no-op before the reduction formula ever runs) -- but a gate
+        // that can never gate is a confusing way to express "disabled" when `ratio == 1.0` already
+        // says that explicitly, so this is rejected for the same validation shape as the compressor's
+        // mirror-image parameter, not because -Infinity is independently unsafe here.
+        if (!double.IsFinite(thresholdDb) || thresholdDb > 0)
+            throw new ArgumentOutOfRangeException(nameof(thresholdDb), thresholdDb, "Threshold must be a finite number <= 0 dBFS");
         if (double.IsNaN(ratio) || ratio < 1.0)
             throw new ArgumentOutOfRangeException(nameof(ratio), ratio, "Ratio must be >= 1.0");
         if (double.IsNaN(attackMs) || attackMs < 0)

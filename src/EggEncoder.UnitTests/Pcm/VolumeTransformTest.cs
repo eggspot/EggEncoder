@@ -74,6 +74,20 @@ namespace EggEncoder.UnitTests.Pcm
             act.Should().Throw<ArgumentOutOfRangeException>();
         }
 
+        [Theory]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        [InlineData(double.NegativeInfinity)]
+        public void Constructor_NonFiniteGain_Should_Throw(double gain)
+        {
+            // NaN isn't caught by `gain < 0` alone (NaN < 0 is false under IEEE 754), and
+            // +Infinity applied to a silent sample would compute 0 * Infinity == NaN -- both must be
+            // rejected at construction rather than silently corrupting output later.
+            var act = () => new VolumeTransform(gain);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
         [Fact]
         public void PeakNormalization_Should_Scale_Peak_To_Target_dBFS()
         {
@@ -169,6 +183,19 @@ namespace EggEncoder.UnitTests.Pcm
         public void PeakNormalization_PositiveTargetDb_Should_Throw()
         {
             var act = () => new PeakNormalizationTransform(targetDb: 0.1);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
+        [Theory]
+        [InlineData(double.NaN)]
+        [InlineData(double.NegativeInfinity)]
+        public void PeakNormalization_NonFiniteTargetDb_Should_Throw(double targetDb)
+        {
+            // NaN isn't caught by `targetDb > 0` alone (NaN > 0 is false under IEEE 754), and would
+            // otherwise flow into Math.Pow(10, NaN / 20.0), producing a NaN _targetLin that silently
+            // corrupts every gain this transform ever computes.
+            var act = () => new PeakNormalizationTransform(targetDb);
 
             act.Should().Throw<ArgumentOutOfRangeException>();
         }
