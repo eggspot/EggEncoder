@@ -2,11 +2,10 @@ using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.Flac
 {
-    // Encodes one FLAC frame per RFC 9639 sections 9.1-9.3: FIXED predictors only (orders 0-4), a
-    // single Rice-coded partition per subframe, independent/left-side/right-side/mid-side stereo
-    // mode chosen by exact cost comparison -- the FIXED-only MVP described in
-    // docs/managed-codec-rewrite-plan.md item 2. True LPC search (item 3) is a follow-up; nothing
-    // here produces anything other than CONSTANT/FIXED subframes.
+    // Encodes one FLAC frame per RFC 9639 sections 9.1-9.3: CONSTANT, FIXED (orders 0-4), and LPC
+    // (orders 1-8, Levinson-Durbin coefficient estimation + error-feedback quantization) subframes,
+    // a single Rice-coded partition per subframe, independent/left-side/right-side/mid-side stereo
+    // mode -- all chosen by exact cost comparison, per docs/managed-codec-rewrite-plan.md items 2-3.
     //
     // Every arithmetic step a FlacFrameDecoder-compatible decoder will reverse (the FIXED residual
     // formulas, stereo decorrelation) deliberately uses plain 32-bit `int` arithmetic, matching
@@ -23,6 +22,8 @@ namespace EggEncoder.Codecs.Flac
         private const int ChannelAssignmentMidSide = 10;
         private const int MaxFixedOrder = 4;
         private const int MaxRiceParameter = 30; // residual coding method 1's 5-bit parameter field tops out at 30 (31 is the escape code)
+        private const int MaxLpcOrder = 8; // a modest order cap -- real encoders' lower compression levels use similar values; higher orders cost more to search for a shrinking return
+        private const int LpcPrecision = 14; // fits the 4-bit precision code's own range (1-15) with headroom; fixed rather than searched, unlike order
 
         public static byte[] EncodeFrame(int[][] channelSamples, int sampleCount, int bitsPerSample, long frameIndex)
         {
@@ -200,9 +201,16 @@ namespace EggEncoder.Codecs.Flac
             }
         }
 
-        // ---------------------------------------------------------------- subframe analysis (choosing CONSTANT vs. the cheapest FIXED order)
+        // ---------------------------------------------------------------- subframe analysis (choosing CONSTANT vs. the cheapest FIXED order vs. the cheapest LPC order)
 
-        private readonly record struct SubframePlan(bool IsConstant, int Order, long CostBits, int[]? Residual, int RiceParameter, bool UseEscape, int EscapeWidth);
+        private enum SubframeKind
+        {
+            Constant,
+            Fixed,
+            Lpc,
+        }
+
+        private readonly record struct SubframePlan(SubframeKind Kind, int Order, long CostBits, int[]? Residual, int RiceParameter, bool UseEscape, int EscapeWidth, int[]? Coefficients, int Shift);
 
         private static SubframePlan AnalyzeSubframe(int[] samples, int bitsPerSample)
         {
@@ -219,24 +227,26 @@ namespace EggEncoder.Codecs.Flac
 
             if (isConstant)
             {
-                return new SubframePlan(true, 0, 8 + bitsPerSample, null, 0, false, 0);
+                return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, false, 0, null, 0);
             }
 
-            SubframePlan? best = null;
-            var maxOrder = Math.Min(MaxFixedOrder, sampleCount - 1);
-            for (var order = 0; order <= maxOrder; order++)
+            SubframePlan? bestFixed = null;
+            var maxFixedOrder = Math.Min(MaxFixedOrder, sampleCount - 1);
+            for (var order = 0; order <= maxFixedOrder; order++)
             {
                 var residual = ComputeFixedResidual(samples, order);
                 var (residualCost, riceParameter, useEscape, escapeWidth) = ChooseResidualCoding(residual);
                 var totalCost = 8L + ((long)order * bitsPerSample) + 6 /* residual method (2 bits) + partition order (4 bits) */ + residualCost;
 
-                if (best is null || totalCost < best.Value.CostBits)
+                if (bestFixed is null || totalCost < bestFixed.Value.CostBits)
                 {
-                    best = new SubframePlan(false, order, totalCost, residual, riceParameter, useEscape, escapeWidth);
+                    bestFixed = new SubframePlan(SubframeKind.Fixed, order, totalCost, residual, riceParameter, useEscape, escapeWidth, null, 0);
                 }
             }
 
-            return best!.Value;
+            var best = bestFixed!.Value;
+            TryLpcOrders(samples, bitsPerSample, ref best);
+            return best;
         }
 
         // The k-th order FIXED predictor is, by RFC 9639's own definition, the k-th finite
@@ -278,6 +288,200 @@ namespace EggEncoder.Codecs.Flac
                     }
 
                     break;
+            }
+
+            return residual;
+        }
+
+        // ---------------------------------------------------------------- LPC analysis (Levinson-Durbin + error-feedback quantization)
+
+        // Tries every LPC order from 1 up to MaxLpcOrder (bounded by block size) and keeps `best`
+        // updated with whichever of FIXED/LPC is cheapest so far -- same "try every order, compare
+        // exact cost" structure as the FIXED loop in AnalyzeSubframe, just for a different predictor
+        // family. A Welch window is applied before autocorrelation (confirmed, empirically, to
+        // noticeably improve the resulting coefficients' predictive accuracy over an unwindowed,
+        // effectively-rectangular-windowed autocorrelation estimate -- the latter's implicit sharp
+        // edges bias the estimate, the classic motivation for windowing before any finite-block
+        // spectral/autocorrelation estimate). This only affects which floating-point coefficients
+        // get found and quantized, never correctness: whatever coefficients result, their *actual*
+        // integer residual is what gets cost-compared and written, never the raw prediction-error
+        // estimate itself.
+        private static void TryLpcOrders(int[] samples, int bitsPerSample, ref SubframePlan best)
+        {
+            // AnalyzeSubframe only calls this after its own CONSTANT check has already excluded a
+            // 1-sample (or otherwise genuinely constant) block, so sampleCount is always >=2 here --
+            // meaning maxOrder is always >=1, with no separate guard needed for a case that can't
+            // actually reach this method.
+            var sampleCount = samples.Length;
+            var maxOrder = Math.Min(MaxLpcOrder, sampleCount - 1);
+
+            var windowed = ApplyWelchWindow(samples);
+            var autocorrelation = ComputeAutocorrelation(windowed, maxOrder);
+            if (autocorrelation[0] <= 0)
+            {
+                return; // a constant (already handled separately) or all-silent signal -- Levinson-Durbin's own division below would be by zero
+            }
+
+            var lpc = new double[maxOrder];
+            var error = autocorrelation[0];
+
+            for (var order = 1; order <= maxOrder; order++)
+            {
+                var acc = autocorrelation[order];
+                for (var j = 0; j < order - 1; j++)
+                {
+                    acc -= lpc[j] * autocorrelation[order - 1 - j];
+                }
+
+                // No explicit guard against error<=0 here: mathematically it should stay positive
+                // (it's a sum-of-squares, scaled down each step by a 1-k^2 factor that's also
+                // meant to stay in [0,1]), and the only way it wouldn't is a floating-point
+                // breakdown so narrow it isn't practical to construct a test input for. If it ever
+                // did happen, the resulting reflection/coefficients would come out non-finite or
+                // simply bad, and either QuantizeCoefficients' own NaN/Infinity check rejects them
+                // outright, or they produce a residual too large to win the cost comparison below
+                // -- so correctness never depends on catching this earlier.
+                var reflection = acc / error;
+                var updated = new double[order];
+                for (var j = 0; j < order - 1; j++)
+                {
+                    updated[j] = lpc[j] - (reflection * lpc[order - 2 - j]);
+                }
+
+                updated[order - 1] = reflection;
+                Array.Copy(updated, lpc, order);
+                error *= 1 - (reflection * reflection);
+
+                var (coefficients, shift) = QuantizeCoefficients(lpc[..order], LpcPrecision);
+                if (coefficients is null)
+                {
+                    continue;
+                }
+
+                var residual = ComputeLpcResidual(samples, coefficients, shift, bitsPerSample);
+                var (residualCost, riceParameter, useEscape, escapeWidth) = ChooseResidualCoding(residual);
+
+                // 8 (subframe header) + order*bitsPerSample (warmup) + 4 (precision code) + 5
+                // (shift) + order*LpcPrecision (coefficients) + 6 (residual method + partition
+                // order) + the residual payload itself.
+                var totalCost = 8L + ((long)order * bitsPerSample) + 4 + 5 + ((long)order * LpcPrecision) + 6 + residualCost;
+
+                if (totalCost < best.CostBits)
+                {
+                    best = new SubframePlan(SubframeKind.Lpc, order, totalCost, residual, riceParameter, useEscape, escapeWidth, coefficients, shift);
+                }
+            }
+        }
+
+        // The classic Welch window: a simple parabola, 0 at both edges and 1 at the center --
+        // cheap to compute and, unlike a rectangular (i.e. no) window, doesn't bias the
+        // autocorrelation estimate with the sharp discontinuity a finite block's own hard edges
+        // would otherwise introduce.
+        private static double[] ApplyWelchWindow(int[] samples)
+        {
+            var n = samples.Length;
+            var windowed = new double[n];
+            var half = (n - 1) / 2.0;
+            for (var i = 0; i < n; i++)
+            {
+                var t = (i - half) / half;
+                windowed[i] = samples[i] * (1 - (t * t));
+            }
+
+            return windowed;
+        }
+
+        private static double[] ComputeAutocorrelation(double[] samples, int maxLag)
+        {
+            var r = new double[maxLag + 1];
+            for (var lag = 0; lag <= maxLag; lag++)
+            {
+                var sum = 0.0;
+                for (var i = lag; i < samples.Length; i++)
+                {
+                    sum += samples[i] * samples[i - lag];
+                }
+
+                r[lag] = sum;
+            }
+
+            return r;
+        }
+
+        // Quantizes floating-point LPC coefficients into `precision`-bit signed integers plus a
+        // shift, using the standard error-feedback quantizer (each coefficient's own rounding error
+        // carries forward into the next, rather than rounding each independently) -- a generic,
+        // widely described DSP technique, not derived from any specific codec's implementation of
+        // it. Returns null coefficients only when the input is degenerate (every coefficient 0, or
+        // non-finite), in which case this LPC order simply isn't considered.
+        private static (int[]? Coefficients, int Shift) QuantizeCoefficients(double[] lpc, int precision)
+        {
+            var maxAbs = 0.0;
+            foreach (var c in lpc)
+            {
+                maxAbs = Math.Max(maxAbs, Math.Abs(c));
+            }
+
+            if (maxAbs <= 0 || double.IsNaN(maxAbs) || double.IsInfinity(maxAbs))
+            {
+                return (null, 0);
+            }
+
+            // Choose the largest shift that keeps the largest-magnitude coefficient, once scaled,
+            // inside the precision-bit signed range -- RFC 9639's own shift field is a 5-bit signed
+            // value, but this encoder only ever writes a non-negative one (FlacDecoder rejects a
+            // negative shift outright), so the result is also clamped to a sane non-negative range.
+            var shift = Math.Clamp((precision - 2) - (int)Math.Floor(Math.Log2(maxAbs)), 0, 15);
+
+            var limit = 1 << (precision - 1);
+            var coefficients = new int[lpc.Length];
+            var carriedError = 0.0;
+            for (var i = 0; i < lpc.Length; i++)
+            {
+                var scaled = (lpc[i] * (1 << shift)) + carriedError;
+                var quantized = (int)Math.Round(scaled, MidpointRounding.AwayFromZero);
+                quantized = Math.Clamp(quantized, -limit, limit - 1);
+                carriedError = scaled - quantized;
+                coefficients[i] = quantized;
+            }
+
+            return (coefficients, shift);
+        }
+
+        // Mirrors FlacFrameDecoder.RestoreLpcPrediction/RestoreLpcPredictionWide exactly -- which
+        // accumulator width is used is decided the same way FlacFrameDecoder.NeedsWideLpcAccumulator
+        // decides it on decode, since a mismatch here would silently produce a residual the decoder
+        // could never reconstruct the original samples from.
+        private static int[] ComputeLpcResidual(int[] samples, int[] coefficients, int shift, int bitsPerSample)
+        {
+            var order = coefficients.Length;
+            var residual = new int[samples.Length - order];
+
+            if (FlacFrameDecoder.NeedsWideLpcAccumulator(bitsPerSample, order, LpcPrecision))
+            {
+                for (var i = order; i < samples.Length; i++)
+                {
+                    var sum = 0L;
+                    for (var j = 0; j < order; j++)
+                    {
+                        sum += (long)coefficients[j] * samples[i - 1 - j];
+                    }
+
+                    residual[i - order] = samples[i] - (int)(sum >> shift);
+                }
+            }
+            else
+            {
+                for (var i = order; i < samples.Length; i++)
+                {
+                    var sum = 0;
+                    for (var j = 0; j < order; j++)
+                    {
+                        sum += coefficients[j] * samples[i - 1 - j];
+                    }
+
+                    residual[i - order] = samples[i] - (sum >> shift);
+                }
             }
 
             return residual;
@@ -355,18 +559,31 @@ namespace EggEncoder.Codecs.Flac
 
         private static void WriteSubframe(BitWriter writer, SubframePlan plan, int[] samples, int bitsPerSample)
         {
-            if (plan.IsConstant)
+            if (plan.Kind == SubframeKind.Constant)
             {
                 writer.WriteBits(0, 8); // type 0 (CONSTANT), no wasted bits
                 writer.WriteSignedBits(samples[0], bitsPerSample);
                 return;
             }
 
-            writer.WriteBits((uint)((8 + plan.Order) << 1), 8); // type 8+order (FIXED), no wasted bits
+            // FIXED type codes are 8+order (RFC 9639 section 9.2.3); LPC type codes are 31+order
+            // (section 9.2.4, i.e. 32 + (order-1)).
+            var typeCode = plan.Kind == SubframeKind.Fixed ? 8 + plan.Order : 31 + plan.Order;
+            writer.WriteBits((uint)(typeCode << 1), 8); // no wasted bits
 
             for (var i = 0; i < plan.Order; i++)
             {
                 writer.WriteSignedBits(samples[i], bitsPerSample);
+            }
+
+            if (plan.Kind == SubframeKind.Lpc)
+            {
+                writer.WriteBits((uint)(LpcPrecision - 1), 4);
+                writer.WriteSignedBits(plan.Shift, 5);
+                foreach (var c in plan.Coefficients!)
+                {
+                    writer.WriteSignedBits(c, LpcPrecision);
+                }
             }
 
             writer.WriteBits(1, 2); // residual coding method 1 (5-bit Rice parameters)

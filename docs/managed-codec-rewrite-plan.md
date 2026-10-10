@@ -247,7 +247,7 @@ commitments.
     this item) but deliberately left in place, along with `libFLAC.dll`, until item 8's batched
     native-infrastructure cleanup, rather than removing them piecemeal here.
 
-- [ ] **3. FLAC encode, LPC (managed, follow-up to item 2)**
+- [x] **3. FLAC encode, LPC (managed, follow-up to item 2)**
   - **Scope**: add true LPC prediction (Levinson-Durbin coefficient estimation, quantization,
     per-subframe order/precision search) on top of item 2's FIXED-only baseline, closing most of the
     compression-ratio gap to libFLAC.
@@ -256,7 +256,16 @@ commitments.
   - **Test plan**: same sample-exactness bar as item 2, plus a regression check that LPC output is
     never *larger* than the FIXED-only baseline for the same input (fall back to FIXED if LPC
     doesn't win) and is measurably smaller on real music-like fixtures.
-  - Status: not started.
+  - Status: done. Orders 1-8, a fixed 14-bit coefficient precision (not itself searched), and a
+    Welch window before autocorrelation (confirmed empirically necessary -- without it, LPC lost to
+    FIXED on every tested signal; with it, LPC correctly wins on tonal/resonant content and loses
+    gracefully to FIXED's own exact-zero-residual case on a pure linear ramp). "Never larger than
+    FIXED" is a structural guarantee (LPC only ever replaces the running best when strictly
+    cheaper), not just a tested behavior. Measured on the existing 16-bit stereo ffmpeg fixture
+    (`sample.wav`): 63,389 bytes FIXED-only (item 2) -> 48,378 bytes with LPC, a ~24% reduction.
+    Remaining gap to libFLAC: no per-order precision/shift search (fixed at 14 bits), no multi-
+    partition Rice coding (still a single partition per subframe) -- open for a future iteration if
+    ever worth it, not blocking.
 
 ### Phase 2 — WavPack (no managed reference found; clean-room from the spec with no shortcut)
 
