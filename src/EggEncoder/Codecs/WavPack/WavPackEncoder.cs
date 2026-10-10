@@ -12,8 +12,9 @@ namespace EggEncoder.Codecs.WavPack
     // Unlike libFLAC's own encoder (FlacNative.StreamEncoderInitFile writes directly to a file path,
     // no custom callback needed), WavpackOpenFileOutput has no file-path convenience entry point at
     // all -- it only ever writes through a caller-supplied block-output callback, so this follows
-    // FlacDecoder's own [UnmanagedCallersOnly] + GCHandle pattern (not a marshaled delegate closure,
-    // which isn't AOT-safe) but on the encode side instead of decode.
+    // the same [UnmanagedCallersOnly] + GCHandle pattern (not a marshaled delegate closure, which
+    // isn't AOT-safe) the old native FlacDecoder's own decode callback used to, before it was
+    // replaced by a pure managed decoder.
     //
     // WavpackSetConfiguration64 accepts total_samples == -1 for "unknown, streaming" (confirmed from
     // WavPack's own reference CLI, which uses exactly this for stdin input) and a WavpackUpdateNumSamples

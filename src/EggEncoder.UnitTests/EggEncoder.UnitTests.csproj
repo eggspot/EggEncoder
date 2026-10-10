@@ -55,6 +55,10 @@
     <None Include="Codecs\Aac\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Flac\sample.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Flac\sample_ffmpeg.flac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample_24bit_mono.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample_24bit_mono_ffmpeg.flac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample_24bit_stereo.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Flac\sample_24bit_stereo_ffmpeg.flac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mov" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mp4" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mp3\cbr128.mp3" CopyToOutputDirectory="Always" />

@@ -376,7 +376,7 @@ public sealed class FlacEncoderSession : IDisposable
 }
 ```
 
-Both wrap native `libFLAC` P/Invoke bindings (`EggEncoder.Native.FlacNative`).
+`FlacDecoder` is a pure managed decoder (RFC 9639, no native call); `FlacEncoder`/`FlacEncoderSession` still wrap native `libFLAC` P/Invoke bindings (`EggEncoder.Native.FlacNative`).
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
@@ -738,7 +738,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 
 ## Constraints and Gotchas
 
-- **Native-binary-backed codecs (MP3, FLAC, WavPack) are Windows x64 only.** The pure-managed codecs (AAC, AIFF/AIFC, ALAC, AU, Opus, TTA, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) have no such restriction in principle, but this library ships and is CI-tested as a Windows x64 package overall.
+- **Native-binary-backed codecs (MP3 encode+decode, FLAC encode, WavPack encode+decode) are Windows x64 only.** FLAC *decode* (`FlacDecoder`) is a pure managed implementation with no such restriction (see `docs/managed-codec-rewrite-plan.md` for the in-progress rewrite of the rest). The pure-managed codecs (AAC, AIFF/AIFC, ALAC, AU, FLAC decode, Opus, TTA, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) have no such restriction in principle, but this library ships and is CI-tested as a Windows x64 package overall.
 - **WAV's three ADPCM variants and G.711** are genuinely different algorithms despite the shared 4-bit (ADPCM) or 8-bit (G.711) coded width -- see "WAV's own format-tag variants" above.
 - **`ProbeResult.Tags`/`WavReader.Tags` never throws on a malformed or truncated `'LIST'`/`'INFO'` chunk.** Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (`Mp4EsdsParser`, `AsfContainerReader`), this is optional, decorative metadata -- parsing just stops at the first inconsistency and returns whatever sub-chunks were read cleanly before it (or `null` if none were).
 - **`AudioCutter.Cut`/`Convert` can transcode while they trim/convert.** Source and destination extensions no longer need to match.
