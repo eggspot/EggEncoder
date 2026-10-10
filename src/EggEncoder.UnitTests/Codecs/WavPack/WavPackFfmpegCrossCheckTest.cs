@@ -143,6 +143,30 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             decodedSamples.Should().Equal(expectedSamples);
         }
 
+        // Exercises WavPack's cross-channel decorrelation terms (-1, -2, -3 -- the "predict this
+        // channel from the OTHER channel" passes in ApplyStereo, structurally distinct from the
+        // same-channel terms every other fixture above exercises) with real, correlated-but-not-
+        // identical stereo content (one channel delayed by one sample from the other) encoded via
+        // the official reference CLI's independent-stereo + "extra processing" modes, which pick
+        // these terms when they genuinely help compression -- ffmpeg's own WavPack encoder never
+        // appears to select them for any content tried.
+        [Theory]
+        [InlineData("sample_crossterm_neg1_wavpack")]
+        [InlineData("sample_crossterm_neg2_wavpack")]
+        [InlineData("sample_crossterm_neg3_wavpack")]
+        public void Decode_ReferenceEncoderCrossChannelTermWavPack_Should_Match_Original_Wav_Samples(string fixtureBaseName)
+        {
+            var wavPath = Path.GetFullPath($"Codecs/WavPack/{fixtureBaseName}.wav");
+            var wvPath = Path.GetFullPath($"Codecs/WavPack/{fixtureBaseName}.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
         // Exercises WavPack's multi-block-per-frame sequence: a stereo stream with no explicit
         // channel layout (matching what this project's own native WavPackEncoderSession produces,
         // since it never sets WavpackConfig's ChannelMask) is split by the reference encoder into

@@ -27,6 +27,12 @@ namespace EggEncoder.Codecs.WavPack
                 var functionId = id & 0x3F;
                 var isLarge = (id & 0x80) != 0;
                 var isOdd = (id & 0x40) != 0;
+                var headerLength = isLarge ? 4 : 2;
+
+                if (p + headerLength > end)
+                {
+                    throw new InvalidDataException("A WavPack block's metadata ends in the middle of a sub-block's own id/size header -- the file is corrupt or truncated.");
+                }
 
                 int wordCount;
                 int dataStart;
@@ -42,6 +48,11 @@ namespace EggEncoder.Codecs.WavPack
                 }
 
                 var byteCount = (wordCount * 2) - (isOdd ? 1 : 0);
+                if (dataStart + (wordCount * 2) > end)
+                {
+                    throw new InvalidDataException("A WavPack block's metadata sub-block declares a size that extends past the block's own metadata region -- the file is corrupt or truncated.");
+                }
+
                 yield return new WavPackMetadataSubBlock
                 {
                     FunctionId = functionId,

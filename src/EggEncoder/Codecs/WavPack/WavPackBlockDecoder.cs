@@ -30,10 +30,20 @@ namespace EggEncoder.Codecs.WavPack
                         passes = ParseDecorrTerms(subBlock.Data);
                         break;
                     case WavPackMetadataSubBlock.IdDecorrWeights:
-                        ParseDecorrWeights(subBlock.Data, passes!, internalChannels);
+                        if (passes is null)
+                        {
+                            throw new InvalidDataException("A WavPack block's WP_ID_DECORR_WEIGHTS metadata appears before its WP_ID_DECORR_TERMS -- the file is corrupt.");
+                        }
+
+                        ParseDecorrWeights(subBlock.Data, passes, internalChannels);
                         break;
                     case WavPackMetadataSubBlock.IdDecorrSamples:
-                        ParseDecorrSamples(subBlock.Data, passes!, internalChannels);
+                        if (passes is null)
+                        {
+                            throw new InvalidDataException("A WavPack block's WP_ID_DECORR_SAMPLES metadata appears before its WP_ID_DECORR_TERMS -- the file is corrupt.");
+                        }
+
+                        ParseDecorrSamples(subBlock.Data, passes, internalChannels);
                         break;
                     case WavPackMetadataSubBlock.IdEntropyVars:
                         entropy = ParseEntropyVars(subBlock.Data, internalChannels);
@@ -310,6 +320,12 @@ namespace EggEncoder.Codecs.WavPack
 
         private static WavPackEntropyDecoder ParseEntropyVars(ArraySegment<byte> data, int channels)
         {
+            var requiredBytes = channels * 3 * 2;
+            if (data.Count < requiredBytes)
+            {
+                throw new InvalidDataException($"A WavPack block's WP_ID_ENTROPY_VARS metadata is {data.Count} bytes, but {channels} channel(s) need {requiredBytes}.");
+            }
+
             var entropy = new WavPackEntropyDecoder(channels);
             var p = 0;
             for (var c = 0; c < channels; c++)
