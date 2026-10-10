@@ -107,21 +107,17 @@ namespace EggEncoder.Codecs.WavPack
                         groupTotalSamples = header.TotalSamples;
                     }
 
-                    var blockChannelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var extraShift);
+                    var blockChannelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var scale);
                     if (actualCrc != header.Crc)
                     {
                         throw new InvalidDataException($"'{filePath}' has a WavPack block CRC mismatch (computed 0x{actualCrc:x8}, recorded 0x{header.Crc:x8}) -- the file is corrupt or truncated.");
                     }
 
-                    var shift = header.LeftShift + extraShift;
                     foreach (var channelData in blockChannelSamples)
                     {
-                        if (shift > 0)
+                        for (var i = 0; i < channelData.Length; i++)
                         {
-                            for (var i = 0; i < channelData.Length; i++)
-                            {
-                                channelData[i] <<= shift;
-                            }
+                            channelData[i] = scale.Apply(header.LeftShift, channelData[i]);
                         }
 
                         groupChannelSamples.Add(channelData);

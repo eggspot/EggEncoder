@@ -6,7 +6,7 @@ namespace EggEncoder.Codecs.WavPack
     // pipeline sample by sample.
     internal static class WavPackBlockDecoder
     {
-        public static int[][] Decode(byte[] data, int metadataStart, int metadataEnd, WavPackBlockHeader header, out uint crc, out int extraShift)
+        public static int[][] Decode(byte[] data, int metadataStart, int metadataEnd, WavPackBlockHeader header, out uint crc, out WavPackSampleScale scale)
         {
             var channels = header.IsMono ? 1 : 2;
             // A "false stereo" block reports a stereo output channel count in its header, but its
@@ -20,7 +20,7 @@ namespace EggEncoder.Codecs.WavPack
             WavPackDecorrPass[]? passes = null;
             WavPackEntropyDecoder? entropy = null;
             WavPackBitReader? bitstream = null;
-            extraShift = 0;
+            scale = WavPackSampleScale.None;
 
             foreach (var subBlock in WavPackMetadataSubBlock.ReadAll(data, metadataStart, metadataEnd))
             {
@@ -39,7 +39,7 @@ namespace EggEncoder.Codecs.WavPack
                         entropy = ParseEntropyVars(subBlock.Data, internalChannels);
                         break;
                     case WavPackMetadataSubBlock.IdInt32Info:
-                        extraShift = ParseInt32InfoShift(subBlock.Data);
+                        scale = ParseInt32Info(subBlock.Data);
                         break;
                     case WavPackMetadataSubBlock.IdWvBitstream:
                         bitstream = new WavPackBitReader(subBlock.Data.Array!, subBlock.Data.Offset, subBlock.Data.Offset + subBlock.Data.Count);
@@ -324,23 +324,47 @@ namespace EggEncoder.Codecs.WavPack
             return entropy;
         }
 
-        // WP_ID_INT32_INFO's 4-byte payload: byte 0 is an "extra bits" count used only for
-        // integers wider than 24 bits (out of scope for this 16/24-bit-only decoder); byte 1 is a
-        // plain additional post-decode left-shift amount, applied on top of (not replacing) the
-        // block header's own 5-bit left-shift field. Bytes 2 and 3 select a variant where the
-        // newly-shifted-in low bits are filled with ones or with a copy of the sample's own low bit
-        // (rather than zeros) -- real-world WavPack sources document this as relevant to hybrid
-        // (lossy) and >24-bit integer decode, both already out of scope for this lossless 16/24-bit
-        // decoder, so a nonzero byte 2 or 3 is rejected explicitly rather than silently producing
-        // the wrong samples by treating it as a plain shift.
-        private static int ParseInt32InfoShift(ArraySegment<byte> data)
+        // WP_ID_INT32_INFO's 4-byte payload: byte 0 is an "extra bits" count used only for integers
+        // wider than 24 bits (out of scope for this 16/24-bit-only decoder, so ignored). Bytes 1-3
+        // are checked in order, each overwriting the running shift/And/Or state when nonzero (a real
+        // encoder only ever populates one, but nothing stops a (contrived) file from setting more
+        // than one, so this mirrors exactly how a real decoder keeps applying each): byte 1 sets a
+        // plain shift (And=0, Or=0, i.e. zero-filled low bits -- WavPackSampleScale.Apply reduces to
+        // an ordinary left-shift in this case); byte 2 sets both And=1 and Or=1 (the newly-shifted-in
+        // low bits become all-ones, regardless of the sample's own value); byte 3 sets And=1 only,
+        // leaving Or at whatever it was (0 unless byte 2 also fired) -- the low bits become a copy of
+        // the sample's own low bit. See WavPackSampleScale's own doc comment for the reconstruction
+        // formula and why this occurs even for ordinary lossless 16/24-bit content.
+        private static WavPackSampleScale ParseInt32Info(ArraySegment<byte> data)
         {
-            if (data[2] != 0 || data[3] != 0)
+            if (data.Count < 4)
             {
-                throw new NotSupportedException("A WavPack block's WP_ID_INT32_INFO metadata uses the bit-filling shift variant, which is only supported for this decoder's existing plain-shift case.");
+                throw new InvalidDataException($"A WavPack block's WP_ID_INT32_INFO metadata is {data.Count} bytes, but this sub-block always carries exactly 4.");
             }
 
-            return data[1];
+            var shift = 0;
+            var and = 0;
+            var or = 0;
+
+            if (data[1] != 0)
+            {
+                shift = data[1];
+            }
+
+            if (data[2] != 0)
+            {
+                and = 1;
+                or = 1;
+                shift = data[2];
+            }
+
+            if (data[3] != 0)
+            {
+                and = 1;
+                shift = data[3];
+            }
+
+            return new WavPackSampleScale(shift, and, or);
         }
 
         private static short ReadInt16Le(ArraySegment<byte> data, int offset) => (short)(data[offset] | (data[offset + 1] << 8));

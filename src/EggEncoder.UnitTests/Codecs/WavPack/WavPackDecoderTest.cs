@@ -13,6 +13,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         private static readonly string _nonStandardRateFixturePath = Path.GetFullPath("Codecs/WavPack/sample_nonstandard_rate_wavpack.wv");
         private static readonly string _monoFixturePath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wv");
         private static readonly string _splitMonoBlocksFixturePath = Path.GetFullPath("Codecs/WavPack/sample_split_mono_blocks_wavpack.wv");
+        private static readonly string _fullScaleFixturePath = Path.GetFullPath("Codecs/WavPack/sample_fullscale_wavpack.wv");
 
         [Fact]
         public void Decode_StereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()
@@ -237,6 +238,33 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
                 streamInfo.TotalSamples.Should().Be(13230);
                 decoded.Should().HaveCount(13230);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithMalformedInt32InfoLength_Should_Throw()
+        {
+            // sample_fullscale_wavpack.wv carries a genuine WP_ID_INT32_INFO sub-block (confirmed at
+            // byte offset 168); marking it "odd length" (the format's own mask for "one byte shorter
+            // than declared") shrinks its data from the required 4 bytes to 3, without disturbing
+            // any other sub-block's own position.
+            var corruptBytes = File.ReadAllBytes(_fullScaleFixturePath);
+            const int int32InfoIdOffset = 168;
+            corruptBytes[int32InfoIdOffset] |= 0x40;
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_int32info_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, corruptBytes);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("WP_ID_INT32_INFO");
             }
             finally
             {
