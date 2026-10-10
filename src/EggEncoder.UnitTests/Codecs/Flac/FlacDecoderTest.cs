@@ -148,6 +148,21 @@ namespace EggEncoder.UnitTests.Codecs.Flac
             samples.Should().Equal(Enumerable.Repeat(7, 16));
         }
 
+        [Fact]
+        public void Decode_WithStreamInfoBlockSizeBelowSixteen_Should_Succeed_ForALastFrameOnlyStream()
+        {
+            // RFC 9639 section 4.1 exempts a stream's last block from the usual 16-sample minimum
+            // ("to be able to match the length of the encoded audio without using padding") -- when
+            // the whole stream is just one (therefore also last) frame, STREAMINFO's own block size
+            // range legitimately reports that frame's true, possibly-tiny size.
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 16, sampleRate: 44100, blockSize: 3, constantValuePerChannel: [7]);
+
+            var (info, samples) = DecodeTemp(bytes);
+
+            info.TotalSamples.Should().Be(3);
+            samples.Should().Equal(7, 7, 7);
+        }
+
         // ---------------------------------------------------------------- STREAMINFO / metadata validation
 
         [Fact]
@@ -195,7 +210,7 @@ namespace EggEncoder.UnitTests.Codecs.Flac
         }
 
         [Theory]
-        [InlineData(8, 8)] // maximum below the FLAC minimum of 16 (minimum is not independently bounded -- confirmed against PureFlac's own equivalent check, used as a reference while authoring this)
+        [InlineData(0, 0)] // a meaningless zero block size (a short-but-nonzero last-frame-only stream is legitimate per RFC 9639 section 4.1, so this decoder no longer rejects maxBlockSize<16 on its own)
         [InlineData(32, 16)] // minimum > maximum
         public void Decode_WithInvalidStreamInfoBlockSizeRange_Should_Throw(int minBlockSize, int maxBlockSize)
         {

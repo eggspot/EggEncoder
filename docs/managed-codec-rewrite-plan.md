@@ -227,7 +227,7 @@ commitments.
     (checked off) once it lands.
   - Status: done — https://github.com/eggspot/EggEncoder/pull/74.
 
-- [ ] **2. FLAC encode, fixed predictors (managed)** — replaces the `StreamEncoder*` half of
+- [x] **2. FLAC encode, fixed predictors (managed)** — replaces the `StreamEncoder*` half of
   `FlacNative.cs` and `FlacEncoder`/`FlacEncoderSession`, MVP cut.
   - **Scope**: STREAMINFO + frame writing using only FIXED predictors (orders 0–4, cheapest-first
     selection per subframe) and Rice-coded residuals — valid, fully spec-compliant, fully decodable
@@ -242,7 +242,11 @@ commitments.
     **and** a real independent decode where a reference fixture exists) reproduces the exact
     original samples — exact *samples*, not exact *encoded bytes* (see "Scope philosophy" above for
     why that's the right bar for a lossless format).
-  - Status: not started.
+  - Status: done (PR pending at authoring time; update with the merged link in the same PR).
+    `EggEncoder.Native.FlacNative`'s P/Invoke declarations are now entirely unused (both halves --
+    decode since item 1, encode since this item) but deliberately left in place, along with
+    `libFLAC.dll`, until item 8's batched native-infrastructure cleanup, rather than removing them
+    piecemeal here.
 
 - [ ] **3. FLAC encode, LPC (managed, follow-up to item 2)**
   - **Scope**: add true LPC prediction (Levinson-Durbin coefficient estimation, quantization,

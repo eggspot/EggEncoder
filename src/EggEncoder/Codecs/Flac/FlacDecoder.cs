@@ -65,7 +65,7 @@ namespace EggEncoder.Codecs.Flac
                 }
 
                 Interleave(frameDecoder.Samples, blockSize, metadata.Channels, interleavedBuffer);
-                AppendToMd5(md5, interleavedBuffer, requiredLength, metadata.BitsPerSample);
+                FlacPcmMd5.Append(md5, interleavedBuffer.AsSpan(0, requiredLength), metadata.BitsPerSample);
 
                 onBlockDecoded(new ReadOnlySpan<int>(interleavedBuffer, 0, requiredLength), metadata.Channels, metadata.SampleRate, metadata.BitsPerSample, metadata.TotalSamples);
                 samplesDecoded += blockSize;
@@ -100,20 +100,6 @@ namespace EggEncoder.Codecs.Flac
                 {
                     destination[baseIndex + channel] = channelSamples[channel][frame];
                 }
-            }
-        }
-
-        // The STREAMINFO MD5 is defined over the decoded PCM packed little-endian at
-        // ceil(bitsPerSample / 8) bytes per sample (RFC 9639 section 8.2), the same packing
-        // WavWriter already uses for 24-bit, so there's no new byte-packing convention here.
-        private static void AppendToMd5(IncrementalHash md5, int[] interleavedBuffer, int sampleCount, int bitsPerSample)
-        {
-            var bytesPerSample = (bitsPerSample + 7) / 8;
-            Span<byte> packed = stackalloc byte[4];
-            for (var i = 0; i < sampleCount; i++)
-            {
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(packed, interleavedBuffer[i]);
-                md5.AppendData(packed[..bytesPerSample]);
             }
         }
 
@@ -207,7 +193,14 @@ namespace EggEncoder.Codecs.Flac
                 throw new InvalidDataException($"'{flacFilePath}' has a STREAMINFO sample rate of 0.");
             }
 
-            if (maxBlockSize < 16 || minBlockSize > maxBlockSize)
+            // RFC 9639 section 4.1 explicitly exempts a stream's last block from the usual 16-sample
+            // minimum ("to be able to match the length of the encoded audio without using padding"),
+            // and when a stream's only frame is also its last frame, STREAMINFO's own maxBlockSize
+            // legitimately reports that frame's true (possibly <16) size -- which this decoder has
+            // no way to rule out from STREAMINFO alone, before any frame has actually been read. So
+            // only a block size of 0 (meaningless; even a 1-sample last block is valid) or an
+            // inverted range is rejected here.
+            if (maxBlockSize <= 0 || minBlockSize > maxBlockSize)
             {
                 throw new InvalidDataException($"'{flacFilePath}' has an invalid STREAMINFO block size range ({minBlockSize}-{maxBlockSize}).");
             }
