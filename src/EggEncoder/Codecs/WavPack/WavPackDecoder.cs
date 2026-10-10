@@ -52,6 +52,12 @@ namespace EggEncoder.Codecs.WavPack
                     break;
                 }
 
+                var blockEnd = offset + 8 + (int)header.CkSize;
+                if (blockEnd > data.Length)
+                {
+                    throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
+                }
+
                 if (firstHeader is null)
                 {
                     firstHeader = header;
@@ -79,14 +85,9 @@ namespace EggEncoder.Codecs.WavPack
                         throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 16-bit and 24-bit WavPack are supported");
                     }
 
-                    sampleRate = header.StandardSampleRate ?? throw new NotSupportedException($"'{filePath}' uses a non-standard sample rate, which is not supported");
+                    sampleRate = header.StandardSampleRate ?? FindNonStandardSampleRate(data, offset + WavPackBlockHeader.ByteLength, blockEnd)
+                        ?? throw new NotSupportedException($"'{filePath}' has a non-standard sample rate but is missing the metadata that would specify it");
                     totalSamples = header.TotalSamples;
-                }
-
-                var blockEnd = offset + 8 + (int)header.CkSize;
-                if (blockEnd > data.Length)
-                {
-                    throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
                 }
 
                 var channelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var extraShift);
@@ -129,6 +130,25 @@ namespace EggEncoder.Codecs.WavPack
                 BitsPerSample = bitsPerSample,
                 TotalSamples = totalSamples,
             };
+        }
+
+        // The block header's own 4-bit sample-rate field only covers the 15 standard rates; a
+        // non-standard rate (e.g. 1000 Hz) is signaled by that field being the reserved "custom"
+        // value (WavPackBlockHeader.StandardSampleRate returning null) with the real rate carried
+        // instead in a WP_ID_SAMPLE_RATE metadata sub-block as a plain 24-bit little-endian value
+        // in Hz, no scaling.
+        private static int? FindNonStandardSampleRate(byte[] data, int metadataStart, int metadataEnd)
+        {
+            foreach (var subBlock in WavPackMetadataSubBlock.ReadAll(data, metadataStart, metadataEnd))
+            {
+                if (subBlock.FunctionId == WavPackMetadataSubBlock.IdSampleRate)
+                {
+                    var d = subBlock.Data;
+                    return d[0] | (d[1] << 8) | (d[2] << 16);
+                }
+            }
+
+            return null;
         }
     }
 

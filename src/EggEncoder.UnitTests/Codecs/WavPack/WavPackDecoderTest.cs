@@ -104,14 +104,64 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
-        public void Decode_WithNonStandardSampleRate_Should_Throw()
+        public void Decode_WithNonStandardSampleRateButNoRateMetadata_Should_Throw()
         {
-            // A genuine reference-encoder-produced file at 37800 Hz, which isn't one of WavPack's
-            // 15 standard-sample-rate-table entries, so its block header's own sample rate index
-            // field is the reserved "non-standard rate" sentinel.
-            var act = () => WavPackDecoder.Decode(_nonStandardRateFixturePath, (_, _, _, _, _) => { });
+            // A genuine reference-encoder-produced 37800 Hz file -- not one of WavPack's 15
+            // standard-sample-rate-table entries, so its block header's own sample-rate-index field
+            // is the reserved "non-standard, consult metadata" sentinel -- but with its own
+            // WP_ID_SAMPLE_RATE metadata sub-block (the thing that normally supplies the real rate
+            // for this exact case) stripped out, to exercise the genuine error path: a well-formed
+            // header promising a non-standard rate that never actually shows up.
+            var fullBytes = File.ReadAllBytes(_nonStandardRateFixturePath);
+            var withoutRateMetadata = RemoveSampleRateMetadataSubBlock(fullBytes);
 
-            act.Should().ThrowExactly<NotSupportedException>();
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_norate_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, withoutRateMetadata);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        // Walks the first block's own metadata sub-blocks (per the WavPack format spec's id/size
+        // envelope) and splices out the WP_ID_SAMPLE_RATE (0x27) one, patching the block's own
+        // ckSize down by the removed byte count so the result is still a structurally valid block.
+        private static byte[] RemoveSampleRateMetadataSubBlock(byte[] data)
+        {
+            const int sampleRateId = 0x27;
+            var ckSize = BitConverter.ToUInt32(data, 4);
+            var blockEnd = 8 + (int)ckSize;
+
+            var p = 32;
+            while (p < blockEnd)
+            {
+                var idByte = data[p];
+                var functionId = idByte & 0x3F;
+                var isLarge = (idByte & 0x80) != 0;
+                var headerLength = isLarge ? 4 : 2;
+                var wordCount = isLarge ? (data[p + 1] | (data[p + 2] << 8) | (data[p + 3] << 16)) : data[p + 1];
+                var subBlockLength = headerLength + (wordCount * 2);
+
+                if (functionId == sampleRateId)
+                {
+                    var result = new byte[data.Length - subBlockLength];
+                    Array.Copy(data, 0, result, 0, p);
+                    Array.Copy(data, p + subBlockLength, result, p, data.Length - p - subBlockLength);
+                    BitConverter.GetBytes(ckSize - (uint)subBlockLength).CopyTo(result, 4);
+                    return result;
+                }
+
+                p += subBlockLength;
+            }
+
+            throw new InvalidOperationException("Fixture did not contain a WP_ID_SAMPLE_RATE sub-block to remove.");
         }
 
         [Fact]

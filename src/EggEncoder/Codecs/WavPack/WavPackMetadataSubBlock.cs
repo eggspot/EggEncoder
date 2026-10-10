@@ -12,6 +12,7 @@ namespace EggEncoder.Codecs.WavPack
         public const int IdEntropyVars = 0x05;
         public const int IdInt32Info = 0x09;
         public const int IdWvBitstream = 0x0A;
+        public const int IdSampleRate = 0x27;
 
         public required int FunctionId { get; init; }
 

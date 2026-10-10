@@ -88,6 +88,23 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             decodedSamples.Should().Equal(expectedSamples);
         }
 
+        // Exercises WP_ID_SAMPLE_RATE metadata: a non-standard sample rate (not one of WavPack's 15
+        // standard-rate-table entries) is carried as a plain 24-bit value in this sub-block instead
+        // of the block header's own 4-bit rate index.
+        [Fact]
+        public void Decode_ReferenceEncoderNonStandardSampleRateWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_nonstandard_rate_wavpack.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_nonstandard_rate_wavpack.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
         [Fact]
         public void Encode_SameSourceAsFfmpeg_Should_Also_Reproduce_Exact_Original_Samples()
         {
