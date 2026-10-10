@@ -167,7 +167,8 @@ namespace EggEncoder
                 TimeBase = wavReader.SampleRate > 0 ? $"1/{wavReader.SampleRate}" : null,
                 Waveform = waveformCalculator.GetNormalizedWindows(),
                 PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator.GetNormalizedRmsLevel(),
+                Tags = wavReader.Tags
             };
         }
 

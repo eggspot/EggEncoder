@@ -110,6 +110,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>WaveformCalculator</code> streams normalized peak windows from any decoded block.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#127991;</div>
+          <div class="feature-title">WAV Metadata Tags</div>
+          <p class="feature-desc"><code>Probe</code> surfaces a WAV file's <code>'LIST'</code>/<code>'INFO'</code> chunk (title, artist, etc.) as <code>ProbeResult.Tags</code>, keyed by raw chunk ID.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#9986;</div>
           <div class="feature-title">Sample-Accurate Cutting</div>
           <p class="feature-desc">Trim any supported source, into any supported destination format, without a full decode&rarr;encode round trip on the untouched region.</p>

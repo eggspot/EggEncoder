@@ -61,7 +61,9 @@ namespace EggEncoder.Codecs.Wav
         private int _msAdpcmPendingCount;
         private long _msAdpcmFramesProduced;
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2, bool isYamahaAdpcm)
+        private readonly IReadOnlyDictionary<string, string>? _tags;
+
+        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2, bool isYamahaAdpcm, IReadOnlyDictionary<string, string>? tags)
         {
             _stream = stream;
             _dataChunkLength = dataChunkLength;
@@ -77,6 +79,7 @@ namespace EggEncoder.Codecs.Wav
             _msAdpcmCoeff1 = msAdpcmCoeff1;
             _msAdpcmCoeff2 = msAdpcmCoeff2;
             _isYamahaAdpcm = isYamahaAdpcm;
+            _tags = tags;
 
             Channels = channels;
             SampleRate = sampleRate;
@@ -123,6 +126,15 @@ namespace EggEncoder.Codecs.Wav
 
         public bool IsYamahaAdpcm => _isYamahaAdpcm;
 
+        /// <summary>
+        /// The file's 'LIST'/'INFO' metadata sub-chunks (e.g. "INAM" for title, "IART" for artist),
+        /// keyed by their raw four-character chunk ID exactly as RIFF stores them -- not remapped to
+        /// friendlier names, the same way <see cref="EggEncoder.Results.ProbeResult.CodecName"/>
+        /// exposes "pcm_s16le" rather than a human label. Null if the file has no 'LIST'/'INFO'
+        /// chunk at all (most WAV files don't carry one).
+        /// </summary>
+        public IReadOnlyDictionary<string, string>? Tags => _tags;
+
         public static WavReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
@@ -159,6 +171,7 @@ namespace EggEncoder.Codecs.Wav
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
                 long? factChunkTotalSamples = null;
+                Dictionary<string, string>? tags = null;
 
                 while (stream.Position < stream.Length)
                 {
@@ -246,6 +259,18 @@ namespace EggEncoder.Codecs.Wav
                         dataChunkLength = chunkSize;
                         dataChunkFound = true;
                     }
+                    else if (chunkId == "LIST")
+                    {
+                        // A real file can have more than one 'LIST' chunk (e.g. 'INFO' alongside
+                        // 'adtl' cue-point labels) -- only overwrite `tags` when this particular one
+                        // actually parsed as INFO-style tags, so a later non-INFO 'LIST' chunk can't
+                        // wipe out tags an earlier 'INFO' one already found.
+                        var parsedTags = TryParseListInfoTags(reader, chunkDataStart, chunkSize);
+                        if (parsedTags is not null)
+                        {
+                            tags = parsedTags;
+                        }
+                    }
 
                     var paddedChunkSize = chunkSize + (chunkSize % 2);
                     stream.Position = chunkDataStart + paddedChunkSize;
@@ -295,7 +320,7 @@ namespace EggEncoder.Codecs.Wav
                     // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
                 }
 
                 if (isMsAdpcm)
@@ -331,7 +356,7 @@ namespace EggEncoder.Codecs.Wav
                     // back to the data chunk's own block count only if it's missing entirely.
                     var msAdpcmTotalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * msAdpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false, tags);
                 }
 
                 if (isYamahaAdpcm)
@@ -353,7 +378,7 @@ namespace EggEncoder.Codecs.Wav
                     // is absent.
                     var yamahaTotalSamples = factChunkTotalSamples ?? (dataChunkLength * 2) / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true, tags);
                 }
 
                 if (isALaw || isMuLaw)
@@ -371,7 +396,7 @@ namespace EggEncoder.Codecs.Wav
                     // byte count divided evenly across channels.
                     var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
                 }
 
                 if (isFloatFormat)
@@ -388,13 +413,68 @@ namespace EggEncoder.Codecs.Wav
 
                 var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
             }
             catch
             {
                 stream.Dispose();
                 throw;
             }
+        }
+
+        // RIFF's standard metadata convention: a 'LIST' chunk whose own first 4 bytes are a
+        // sub-type FourCC. 'INFO' is the one that carries metadata sub-chunks (title, artist, etc.);
+        // 'adtl' (cue-point labels/notes) and any other sub-type are out of scope here, so this
+        // returns null for them rather than misreading their own, differently-shaped payload as
+        // INFO-style tag sub-chunks.
+        //
+        // Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (e.g.
+        // Mp4EsdsParser, AsfContainerReader), a malformed 'LIST'/'INFO' chunk doesn't throw: this is
+        // optional, decorative metadata, not something the audio decode itself depends on, so a
+        // truncated or malformed tag list degrades to "parse whatever tags came before the
+        // inconsistency, then stop" rather than failing the whole file open.
+        private static Dictionary<string, string>? TryParseListInfoTags(BinaryReader reader, long chunkDataStart, uint chunkSize)
+        {
+            if (chunkSize < 4)
+            {
+                return null;
+            }
+
+            var listEnd = chunkDataStart + chunkSize;
+            if (new string(reader.ReadChars(4)) != "INFO")
+            {
+                return null;
+            }
+
+            var tags = new Dictionary<string, string>();
+            var stream = reader.BaseStream;
+
+            while (stream.Position + 8 <= listEnd)
+            {
+                var subId = new string(reader.ReadChars(4));
+                var subSize = reader.ReadUInt32();
+                var subDataStart = stream.Position;
+
+                if (subSize > int.MaxValue || subDataStart + subSize > listEnd)
+                {
+                    // Either the sub-chunk's own declared size can't even be passed to ReadBytes
+                    // (int-sized), or it would run past the LIST chunk's own declared bound -- stop
+                    // parsing further sub-chunks rather than reading into whatever comes after this
+                    // chunk on disk (or throwing on a cast that should degrade gracefully instead).
+                    break;
+                }
+
+                var bytes = reader.ReadBytes((int)subSize);
+                // RIFF INFO strings are conventionally ANSI and null-terminated, but UTF-8 is a
+                // superset of 7-bit ASCII and handles the many real-world files that use it instead
+                // -- TrimEnd strips the null terminator (and any further null padding).
+                tags[subId] = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+
+                var paddedSubSize = subSize + (subSize % 2);
+                stream.Position = subDataStart + paddedSubSize;
+            }
+
+            return tags.Count > 0 ? tags : null;
         }
 
         public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel)

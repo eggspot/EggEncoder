@@ -59,6 +59,15 @@ double peak = calculator.GetNormalizedPeakAmplitude(); // loudest absolute sampl
 double rms = calculator.GetNormalizedRmsLevel();       // root-mean-square across every sample, in [0, 1]</code></pre>
       <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. <code>GetNormalizedPeakAmplitude</code>/<code>GetNormalizedRmsLevel</code> need no flushing step the way <code>GetNormalizedWindows</code> does (its own trailing partial window) — both are fully up to date after every <code>AddBlock</code> call, and back <code>ProbeResult.PeakAmplitude</code>/<code>RmsLevel</code> the same way <code>GetNormalizedWindows</code> backs <code>ProbeResult.Waveform</code>. <code>RmsLevel</code> is a rough loudness indicator, not an ITU-R BS.1770 perceptual loudness measurement.</p>
 
+      <h2>WAV Metadata Tags</h2>
+      <p><code>Probe</code>-ing a WAV file with a <code>'LIST'</code>/<code>'INFO'</code> chunk populates <code>ProbeResult.Tags</code>, keyed by the raw four-character chunk ID exactly as RIFF stores it (e.g. <code>"INAM"</code> for title, <code>"IART"</code> for artist, <code>"ICRD"</code> for creation date) — not remapped to friendlier names, the same way <code>CodecName</code> exposes <code>"pcm_s16le"</code> rather than a human label:</p>
+      <pre><code class="language-csharp">var probeResult = await mediaEncoder.Probe("tagged.wav");
+if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("INAM", out var title))
+{
+    Console.WriteLine($"Title: {title}");
+}</code></pre>
+      <p><code>Tags</code> is <code>null</code> for every non-WAV format, and for a WAV file that simply doesn't carry a <code>'LIST'</code>/<code>'INFO'</code> chunk (most don't). A malformed or truncated tag list degrades gracefully — whatever sub-chunks parsed cleanly before the inconsistency are still returned — rather than failing the whole <code>Probe</code> call, since this metadata is decorative and unrelated to decoding the audio itself. Read-only: there's currently no way to write tags back out through <code>WavWriter</code>.</p>
+
       <h2>Sample-Accurate Cutting</h2>
       <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack, or MOV/MP4 with a mono AAC-LC audio track) and writes any supported destination format without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;

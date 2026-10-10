@@ -50,10 +50,11 @@ public class ProbeResult
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
+    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata, keyed by raw chunk ID (e.g. "INAM"); null for every other format, or a WAV with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track).
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` is read-only -- there's no way to write tags back out through `WavWriter`.
 
 ## Dependency Injection
 
@@ -134,6 +135,10 @@ WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float 
 - **G.711 mu-law/A-law** (format tags 7/6) -- any channel count (no mono/stereo restriction, unlike every ADPCM variant above), reports/requires 16-bit PCM at the boundary regardless of the 8-bit coded width. No block structure or adaptive state at all, so encode is a simple one-sample-at-a-time companding formula, selected via `WavSampleFormat.MuLaw`/`ALaw` the same way `Float32` is.
 
 All three ADPCM variants and G.711 are verified bit-exact against a real, independent ffmpeg decode of files this library's own encoders produced. Samples are always exchanged as `int[]`, at this codebase's native-range convention for whatever bit depth is in play (see "PCM Transform Pipeline" below).
+
+### WAV metadata tags ('LIST'/'INFO')
+
+`WavReader` also reads a WAV file's `'LIST'` chunk when its own sub-type is `'INFO'` -- the standard RIFF metadata convention (title, artist, date, comment, etc., each its own four-character-ID sub-chunk, e.g. `INAM`/`IART`/`ICRD`/`ICMT`). Surfaced through `IMediaEncoder.Probe` as `ProbeResult.Tags`: a dictionary keyed by the raw chunk ID exactly as RIFF stores it, not remapped to friendlier names, the same way `CodecName` exposes `"pcm_s16le"` rather than a human label. `null` for every non-WAV format, and for a WAV file that simply doesn't carry a `'LIST'`/`'INFO'` chunk (most don't) -- real-world ffmpeg-encoded WAV files commonly do, carrying at least an `ISFT` ("software") tag. Read-only: there's no way to write tags back out through `WavWriter`. A malformed or truncated tag list degrades gracefully rather than throwing -- see "Constraints and Gotchas" below.
 
 ## PCM Transform Pipeline
 
@@ -399,6 +404,7 @@ public sealed class WavReader : IDisposable
     public bool IsImaAdpcm { get; }
     public bool IsMsAdpcm { get; }
     public bool IsYamahaAdpcm { get; }
+    public IReadOnlyDictionary<string, string>? Tags { get; }  // 'LIST'/'INFO' metadata, or null if the file has none
     public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
 }
 
@@ -717,6 +723,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 
 - **Native-binary-backed codecs (MP3, FLAC, WavPack) are Windows x64 only.** The pure-managed codecs (AAC, AIFF/AIFC, ALAC, AU, Opus, TTA, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA) have no such restriction in principle, but this library ships and is CI-tested as a Windows x64 package overall.
 - **WAV's three ADPCM variants and G.711** are genuinely different algorithms despite the shared 4-bit (ADPCM) or 8-bit (G.711) coded width -- see "WAV's own format-tag variants" above.
+- **`ProbeResult.Tags`/`WavReader.Tags` never throws on a malformed or truncated `'LIST'`/`'INFO'` chunk.** Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (`Mp4EsdsParser`, `AsfContainerReader`), this is optional, decorative metadata -- parsing just stops at the first inconsistency and returns whatever sub-chunks were read cleanly before it (or `null` if none were).
 - **`AudioCutter.Cut`/`Convert` can transcode while they trim/convert.** Source and destination extensions no longer need to match.
 - **AAC encoding is mono-only** and restricted to a fixed set of MPEG-4 sample rates (see `AacTables.SampleRates`); other combinations throw `NotSupportedException`.
 - **WMA supports mono and independently-coded stereo only.** Genuine mid/side-coded stereo WMA files throw `NotSupportedException` on decode; `WmaEncoder` never produces mid/side output.
