@@ -459,7 +459,9 @@ namespace EggEncoder.Codecs.Flac
             return (precision, shift);
         }
 
-        private static bool NeedsWideLpcAccumulator(int bitsPerSample, int order, int precision)
+        // Shared with FlacFrameEncoder (which must choose the exact same accumulator width when
+        // computing an LPC residual, or its output wouldn't round-trip through this decoder).
+        internal static bool NeedsWideLpcAccumulator(int bitsPerSample, int order, int precision)
         {
             var orderBits = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)order);
             return bitsPerSample + precision + orderBits > 32;

@@ -376,7 +376,7 @@ public sealed class FlacEncoderSession : IDisposable
 }
 ```
 
-FLAC is now fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder`'s own encoding strategy is a FIXED-predictors-only MVP (true LPC search is a follow-up), not yet compression-ratio-competitive with libFLAC's own encoder, though always fully spec-compliant and fully decodable. `EggEncoder.Native.FlacNative`'s P/Invoke declarations are consequently unused dead code, not yet removed (that's a later, batched cleanup alongside MP3/WavPack's own eventual migration -- see docs/managed-codec-rewrite-plan.md item 8).
+FLAC is now fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). `EggEncoder.Native.FlacNative`'s P/Invoke declarations are consequently unused dead code, not yet removed (that's a later, batched cleanup alongside MP3/WavPack's own eventual migration -- see docs/managed-codec-rewrite-plan.md item 8).
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
