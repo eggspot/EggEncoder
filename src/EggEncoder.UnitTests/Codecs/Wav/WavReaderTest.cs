@@ -1,3 +1,4 @@
+using System.Text;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -1022,6 +1023,249 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             }
 
             return samples;
+        }
+
+        [Fact]
+        public void Open_WithListInfoChunk_Should_Expose_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // INAM's value ("Test", 4 chars + null terminator = 5 bytes) is odd and needs a pad
+                // byte; IART's ("Artist", 6 + null = 7 bytes) is also odd -- both exercise the padding
+                // path, not just the (less common in practice) already-even case.
+                var listPayload = BuildListInfoPayload(("INAM", "Test"), ("IART", "Artist"));
+                CreateWavWithListChunk(filePath, listPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!["INAM"].Should().Be("Test", "the null terminator (and any pad byte) must be trimmed, not left in the value");
+                wavReader.Tags!["IART"].Should().Be("Artist");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithoutListChunk_Should_Have_Null_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithFormatTag(filePath, formatTag: 1);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListChunk_OfNonInfoSubtype_Should_Have_Null_Tags()
+        {
+            // 'adtl' (cue-point labels/notes) is a real RIFF LIST sub-type, structured completely
+            // differently from 'INFO' -- it must not be misread as one.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var listPayload = Encoding.ASCII.GetBytes("adtl").Concat(BuildInfoSubChunk("INAM", "Test")).ToArray();
+                CreateWavWithListChunk(filePath, listPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListChunk_TooShortToCarryASubtype_Should_Have_Null_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithListChunk(filePath, listChunkPayload: [(byte)'I', (byte)'N']); // only 2 of the 4 subtype bytes
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListInfoChunk_WhereASubChunk_DeclaresASizeRunningPastTheListChunksOwnBound_Should_Stop_Gracefully_WithoutThrowing()
+        {
+            // The first sub-chunk (INAM) is well-formed; the second (IART) declares a size far larger
+            // than what's actually left in the LIST chunk -- a truncated/corrupted file, not something
+            // this optional metadata read should ever throw over (unlike the mandatory-for-decode
+            // truncation checks elsewhere in this codebase, e.g. Mp4EsdsParser/AsfContainerReader).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var corruptedSecondSubChunk = new List<byte>();
+                corruptedSecondSubChunk.AddRange(Encoding.ASCII.GetBytes("IART"));
+                corruptedSecondSubChunk.AddRange(BitConverter.GetBytes((uint)1000)); // far larger than any real remaining data
+
+                var listPayload = Encoding.ASCII.GetBytes("INFO")
+                    .Concat(BuildInfoSubChunk("INAM", "Test"))
+                    .Concat(corruptedSecondSubChunk)
+                    .ToArray();
+                CreateWavWithListChunk(filePath, listPayload);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+                act.Should().NotThrow();
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!.Should().ContainKey("INAM").WhoseValue.Should().Be("Test", "the well-formed sub-chunk before the corrupted one should still be parsed");
+                wavReader.Tags!.Should().NotContainKey("IART", "the corrupted sub-chunk itself must not be parsed");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithAnInfoListChunk_FollowedByA_NonInfoListChunk_Should_StillExposeTheEarlierTags()
+        {
+            // A real file can carry more than one 'LIST' chunk -- 'INFO' metadata alongside 'adtl'
+            // cue-point labels is a real, not-contrived combination. The second, non-INFO 'LIST'
+            // chunk must not wipe out the tags the first, INFO one already found.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var infoPayload = BuildListInfoPayload(("INAM", "Test"));
+                var adtlPayload = Encoding.ASCII.GetBytes("adtl").Concat(BuildInfoSubChunk("labl", "A cue label")).ToArray();
+                CreateWavWithTwoListChunks(filePath, infoPayload, adtlPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!["INAM"].Should().Be("Test", "the earlier INFO chunk's own tags must survive the later, non-INFO LIST chunk");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static void CreateWavWithTwoListChunks(string filePath, byte[] firstListPayload, byte[] secondListPayload)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int dataSize = 4;
+            var firstSize = (uint)firstListPayload.Length;
+            var firstPadding = firstSize % 2 == 0 ? 0u : 1u;
+            var secondSize = (uint)secondListPayload.Length;
+            var secondPadding = secondSize % 2 == 0 ? 0u : 1u;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + firstSize + firstPadding) + (8 + secondSize + secondPadding) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write(firstSize);
+            writer.Write(firstListPayload);
+            if (firstPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("LIST"u8);
+            writer.Write(secondSize);
+            writer.Write(secondListPayload);
+            if (secondPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
+        }
+
+        private static byte[] BuildInfoSubChunk(string id, string value)
+        {
+            var valueBytes = Encoding.UTF8.GetBytes(value + "\0");
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+            writer.Write(Encoding.ASCII.GetBytes(id));
+            writer.Write((uint)valueBytes.Length); // declared size is the real (possibly odd) payload length, excluding any pad byte
+            writer.Write(valueBytes);
+            if (valueBytes.Length % 2 != 0)
+            {
+                writer.Write((byte)0);
+            }
+
+            return ms.ToArray();
+        }
+
+        private static byte[] BuildListInfoPayload(params (string Id, string Value)[] subChunks)
+        {
+            var payload = Encoding.ASCII.GetBytes("INFO").ToList();
+            foreach (var (id, value) in subChunks)
+            {
+                payload.AddRange(BuildInfoSubChunk(id, value));
+            }
+
+            return payload.ToArray();
+        }
+
+        private static void CreateWavWithListChunk(string filePath, byte[] listChunkPayload)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int dataSize = 4;
+            var listChunkSize = (uint)listChunkPayload.Length;
+            var listPadding = listChunkSize % 2 == 0 ? 0u : 1u;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + listChunkSize + listPadding) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1); // PCM
+            writer.Write((ushort)1); // mono
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write(listChunkSize);
+            writer.Write(listChunkPayload);
+            if (listPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
         }
     }
 }

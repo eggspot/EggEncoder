@@ -52,5 +52,14 @@ namespace EggEncoder.Results
         /// couldn't decode audio from.
         /// </summary>
         public double? RmsLevel { get; init; }
+
+        /// <summary>
+        /// Metadata tags, keyed by their raw four-character chunk ID exactly as the container stores
+        /// them (e.g. "INAM" for title, "IART" for artist) -- not remapped to friendlier names, the
+        /// same way <see cref="CodecName"/> exposes "pcm_s16le" rather than a human label. Currently
+        /// populated only for WAV files with a 'LIST'/'INFO' chunk; null for every other format, and
+        /// for a WAV file that simply doesn't carry one (most don't).
+        /// </summary>
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 }

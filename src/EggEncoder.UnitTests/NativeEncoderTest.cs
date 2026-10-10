@@ -1,3 +1,4 @@
+using System.Text;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
@@ -54,6 +55,70 @@ namespace EggEncoder.UnitTests
             probeResult.ChannelLayout.Should().Be("stereo");
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.TimeBase.Should().Be("1/44100");
+            // This fixture is itself ffmpeg-produced and carries a real 'LIST'/'INFO' chunk -- a
+            // software tag ffmpeg writes into every WAV it encodes.
+            probeResult.Tags.Should().NotBeNull();
+            probeResult.Tags!.Should().ContainKey("ISFT");
+        }
+
+        [Fact]
+        public async Task Probe_WavFile_WithListInfoChunk_Should_Surface_Tags()
+        {
+            // End-to-end: confirms NativeEncoder.Probe actually wires WavReader.Tags through to
+            // ProbeResult.Tags, not just that WavReader itself parses them correctly (covered
+            // directly in WavReaderTest).
+            var filePath = Path.GetTempFileName() + ".wav"; // NativeEncoder.Probe dispatches by extension
+            try
+            {
+                File.WriteAllBytes(filePath, BuildMinimalWavWithListInfoTags("My Title", "My Artist"));
+
+                var probeResult = await _nativeEncoder.Probe(filePath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!["INAM"].Should().Be("My Title");
+                probeResult.Tags!["IART"].Should().Be("My Artist");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static byte[] BuildMinimalWavWithListInfoTags(string title, string artist)
+        {
+            byte[] InfoSubChunk(string id, string value)
+            {
+                var valueBytes = Encoding.UTF8.GetBytes(value + "\0");
+                var padding = valueBytes.Length % 2 == 0 ? [] : new byte[] { 0 };
+                return [.. Encoding.ASCII.GetBytes(id), .. BitConverter.GetBytes((uint)valueBytes.Length), .. valueBytes, .. padding];
+            }
+
+            byte[] listPayload = [.. Encoding.ASCII.GetBytes("INFO"), .. InfoSubChunk("INAM", title), .. InfoSubChunk("IART", artist)];
+            var listPadding = listPayload.Length % 2 == 0 ? Array.Empty<byte>() : new byte[] { 0 };
+            const int dataSize = 4;
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + listPayload.Length + listPadding.Length) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write((uint)listPayload.Length);
+            writer.Write(listPayload);
+            writer.Write(listPadding);
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
+
+            return ms.ToArray();
         }
 
         [Fact]
