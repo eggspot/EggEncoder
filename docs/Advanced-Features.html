@@ -89,8 +89,9 @@ var pipeline = new PcmTransformPipeline(
     new NoiseGateTransform(sampleRate: 48000, thresholdDb: -40, ratio: 10, attackMs: 5, releaseMs: 100),
     new PanTransform(pan: -0.3, PanLaw.EqualPower),
     new ChannelRemixTransform(inputChannels: 2, outputChannels: 1),
+    new EchoTransform(sampleRate: 48000, channels: 1, delaySeconds: 0.3, feedback: 0.4, wetGain: 0.5), // channels must match whatever's actually flowing at this point in the chain -- mono, after the remix above
     new VolumeTransform(gain: 1.5),
-    new LimiterTransform(sampleRate: 48000, ceilingDb: -0.3, releaseMs: 50), // guarantee the final ceiling after everything above it
+    new LimiterTransform(sampleRate: 48000, ceilingDb: -0.3, releaseMs: 50), // guarantee the final ceiling after everything above it, including any peak the echo added
     new BitDepthFormatTransform(fromBits: 16, toBits: 24));
 
 AudioCutter.Convert(sourcePath, destPath, pipeline);</code></pre>
@@ -109,6 +110,7 @@ destSink.WriteInterleavedSamples(buffer, frameCount);
 var (tailBuffer, tailFrameCount, _, _, _) = pipeline.Flush(2, 44100, 16); // drains the resampler's pending tail
 if (tailFrameCount > 0) destSink.WriteInterleavedSamples(tailBuffer, tailFrameCount);</code></pre>
       <p><code>IPcmTransform.Flush()</code> is a default interface method (existing custom transforms don't need to implement it; the default is a no-op) that cascades through every transform in a pipeline in order — a resampler's flushed tail is pushed through every later transform's own <code>Apply</code>, exactly like one final block, before that transform's own <code>Flush</code> drains whatever it, in turn, is left holding. Total output frame count converges exactly on <code>round(totalSourceFrames * ratio)</code> once flushed, regardless of how the source was split into blocks.</p>
+      <p><code>EchoTransform</code> is the other built-in transform that needs <code>Flush()</code>, for a different reason than <code>ResamplingTransform</code>'s withheld lookahead: its feedback delay line keeps producing progressively quieter repeats for a while after the real input ends, and that decaying tail is exactly what <code>Flush()</code> drains (a deterministic, bounded number of frames — see <code>EchoTransform.MaxTailSeconds</code>). Its <code>CanChangeFrameCount</code> reports <code>true</code> whenever <code>feedback &gt; 0</code>, since the tail means total output genuinely exceeds total input — a caller sizing a destination sink from the input count alone (as <code>AudioCutter.Convert</code>/<code>Cut</code> does for a <code>.wav</code> destination) needs that signal to know it must wait and see the real total instead.</p>
 
       <h3>Fades on a cut</h3>
       <pre><code class="language-csharp">AudioCutter.Cut(sourcePath, destPath, startInSeconds: 30, endInSeconds: 90, new CutOptions

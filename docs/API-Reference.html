@@ -244,6 +244,20 @@ public sealed class LimiterTransform : IPcmTransform
     public void Reset(); // clear the envelope follower back to silence
 }
 
+public sealed class EchoTransform : IPcmTransform
+{
+    public const double MaxDelaySeconds = 60.0;
+    public const double MaxTailSeconds = 30.0;
+
+    // A feedback delay line (one per channel; channels/sampleRate fixed at construction, like
+    // BiquadTransform). Each output sample is the dry input plus wetGain * the delayed input;
+    // feedback controls how much of each repeat feeds the next, quieter one. Implements Flush() to
+    // drain the decaying tail (deterministic: enough repeats to decay below -60dB, capped at
+    // MaxTailSeconds) -- CanChangeFrameCount is true whenever feedback > 0.
+    public EchoTransform(int sampleRate, int channels, double delaySeconds, double feedback, double wetGain);
+    public void Reset(); // clear the delay line back to silence
+}
+
 public sealed class PanTransform : IPcmTransform
 {
     public PanTransform(double pan, PanLaw law = PanLaw.Linear); // pan: -1.0 (full left) .. +1.0 (full right)
