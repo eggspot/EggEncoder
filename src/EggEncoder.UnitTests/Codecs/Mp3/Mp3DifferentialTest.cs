@@ -281,7 +281,9 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                             sum += windowedMdct[n] * Math.Cos((Math.PI / 18.0) * (n + 0.5 + 9.0) * (k + 0.5));
                         }
 
-                        coeffs[k] = sum;
+                        // Mirrors ComputeGranuleCoefficients's own post-Mdct.Forward /18 correction
+                        // (see its doc comment) for a real decoder's un-normalized IMDCT convention.
+                        coeffs[k] = sum / 18.0;
                     }
 
                     Array.Copy(coeffs, 0, refXr, sb * 18, 18);

@@ -211,7 +211,13 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                                 var timeSamples = Mdct.Inverse(coeffs);
                                 for (var n = 0; n < 36; n++)
                                 {
-                                    timeSamples[n] *= sineWindow[n];
+                                    // Mdct.Inverse divides by 18 internally (a convention a real
+                                    // decoder's own IMDCT doesn't apply); the encoder now divides
+                                    // by 18 on its own side (see Mp3FrameEncoder.
+                                    // ComputeGranuleCoefficients), so this self-decode -- standing
+                                    // in for a real decoder -- must multiply back by 18 here, or
+                                    // the two /18 factors would double up instead of cancelling.
+                                    timeSamples[n] *= sineWindow[n] * 18.0;
                                 }
 
                                 var hist = overlapHistory[sb];

@@ -160,6 +160,20 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 var coefficients = Mdct.Forward(windowed);
+
+                // Transform.Mdct.Inverse (shared with AAC/WMA) divides its own cosine sum by
+                // CoefficientsPerSubband (18) -- a normalization convention a real decoder's own
+                // IMDCT does NOT apply (confirmed by direct numerical comparison against NLayer's
+                // own decode-side IMDCT: Mdct.Inverse(C) == NLayerImdct(C) / 18 for every basis
+                // vector). Mdct.Forward has no compensating factor, so coefficients must be
+                // pre-divided here -- otherwise every real decoder reconstructs 18x too loud
+                // (this project's own self-decode tests don't catch it, since they use
+                // Mdct.Forward and Mdct.Inverse together, where the same factor cancels out).
+                for (var k = 0; k < CoefficientsPerSubband; k++)
+                {
+                    coefficients[k] /= CoefficientsPerSubband;
+                }
+
                 Array.Copy(coefficients, 0, xr, sb * CoefficientsPerSubband, CoefficientsPerSubband);
 
                 Array.Copy(perSubband[sb], history, CoefficientsPerSubband);
