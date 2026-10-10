@@ -83,7 +83,7 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 ### Native binary packaging
 
-`libmp3lame.dll`, `libFLAC.dll`, and `wavpackdll.dll` live at `src/EggEncoder/Native/win-x64/` and are packed via the NuGet `contentFiles` convention (see `EggEncoder.csproj`) so they land at `Native/win-x64/*.dll` relative to the consuming application's output directory — exactly where `NativeLibraryLoader` expects them. If you change this packaging, keep it in sync with `NativeLibraryLoader.Resolve`.
+`libmp3lame.dll`, `libFLAC.dll`, and `wavpackdll.dll` live at `src/EggEncoder/Native/win-x64/` and are packed via the NuGet `contentFiles` convention (see `EggEncoder.csproj`) so they land at `Native/win-x64/*.dll` relative to the consuming application's output directory — exactly where `NativeLibraryLoader` expects them. If you change this packaging, keep it in sync with `NativeLibraryLoader.Resolve`. **This is being actively removed** — the owner's decision is a 100% pure managed C# rewrite (FLAC decode/encode, MP3 encode, WavPack decode/encode, clean-room from the format specs, no GPL/LGPL) so EggEncoder stops being Windows-x64-only; see `docs/managed-codec-rewrite-plan.md` for the audit, ordered work items, and current status before touching anything in `Native/`.
 
 ### Native AOT
 

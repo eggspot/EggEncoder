@@ -1,0 +1,367 @@
+# Managed Codec Rewrite Plan
+
+EggEncoder today loads three native binaries at runtime via `NativeLibraryLoader` — `libFLAC.dll`,
+`libmp3lame.dll`, `wavpackdll.dll` — all hardcoded to `Native/win-x64/`, which makes FLAC decode,
+FLAC encode, MP3 encode, WavPack decode, and WavPack encode Windows-x64-only (confirmed: 49 of this
+project's own unit tests fail on macOS/Linux today, every one of them a `DllNotFoundException`
+tracing to one of these three DLLs — see the per-item sections below for the exact breakdown).
+**The owner's decision: remove `NativeLibraryLoader` and all three native dependencies entirely.**
+Every replacement is clean-room managed C#, implemented from the public format specs (RFC 9639 for
+FLAC, ISO/IEC 11172-3 for MP3, the WavPack 4/5 bitstream format) — no code derived from
+LAME/libFLAC/libwavpack sources, no GPL/LGPL dependency of any kind, matching this project's
+existing MIT license and its own established pattern for AAC/ALAC/TTA/WMA (all already pure
+managed, built from scratch). Permissively licensed (MIT/BSD/Apache) NuGet packages or reference
+implementations are allowed as a dependency or study reference if independently verified — see each
+item below for specific candidates already checked.
+
+This is a multi-session, multi-PR initiative. **This file is the source of truth for what's done,
+what's next, and why** — it exists so a fresh session can make real progress without re-deriving
+the plan or re-researching licensing from scratch, the same role `docs/video-support-backlog.md`
+plays for the video-support initiative (read that file's own "How to use this backlog" section too
+if anything here is unclear — the conventions are deliberately the same).
+
+## How to use this backlog (read this first, every time)
+
+You are almost certainly a fresh Claude Code session with no memory of the conversation that
+created this file. Here is everything you need:
+
+1. **Read this whole file once** before picking anything, including the "Audit" section — the
+   public API surface listed there is what every replacement must preserve exactly; don't skip to
+   the checkboxes.
+2. **Read the repo's own `CLAUDE.md`** for house conventions (feature branch + PR, never push to
+   `main`, conventional commit prefixes, 100% branch coverage on new code, `xUnit` +
+   `FluentAssertions` + AAA pattern, `Feature_Condition_ExpectedBehavior` test naming,
+   docs-sync-in-the-same-PR).
+3. **Check `git log --oneline -20`, `gh pr list --state all`, and this file's checkboxes together**
+   before picking anything — if a feature branch from a prior session is open and unmerged,
+   continue that instead of starting something new.
+4. **Pick the first unchecked item whose "Depends on" line (if any) is already checked off.** Items
+   within a format (e.g. FLAC decode before FLAC encode before FLAC LPC) have a real dependency
+   order; items across formats (FLAC vs. WavPack vs. MP3) don't depend on each other and can be
+   picked in any order — see "What this plan deliberately does not decide" at the end.
+5. **Implement the item with tests**, following this codebase's established shape for a from-scratch
+   codec (see `Codecs/Alac/`, `Codecs/Tta/` for the closest precedent — lossless, prediction +
+   Rice/Golomb coding, exactly what FLAC and WavPack need too):
+   - Full branch coverage: every public type/method, happy path, edge cases, every
+     validation/exception path.
+   - **Preserve the exact public API** listed in the audit below — signatures, defaults, thrown
+     exception types/conditions. `NativeEncoder`/`AudioCutter`/every existing test depend on it
+     unchanged; this is a swap of what's *behind* the API, not a breaking change to it.
+   - **Verification is "exact original samples reproduced," not "bit-exact encoded bytes."** For a
+     lossless codec, more than one valid encoding of the same audio exists — matching libFLAC's own
+     encoded bytes is not the bar (and isn't achievable without copying its source, which is exactly
+     what clean-room forbids). Decode the real ffmpeg-produced fixtures already in the repo and
+     assert exact PCM sample match — the same philosophy `FlacFfmpegCrossCheckTest`/
+     `WavPackFfmpegCrossCheckTest` already use for the native implementations today.
+   - Add new fixtures (bit depth / channel count combinations not already covered) wherever an
+     item's own section below calls one out as missing.
+6. **Commit to a feature branch, open a PR, self-review (two passes, per `CLAUDE.md`), merge, run
+   `dotnet test --configuration Release` on `main`.** Exactly the workflow the rest of this repo's
+   history already uses.
+7. **Check the item off in this file** (`- [ ]` → `- [x]`) **in the same PR**, with a one-line
+   "Status" note after it (merged PR link + anything genuinely left out of scope — see
+   `docs/video-support-backlog.md`'s own checked item for the exact format to copy). If genuinely
+   blocked, don't silently skip it — leave it unchecked, write exactly why, and move to the next
+   unblocked item instead.
+8. **Do not touch item 8 (the cleanup item) until items 1–7 are all checked off.** Deleting
+   `NativeLibraryLoader`/`Native/`/the `THIRD-PARTY-NOTICES.md` entries before every call site has a
+   real managed replacement would break every format that hasn't been migrated yet.
+9. **Do not touch PR #50** (the Sponsors badge) — that one's the repo owner's own call, unrelated to
+   this initiative.
+
+## Scope philosophy
+
+- **Clean-room only.** Every replacement is implemented from the public format spec, never by
+  reading/translating LAME's, libFLAC's, or libwavpack's actual source. This is a copyright
+  posture, not just a style preference — a line-by-line port of GPL/LGPL source is still a
+  derivative work under that license even when translated to a different programming language
+  (confirmed during this plan's own research: see the licensing table below for why
+  `CUETools.Codecs.FLAKE` and `GroovyCodecs`, two existing managed "ports," were rejected as
+  dependencies for exactly this reason).
+- **No GPL/LGPL/copyleft dependency, full stop** — this is stricter than `docs/video-support-backlog.md`'s
+  own stated policy for native video libraries (which accepts LGPL for a *dynamically-loaded,
+  separately-replaceable native binary*, the shape that gives LGPL's relinking exception real
+  teeth). A managed NuGet `PackageReference` doesn't have that same "swap the binary" affordance —
+  it compiles into the published package's own dependency closure — so the same license category
+  that's acceptable for a native DLL today is *not* being treated as acceptable here.
+- **Permissively licensed (MIT/BSD/Apache) managed dependencies are allowed**, as a reference to
+  study or as an actual dependency, if independently verified (license, correctness, maintenance
+  posture) — not assumed from a README claim. See each item below for what's already been checked.
+- **Decode before encode**, same reasoning as the video backlog: decode has one correct answer to
+  converge on and unblocks `Probe`/read-path consumers immediately; encode is open-ended
+  compression-ratio or quality tuning that's only worth doing once decode is solid.
+- **No overselling on MP3 quality.** Matching LAME's actual psychoacoustic tuning from scratch is
+  explicitly out of scope as a hard requirement — see item 6/7's measurable, more modest acceptance
+  criteria instead of an unstated "as good as LAME" bar.
+
+## Audit — every native-backed class, and the public API it must keep
+
+Every native call in this codebase funnels through exactly three files under `src/EggEncoder/Native/`,
+all registered via the same `[ModuleInitializer]` resolver:
+
+- **`NativeLibraryLoader.cs`** — `[ModuleInitializer] Initialize()` registers `Resolve` as the
+  `DllImportResolver` for this assembly. `Resolve` unconditionally maps `libFLAC`/`libmp3lame`/
+  `wavpackdll` to `Native/win-x64/{name}.dll` relative to `AppContext.BaseDirectory` — this is the
+  single point that makes every one of the three codecs below Windows-x64-only, regardless of host
+  OS/architecture. **This file is deleted outright in item 8, not generalized to more RIDs** — the
+  owner's decision is pure managed, not more native platforms.
+- **`FlacNative.cs`** (124 lines) — `[LibraryImport("libFLAC", ...)]` bindings for
+  `FLAC__stream_encoder_{new,delete,set_channels,set_bits_per_sample,set_sample_rate,
+  set_compression_level,init_file,process_interleaved,finish}` and
+  `FLAC__stream_decoder_{new,delete,init_file,process_until_end_of_stream,finish,get_channels,
+  get_bits_per_sample,get_sample_rate,get_total_samples}`, plus the `FLAC__StreamDecoderWriteCallback`/
+  `MetadataCallback`/`ErrorCallback` native callback signatures (an `[UnmanagedCallersOnly]` +
+  `GCHandle` pattern, not a marshaled delegate closure, to stay AOT-safe).
+- **`Mp3Native.cs`** (78 lines) — `[LibraryImport("libmp3lame", ...)]` bindings for the BladeEnc-style
+  `beInitStream`/`beEncodeChunk`/`beDeinitStream`/`beCloseStream` API LAME also exposes.
+- **`WavPackNative.cs`** — `[LibraryImport("wavpackdll", ...)]` bindings for
+  `WavpackOpenFileInput`/`WavpackCloseFile`/`WavpackGetNumChannels`/`WavpackGetSampleRate`/
+  `WavpackGetBitsPerSample`/`WavpackGetNumSamples64`/`WavpackGetMode`/`WavpackUnpackSamples`/
+  `WavpackGetErrorMessage` (decode) and `WavpackOpenFileOutput`/`WavpackSetConfiguration64`/
+  `WavpackPackInit`/`WavpackPackSamples`/`WavpackFlushSamples` (encode, driven through an
+  `[UnmanagedCallersOnly]` block-output write callback).
+
+Exactly **five classes** call into those bindings. Their full public surface is listed below —
+every replacement in this plan must keep this surface byte-for-byte identical, since
+`NativeEncoder`/`AudioCutter` and every consuming test depend on it unchanged.
+
+| Class | File | Public surface to preserve |
+|---|---|---|
+| `FlacDecoder` | `Codecs/Flac/FlacDecoder.cs` | `static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded)`; `FlacStreamInfo { Channels, SampleRate, BitsPerSample, TotalSamples }` (all `required`) |
+| `FlacEncoder` / `FlacEncoderSession` | `Codecs/Flac/FlacEncoder.cs` | `const uint DefaultCompressionLevel = 5`; `static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel)`; `static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = DefaultCompressionLevel)`; session: `void WriteInterleavedSamples(int[] buffer, int frameCount)`, `void Finish()`, `void Dispose()` (implements internal `IAudioSink`) |
+| `Mp3Encoder` / `Mp3EncoderSession` | `Codecs/Mp3/Mp3Encoder.cs` | `const int DefaultBitRateKbps = 320`; `static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps)`; `static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps)`; session: `void WriteInterleavedSamples(int[] buffer, int frameCount)`, `void Finish()`, `void Dispose()` (`IAudioSink`) |
+| `WavPackDecoder` | `Codecs/WavPack/WavPackDecoder.cs` | `static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)`; `WavPackStreamInfo { Channels, SampleRate, BitsPerSample, TotalSamples }` (all `required`) |
+| `WavPackEncoder` / `WavPackEncoderSession` | `Codecs/WavPack/WavPackEncoder.cs` | `static void Encode(string sourceWavFilePath, string destWvFilePath)`; `static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples)`; session: `void WriteInterleavedSamples(int[] buffer, int frameCount)`, `void Finish()`, `void Dispose()` (`IAudioSink`) |
+
+`Mp3Decoder` (`Codecs/Mp3/Mp3Decoder.cs`) is **already pure managed** (`NLayer`) and is completely
+unaffected by any item in this plan — MP3 decode already works on every platform today.
+
+`AudioBlockDecodedCallback` (shared decode callback shape) and `IAudioSink` (`WriteInterleavedSamples`/
+`Finish`, `IDisposable`) are defined in `Codecs/AudioCutter.cs` and are format-agnostic — no change
+needed there.
+
+### Call sites that dispatch to these five classes
+
+Every one of these stays exactly as-is; only what's on the other side of the call changes:
+
+- `NativeEncoder.cs`: `ProbeFlac`/`ProbeWavPack` decode dispatch, `ProbeMp3` decode dispatch via
+  `Mp3Decoder` (already managed — unaffected).
+- `AudioCutter.cs`: decode dispatch (`FlacDecoder.Decode`, `Mp3Decoder.Decode` [managed, unaffected],
+  `WavPackDecoder.Decode`) and encode-sink dispatch (`FlacEncoder.OpenSession`,
+  `Mp3Encoder.OpenSession`, `WavPackEncoderSession.OpenSession`) by destination extension.
+- `AudioCutter.Pipeline.cs`: `WavPackEncoderSession.OpenSession` (direct and via
+  `DeferredFixedHeaderSink` for the pipeline-unknown-total-frames case).
+
+### Everything else that currently assumes "native, Windows-x64 only" (touched only in item 8)
+
+- `src/EggEncoder/Native/NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`, `WavPackNative.cs`,
+  and `src/EggEncoder/Native/win-x64/*.dll` — delete entirely.
+- `src/EggEncoder/EggEncoder.csproj` — the three `contentFiles`/`PackageCopyToOutput` `<None>`
+  entries that ship the DLLs.
+- `THIRD-PARTY-NOTICES.md` — the `libmp3lame.dll`/`libFLAC.dll`/`wavpackdll.dll` sections.
+- `.github/workflows/ci.yml` — both jobs are pinned to `runs-on: windows-latest` specifically
+  *because of* this constraint (said so in their own comments); becomes a real
+  `[windows-latest, ubuntu-latest, macos-latest]` matrix. The `EggEncoder.AotSmokeTest` publish/run
+  step is Windows-only (`--runtime win-x64`) and should gain macOS/Linux RIDs too.
+- `.github/workflows/publish.yml` — same `windows-latest` pinning comment.
+- `src/EggEncoder.AotSmokeTest/Program.cs` and its `.csproj` (`<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>`)
+  — its own doc comment specifically frames its purpose as exercising "LibraryImport P/Invoke into
+  libmp3lame/libFLAC/wavpackdll" and the native callback patterns; once all three are managed this
+  framing is stale and the RID list should expand to match CI.
+- `README.md`, `llms.txt`, `llms-full.txt`, `CLAUDE.md`, `docs/*.html` — every "Windows x64 only" /
+  "native P/Invoke bindings to libmp3lame, libFLAC, wavpackdll" claim across all of these needs
+  rewriting once there's nothing native left to caveat.
+
+### Existing fixtures (reuse, extend only where an item calls out a gap)
+
+`src/EggEncoder.UnitTests/Codecs/Flac/sample_ffmpeg.flac` (16-bit only — item 1 explicitly needs
+more), `src/EggEncoder.UnitTests/Codecs/WavPack/sample_ffmpeg.wv` + `sample_float.wv`/
+`sample_3channel.wv`/`sample_8bit.wv`, `src/EggEncoder.UnitTests/Codecs/Mp3/{cbr128,tone,vbr_q4,no_xing}.mp3`.
+
+## Confirmed failure breakdown (verified on this Mac, this session)
+
+Ran the full suite (`dotnet test --configuration Release`) and traced every one of the 49 known
+baseline failures to its exact triggering library — all 49 are `DllNotFoundException` (5 show as a
+FluentAssertions "wrong exception type" message because the native load failure pre-empts the
+specific exception a negative-path test expected, but the root cause is identical):
+
+| Root cause | Failing tests |
+|---|---|
+| `libmp3lame.dll` (MP3 encode only — decode already passes) | 8 |
+| `libFLAC.dll` (FLAC decode **and** encode — confirmed decode fails independently via `FlacFfmpegCrossCheckTest.Decode_FfmpegProducedFlac_...`, which has no dependency on this project's own encoder) | 14 |
+| `wavpackdll.dll` (WavPack decode and encode) | 27 |
+
+## Backlog
+
+Ordered by dependency within each format; formats themselves are independent of each other (see
+"What this plan deliberately does not decide," below). Sizes are relative tick-estimates based on
+this project's own comparable from-scratch codecs already shipped (`Codecs/Alac/` ≈1330 lines,
+`Codecs/Tta/` ≈900 lines, `Codecs/Aac/` ≈1680 lines, `Codecs/Wma/` ≈1550 lines) — not hard
+commitments.
+
+### Phase 1 — FLAC (best precedent: a real reference decoder exists to study)
+
+- [ ] **1. FLAC decode (managed)** — replaces `FlacDecoder.Decode` and the `StreamDecoder*`/
+  write-callback half of `FlacNative.cs`.
+  - **Scope**: STREAMINFO + frame-header parsing, Rice/escape residual decoding, FIXED (orders 0–4)
+    and LPC (up to order 32) reconstruction, all four stereo decorrelation modes (independent,
+    left/side, right/side, mid/side), wasted-bits handling, variable block size.
+  - **Reference**: [PureFlac](https://github.com/FatJohn/PureFlac) (MIT license, confirmed via its
+    own repo this session) claims bit-exact-vs-libFLAC decode (SHA-256-verified against libFLAC
+    output per its own README) with this exact feature matrix (4–32 bit, 1–8 channels, all four
+    stereo modes, LPC to order 32) and is tested across .NET 8/10 on Linux/Windows/macOS — a
+    reasonable study reference or vendoring candidate if independently re-verified here. Caveat: a
+    very young repo (0 stars, 4 commits at the time of this audit) — treat as a reference/starting
+    point, not a dependency trusted blindly; its MIT license means forking it outright if it ever
+    goes stale is always an option.
+  - **Depends on**: nothing.
+  - **Size**: ~4–8 ticks.
+  - **Test plan**: `FlacDecoder.Decode` keeps its exact public signature; decoding
+    `sample_ffmpeg.flac` (existing fixture, 16-bit) reproduces the exact original PCM samples; **add
+    new fixtures covering 8/24/32-bit and mono/stereo** (this repo currently has only one FLAC
+    fixture, and it's 16-bit — this gap is explicit, not an oversight); malformed/truncated input
+    fails with a clear typed exception (`InvalidDataException`/`NotSupportedException`, matching
+    this codebase's existing convention for `Mp4EsdsParser`/`AsfContainerReader`), never a raw
+    unhandled exception or silent wrong output.
+  - **Picked up immediately once this plan document itself merges** — a separate PR, tracked here
+    (checked off) once it lands.
+  - Status: not started.
+
+- [ ] **2. FLAC encode, fixed predictors (managed)** — replaces the `StreamEncoder*` half of
+  `FlacNative.cs` and `FlacEncoder`/`FlacEncoderSession`, MVP cut.
+  - **Scope**: STREAMINFO + frame writing using only FIXED predictors (orders 0–4, cheapest-first
+    selection per subframe) and Rice-coded residuals — valid, fully spec-compliant, fully decodable
+    FLAC, just not yet compression-ratio-competitive with libFLAC's LPC search. Stereo mode
+    selection mirrors this codebase's own `AlacFrameEncoder` precedent (try mid/side, fall back to
+    independent).
+  - **Depends on**: 1 (needs a managed decoder to verify round-trips against, alongside the real
+    ffmpeg/libFLAC cross-check direction).
+  - **Size**: ~5–8 ticks.
+  - **Test plan**: `FlacEncoder.Encode`/`OpenSession` keep their exact public signatures and
+    defaults; encoding any existing WAV fixture then decoding the result (via item 1's new decoder
+    **and** a real independent decode where a reference fixture exists) reproduces the exact
+    original samples — exact *samples*, not exact *encoded bytes* (see "Scope philosophy" above for
+    why that's the right bar for a lossless format).
+  - Status: not started.
+
+- [ ] **3. FLAC encode, LPC (managed, follow-up to item 2)**
+  - **Scope**: add true LPC prediction (Levinson-Durbin coefficient estimation, quantization,
+    per-subframe order/precision search) on top of item 2's FIXED-only baseline, closing most of the
+    compression-ratio gap to libFLAC.
+  - **Depends on**: 2.
+  - **Size**: ~3–5 ticks.
+  - **Test plan**: same sample-exactness bar as item 2, plus a regression check that LPC output is
+    never *larger* than the FIXED-only baseline for the same input (fall back to FIXED if LPC
+    doesn't win) and is measurably smaller on real music-like fixtures.
+  - Status: not started.
+
+### Phase 2 — WavPack (no managed reference found; clean-room from the spec with no shortcut)
+
+- [ ] **4. WavPack decode (managed)** — replaces `WavPackDecoder.Decode` and the decode half of
+  `WavPackNative.cs`.
+  - **Scope**: mono/stereo, 16/24-bit lossless integer PCM only (matching this project's own
+    existing scope restriction — lossy/hybrid/float WavPack stays explicitly out of scope and
+    rejected, same as today). WavPack's own block/sub-block structure, prediction, and entropy
+    coding per the WavPack 4/5 format documentation.
+  - **No existing permissively-licensed managed WavPack codec was found** during this plan's own
+    research — this is clean-room from the spec with no shortcut reference implementation, unlike
+    FLAC.
+  - **Depends on**: nothing (independent of the FLAC items).
+  - **Size**: ~6–10 ticks.
+  - **Test plan**: `WavPackDecoder.Decode` keeps its exact signature; decoding `sample_ffmpeg.wv`,
+    `sample_3channel.wv` (→ `NotSupportedException`, unchanged contract), `sample_float.wv`/
+    `sample_8bit.wv` (→ whatever this project's existing contract already specifies for those,
+    unchanged) all behave identically to today's native-backed implementation.
+  - Status: not started.
+
+- [ ] **5. WavPack encode (managed)** — replaces `WavPackEncoder`/`WavPackEncoderSession` and the
+  encode half of `WavPackNative.cs`.
+  - **Depends on**: 4.
+  - **Size**: ~6–10 ticks.
+  - **Test plan**: same shape as item 2 — exact public API preserved, round-trip through item 4's
+    decoder (and the real `sample_ffmpeg.wv` cross-check direction) reproduces exact original
+    samples; the existing "WavPack can't represent zero samples" `NotSupportedException` contract
+    (`OpenSession` with `totalSamples <= 0`) is preserved.
+  - Status: not started.
+
+### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
+
+- [ ] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
+  `Mp3Native.cs`.
+  - **Scope**: ISO/IEC 11172-3 Layer III encoding, constant bit rate only, from the spec — no LAME
+    source consulted. The one managed "port" found during research, `GroovyCodecs`, is a literal
+    Java-to-C# auto-converted translation of LAME/Jump3r's actual source (its own README says so
+    directly) and is LGPL-3.0 — rejected both on clean-room and licensing grounds, not a shortcut
+    for this item.
+  - **Depends on**: nothing (independent of FLAC/WavPack).
+  - **Size**: ~15–25 ticks — the largest single item in this plan, and the one with the most
+    open-ended risk if the bar below is raised later.
+  - **Measurable acceptance criteria** (confirm/adjust with the owner before starting, if real
+    implementation experience suggests these numbers are wrong):
+    - **Decodability**: 100% of encoded output decodes cleanly via this project's own `Mp3Decoder`
+      (NLayer, already managed) with no exceptions, correct channel count, correct sample rate.
+    - **Size**: output file size within ±10% of `bitRateKbps × durationSeconds / 8` (mirrors
+      `Mp3EncoderTest.Encode_WithLowerBitRate_Should_Produce_Smaller_File`'s existing spirit).
+    - **Quality**: decode the encoded output and measure SNR against the original PCM — the same
+      methodology this codebase's own `VorbisEncoderSessionTest` round-trip SNR helper already uses
+      for a lossy codec. Initial numeric floor TBD once a first working encoder gives real numbers
+      to calibrate against — not a claim of LAME-equivalent quality.
+    - **Explicitly not required**: VBR, joint-stereo/intensity-stereo modes, or matching LAME's
+      output size/quality at the same nominal bitrate.
+  - Status: not started.
+
+- [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
+  - **Scope**: variable bit rate modes and whatever psychoacoustic/bit-allocation improvements prove
+    tractable without consulting LAME's source, raising the SNR floor from item 6.
+  - **Depends on**: 6.
+  - **Size**: open-ended — genuine LAME-competitive quality may never be fully closed by a
+    from-scratch effort (decades of community tuning went into LAME specifically). Revisit scope
+    after item 6 ships with real numbers in hand, rather than committing to a size now.
+  - Status: not started.
+
+### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
+
+- [ ] **8. Delete native infrastructure, expand CI**
+  - **Scope**: delete `NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`, `WavPackNative.cs`,
+    `Native/win-x64/*.dll`; remove the three `<None>` packaging entries from `EggEncoder.csproj`;
+    remove the corresponding `THIRD-PARTY-NOTICES.md` sections; change `ci.yml`/`publish.yml` from
+    `windows-latest`-only to a real `[windows-latest, ubuntu-latest, macos-latest]` matrix; update
+    `EggEncoder.AotSmokeTest` to multi-RID and refresh its own doc comment (no more native-interop
+    framing); full docs-sync pass across README/llms.txt/llms-full.txt/CLAUDE.md/docs/*.html
+    removing every "Windows x64 only" claim.
+  - **Depends on**: 1, 2, 3, 4, 5, 6 (7 is optional/open-ended — don't block cleanup on it; CBR-only
+    MP3 is still a complete, fully-managed replacement for what shipped natively before).
+  - **Size**: ~3–5 ticks — mechanical, but touches a lot of files.
+  - Status: not started.
+
+## What this plan deliberately does not decide
+
+- **Cross-format ordering is a free choice.** FLAC (1–3), WavPack (4–5), and MP3 (6–7) don't depend
+  on each other — a future session can pick any unblocked item regardless of format. This plan
+  orders them FLAC-first only because FLAC has a real reference decoder to study (PureFlac);
+  WavPack and MP3 don't.
+- **The exact SNR/quality floor for item 6** is left as "TBD, calibrate from the first real
+  implementation" rather than a guessed number — committing to an unverified threshold now would be
+  more likely to need revision than to hold.
+- **Item 7's size** is explicitly open-ended; it's a separate decision point for the owner once item
+  6's real numbers exist, not a commitment made here.
+
+## Licensing research summary
+
+Verified via live web research this session (3 WebSearch + 4 WebFetch calls, all cited) —
+re-verify anything load-bearing before acting on it if much time has passed, per
+`docs/video-support-backlog.md`'s own stated lesson about not trusting stale/memory-based licensing
+claims.
+
+| Candidate | License | Verdict | Why |
+|---|---|---|---|
+| [PureFlac](https://github.com/FatJohn/PureFlac) | MIT | Usable as reference/vendoring candidate for item 1 | Confirmed MIT directly from the repo; claims SHA-256-verified bit-exact decode vs. libFLAC |
+| [SimpleFlac](https://github.com/jdpurcell/SimpleFlac) | MIT | Considered, not preferred over PureFlac | MIT and single-file, but its own README discloses 8-bit and non-whole-byte bit depths are disabled by default — a real gap against this project's existing FLAC feature matrix; also less tested (6 stars, 5 commits) |
+| [CUETools.Codecs.FLAKE](https://www.nuget.org/packages/CUETools.Codecs.FLAKE) | **LGPL-3.0** | **Rejected** for item 2/3 | Its own package description says "this has not been tested much yet, I just converted it to .net standard"; LGPL-3.0 is excluded under this plan's "no copyleft dependency, full stop" policy (see Scope philosophy) regardless of test maturity |
+| [GroovyCodecs](https://github.com/jongoochgithub/GroovyCodecs) | **LGPL-3.0** | **Rejected** for item 6 | Its own README states it's an auto-converted Java-to-C# port of LAME/Jump3r's actual source — fails the clean-room requirement *and* carries the license this whole initiative exists to get away from; its own README also disclaims optimization/quality |
+
+No permissively-licensed managed WavPack codec (decode or encode) exists on NuGet, per this
+repo's own pre-existing `CLAUDE.md` note on `WavPack/` ("no pure-managed WavPack decoder/encoder
+exists on NuGet, unlike MP3/Opus/Vorbis") — this plan did not re-run a fresh WavPack-specific
+search this session, so re-verify before relying on it if much time has passed, same caveat as
+everything else in this table.
