@@ -16,7 +16,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 
 ### Why EggEncoder?
 
-- 🚀 **Mostly pure managed, fully in-process** — only MP3 and WavPack still shell out to native P/Invoke (LAME, WavPack); no subprocess/shell-out overhead anywhere
+- 🚀 **Mostly pure managed, fully in-process** — only MP3 (decode+encode) and WavPack encode still shell out to native P/Invoke (LAME, WavPack); no subprocess/shell-out overhead anywhere
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
@@ -123,7 +123,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ⁴ Vorbis is lossy, mono/stereo, 16-bit PCM — unlike Opus, any sample rate is supported (no fixed-rate resampling requirement).
 
-⁵ WavPack supports 16-bit and 24-bit lossless integer PCM (its own lossy/hybrid and floating-point modes are out of scope). Mono and stereo only. Unlike every other codec here, WavPack decode/encode is via a native binary (`wavpackdll.dll`, the official WavPack project's own prebuilt library) rather than a pure-managed implementation — no pure-managed WavPack decoder/encoder exists. Also unlike every other codec here, WavPack cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one) — encoding one throws `NotSupportedException` rather than producing a file.
+⁵ WavPack supports 16-bit and 24-bit lossless integer PCM (its own lossy/hybrid and floating-point modes are out of scope). Mono and stereo only. WavPack *decode* is a pure managed implementation (clean-room from the WavPack 4/5 format spec plus, for the codec algorithm that spec doesn't itself document, an owner-approved arm's-length study of FFmpeg's own independently-written decoder — see THIRD-PARTY-NOTICES.md); WavPack *encode* still delegates to a native binary (`wavpackdll.dll`, the official WavPack project's own prebuilt library). Also unlike every other codec here, WavPack cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one) — encoding one throws `NotSupportedException` rather than producing a file.
 
 ⁶ `WavReader` also decodes IMA ADPCM (`WAVE_FORMAT_IMA_ADPCM`, format tag 17) and MS ADPCM (`WAVE_FORMAT_ADPCM`, format tag 2, see footnote 8) — still a `.wav` file, just a different `fmt` chunk codec, so it's read automatically by `Probe`/`Convert`/`Cut`/pipeline sources with no extra API. Mono and stereo only; reports as 16-bit PCM once decoded (the coded width is 4 bits for both). `WavWriter` also encodes both (block-structured, buffered internally rather than one sample at a time — see `WavSampleFormat.ImaAdpcm`/`ImaAdpcmEncoder` and `WavSampleFormat.MsAdpcm`/`MsAdpcmEncoder`), selectable the same way `Float32`/`MuLaw`/`ALaw` are.
 

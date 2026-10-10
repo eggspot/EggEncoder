@@ -39,6 +39,29 @@ binary files under `Native/win-x64/`. Their licenses apply to those files indepe
   against that release's own published `sums.txt` before being committed here.
 - **Source availability**: WavPack source code is available at https://github.com/dbry/WavPack
 
+## WavPack decode algorithm — clean-room acknowledgment (no code copied)
+
+The managed WavPack decoder (`Codecs/WavPack/`, replacing the decode half of
+`wavpackdll.dll`/`WavPackNative.cs` described above) is original EggEncoder code, but its
+block/decorrelation/entropy-coding algorithm was derived with the owner's explicit sign-off from
+two sources beyond the official (and, for the codec itself, intentionally incomplete) WavPack 4/5
+file format specification:
+
+- **General familiarity with the WavPack project's own reference implementation**
+  ([github.com/dbry/WavPack](https://github.com/dbry/WavPack), BSD-style license, see the
+  `wavpackdll.dll` entry above) informed the overall shape of the algorithm (cascaded
+  decorrelation passes, an adaptive median-based entropy coder). No source from that project was
+  read or copied during this implementation; this is a standard "prior exposure informs a
+  from-scratch rewrite" acknowledgment, not a derived-work claim.
+- **FFmpeg's independently-written WavPack decoder**
+  (`libavcodec/wavpack.c`/`wavpack.h`, part of [FFmpeg](https://ffmpeg.org/), GNU Lesser General
+  Public License v2.1 or later) was studied at arm's length to extract the precise formulas needed
+  for bit-exact decode (exact weight-update/restore math, the entropy coder's class/tail/carry
+  state machine, joint-stereo and "false stereo" reconstruction, etc.) — read only to understand
+  and describe the algorithm in this project's own words, never to copy code or structure. No
+  FFmpeg source is vendored, linked, or reproduced; only the underlying facts/formulas (which are
+  not themselves copyrightable) were carried over into an independent C# implementation.
+
 ## NLayer — managed MP3 decoder
 
 - **Project**: [NLayer](https://github.com/naudio/NLayer)
