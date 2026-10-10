@@ -234,6 +234,15 @@ public sealed class NoiseGateTransform : IPcmTransform
     public void Reset(); // clear the envelope follower back to silence
 }
 
+public sealed class LimiterTransform : IPcmTransform
+{
+    // Infinite-ratio compression (the envelope is clamped AT the ceiling, not reduced toward it by
+    // a finite ratio) plus a final per-sample hard clip, so the output is GUARANTEED never to exceed
+    // the ceiling even during a nonzero attack time. attackMs defaults to 0 (classic brick-wall).
+    public LimiterTransform(int sampleRate, double ceilingDb, double releaseMs, double attackMs = 0.0);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
 public sealed class PanTransform : IPcmTransform
 {
     public PanTransform(double pan, PanLaw law = PanLaw.Linear); // pan: -1.0 (full left) .. +1.0 (full right)
