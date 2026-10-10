@@ -13,6 +13,13 @@ namespace EggEncoder.Codecs.WavPack
         private bool _carryZero;
         private int _zeroesRemaining;
 
+        // Once a zero run (shortcut or single escaped-zero) completes, the very next call must
+        // decode normally without re-checking the zero-run gate at all -- even though the gate's
+        // own condition (median[0] still near its post-run-reset low value, no pending carry) would
+        // otherwise still be satisfied and misread that next sample's real class/tail/sign bits as
+        // if they were a brand new zero-run escape code.
+        private bool _justFinishedRun;
+
         public WavPackEntropyDecoder(int channels)
         {
             _medians = new long[channels][];
@@ -26,11 +33,15 @@ namespace EggEncoder.Codecs.WavPack
 
         public int DecodeValue(WavPackBitReader reader, int channel)
         {
-            if (AllChannelsBelowTwo() && !_carryOne && !_carryZero)
+            var skipGate = _justFinishedRun;
+            _justFinishedRun = false;
+
+            if (!skipGate && AllChannelsBelowTwo() && !_carryOne && !_carryZero)
             {
                 if (_zeroesRemaining > 0)
                 {
                     _zeroesRemaining--;
+                    _justFinishedRun = _zeroesRemaining == 0;
                     return 0;
                 }
 
@@ -43,6 +54,7 @@ namespace EggEncoder.Codecs.WavPack
                         channelMedians[0] = channelMedians[1] = channelMedians[2] = 0;
                     }
 
+                    _justFinishedRun = _zeroesRemaining == 0;
                     return 0;
                 }
             }

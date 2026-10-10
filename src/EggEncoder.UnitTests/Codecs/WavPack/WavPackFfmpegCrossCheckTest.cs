@@ -88,6 +88,24 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             decodedSamples.Should().Equal(expectedSamples);
         }
 
+        // Exercises the zero-run-length entropy-coding shortcut with a genuinely long run of exact
+        // digital silence (5000 samples) -- the shortcut only engages once the per-channel median
+        // has decayed low enough, and critically, the sample immediately AFTER the run ends must be
+        // decoded normally rather than mistaken for the start of another zero run.
+        [Fact]
+        public void Decode_ReferenceEncoderSilenceRunWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_silence_run_wavpack.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_silence_run_wavpack.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
         // Exercises WP_ID_SAMPLE_RATE metadata: a non-standard sample rate (not one of WavPack's 15
         // standard-rate-table entries) is carried as a plain 24-bit value in this sub-block instead
         // of the block header's own 4-bit rate index.
