@@ -89,9 +89,11 @@ namespace EggEncoder.Codecs.WavPack
 
             if (totalSamples <= 0)
             {
-                // WavPack genuinely cannot represent an empty/zero-sample stream -- see
-                // WavPackEncoderSession's own existing test suite for the full chain of evidence
-                // this contract is based on (the reference CLI refuses to encode one outright).
+                // WavPack genuinely cannot represent an empty/zero-sample stream at all -- confirmed
+                // from its own reference CLI, which refuses to encode one outright (see
+                // WavPackEncoderSessionTest.OpenSession_With_ZeroTotalSamples_Should_Throw's own
+                // comment for the original, native-API-specific chain of evidence this contract
+                // predates and still matches).
                 throw new NotSupportedException($"'{destFilePath}' requests {totalSamples} total samples; WavPack cannot encode an empty/zero-sample stream");
             }
 
