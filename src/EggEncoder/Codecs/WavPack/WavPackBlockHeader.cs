@@ -46,13 +46,15 @@ namespace EggEncoder.Codecs.WavPack
         public int BitsPerSample => BytesPerSample * 8;
 
         // RFC-style "the 15 standard rates, index 15 means consult ID_SAMPLE_RATE metadata instead"
-        // table from the same spec section.
-        private static readonly int[] _standardSampleRates =
+        // table from the same spec section -- internal (not private) so WavPackBlockWriter's own
+        // encode-side lookup (find the table index for a given rate, or fall back to non-standard)
+        // can reuse the exact same table rather than duplicating it.
+        internal static readonly int[] StandardSampleRates =
         [
             6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000,
         ];
 
-        public int? StandardSampleRate => SampleRateIndex < _standardSampleRates.Length ? _standardSampleRates[SampleRateIndex] : null;
+        public int? StandardSampleRate => SampleRateIndex < StandardSampleRates.Length ? StandardSampleRates[SampleRateIndex] : null;
 
         public static WavPackBlockHeader Parse(byte[] data, int offset)
         {

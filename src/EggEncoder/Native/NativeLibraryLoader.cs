@@ -7,7 +7,7 @@ namespace EggEncoder.Native
 {
     internal static class NativeLibraryLoader
     {
-        private static readonly string[] _managedLibraryNames = ["libFLAC", "libmp3lame", "wavpackdll"];
+        private static readonly string[] _managedLibraryNames = ["libFLAC", "libmp3lame"];
 
         [ModuleInitializer]
         [SuppressMessage("Usage", "CA2255", Justification = "Native DLL import resolution must be registered before any P/Invoke call in this assembly runs.")]

@@ -35,6 +35,45 @@ namespace EggEncoder.Codecs.WavPack
             return sign ? -result : result;
         }
 
+        // The approximate inverse of Expand, for seeding WP_ID_ENTROPY_VARS from a measured
+        // magnitude: exact round-tripping isn't needed (this only ever feeds an initial median
+        // guess, not a value this project's own decode path depends on reading back precisely), so
+        // the mantissa's low byte is derived directly from the normalized linear value rather than
+        // via a true inverse lookup into the (non-monotonic-at-the-bit-level) exponential table.
+        public static short Compress(long value)
+        {
+            if (value == 0)
+            {
+                return 0;
+            }
+
+            var sign = value < 0;
+            var magnitude = sign ? -value : value;
+            if (magnitude > int.MaxValue)
+            {
+                magnitude = int.MaxValue;
+            }
+
+            var exponent = 0;
+            var m = magnitude;
+            while (m > 0)
+            {
+                exponent++;
+                m >>= 1;
+            }
+
+            if (exponent > 31)
+            {
+                exponent = 31;
+            }
+
+            var mantissaFull = exponent > 9 ? magnitude >> (exponent - 9) : magnitude << (9 - exponent);
+            var low = (int)(mantissaFull & 0xFF);
+            var result = (exponent << 8) | low;
+
+            return (short)(sign ? -result : result);
+        }
+
         private static int[] BuildMantissaTable()
         {
             var table = new int[256];
