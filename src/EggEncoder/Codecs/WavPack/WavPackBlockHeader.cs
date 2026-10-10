@@ -43,12 +43,6 @@ namespace EggEncoder.Codecs.WavPack
 
         public bool IsFinalBlockOfSequence => (Flags & 0x1000) != 0;
 
-        // A block that's both the first and last in its (multichannel) sequence is a complete,
-        // standalone mono or stereo frame -- anything else means more than 2 channels are split
-        // across multiple per-frame blocks, which this decoder (scoped to mono/stereo) can't
-        // reassemble.
-        public bool IsStandaloneMonoOrStereoBlock => IsInitialBlockOfSequence && IsFinalBlockOfSequence;
-
         public int BitsPerSample => BytesPerSample * 8;
 
         // RFC-style "the 15 standard rates, index 15 means consult ID_SAMPLE_RATE metadata instead"

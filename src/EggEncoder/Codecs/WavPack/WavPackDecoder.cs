@@ -11,9 +11,14 @@ namespace EggEncoder.Codecs.WavPack
     // approach; see docs/managed-codec-rewrite-plan.md item 4 and THIRD-PARTY-NOTICES.md.
     //
     // Scoped to mono/stereo, 16/24-bit lossless integer PCM only, matching this project's existing
-    // convention and the previous native-backed implementation's own contract exactly -- lossy/
-    // hybrid, floating-point, and more-than-stereo (multi-block-per-frame) WavPack are all rejected
-    // rather than silently mishandled.
+    // convention and the previous native-backed implementation's own contract exactly -- lossy,
+    // hybrid, floating-point, and genuinely-more-than-stereo WavPack are all rejected rather than
+    // silently mishandled. A real encoder given no explicit channel layout (e.g. this project's own
+    // native WavPackEncoderSession, which never sets WavpackConfig's ChannelMask) emits each
+    // "unassigned" channel as its own single-channel block within a multi-block sequence rather
+    // than one combined block -- confirmed directly against the official reference encoder -- so a
+    // mono or stereo *stream* can still legitimately span 1 (the common case) or 2 (this one)
+    // per-frame blocks; only a genuinely-more-than-2-channel sequence is rejected.
     public static class WavPackDecoder
     {
         public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
@@ -52,70 +57,118 @@ namespace EggEncoder.Codecs.WavPack
                     break;
                 }
 
-                var blockEnd = offset + 8 + (int)header.CkSize;
-                if (blockEnd > data.Length)
+                if (!header.IsInitialBlockOfSequence)
                 {
-                    throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
+                    throw new InvalidDataException($"'{filePath}' has a WavPack block that isn't the start of its own per-frame sequence where one was expected -- the file is corrupt or truncated.");
                 }
 
-                if (firstHeader is null)
-                {
-                    firstHeader = header;
-
-                    if (!header.IsStandaloneMonoOrStereoBlock)
-                    {
-                        throw new NotSupportedException($"'{filePath}' splits more than 2 channels across multiple per-frame blocks; only mono and stereo WavPack are supported");
-                    }
-
-                    channels = header.IsMono ? 1 : 2;
-
-                    if (header.IsFloat)
-                    {
-                        throw new NotSupportedException($"'{filePath}' is floating-point WavPack; only lossless integer WavPack is supported");
-                    }
-
-                    if (header.IsHybrid)
-                    {
-                        throw new NotSupportedException($"'{filePath}' is hybrid (lossy) WavPack; only lossless WavPack is supported");
-                    }
-
-                    bitsPerSample = header.BitsPerSample;
-                    if (bitsPerSample != 16 && bitsPerSample != 24)
-                    {
-                        throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 16-bit and 24-bit WavPack are supported");
-                    }
-
-                    sampleRate = header.StandardSampleRate ?? FindNonStandardSampleRate(data, offset + WavPackBlockHeader.ByteLength, blockEnd)
-                        ?? throw new NotSupportedException($"'{filePath}' has a non-standard sample rate but is missing the metadata that would specify it");
-                    totalSamples = header.TotalSamples;
-                }
-
-                var channelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var extraShift);
-                if (actualCrc != header.Crc)
-                {
-                    throw new InvalidDataException($"'{filePath}' has a WavPack block CRC mismatch (computed 0x{actualCrc:x8}, recorded 0x{header.Crc:x8}) -- the file is corrupt or truncated.");
-                }
-
+                var groupChannelSamples = new List<int[]>();
+                var groupBitsPerSample = 0;
+                var groupSampleRate = 0;
+                var groupTotalSamples = 0L;
                 var blockSamples = (int)header.BlockSamples;
+                var isFirstGroupInFile = firstHeader is null;
+
+                while (true)
+                {
+                    if ((int)header.BlockSamples != blockSamples)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block whose sample count doesn't match the other blocks in its own per-frame sequence -- the file is corrupt.");
+                    }
+
+                    var blockEnd = offset + 8 + (int)header.CkSize;
+                    if (blockEnd > data.Length)
+                    {
+                        throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
+                    }
+
+                    if (isFirstGroupInFile)
+                    {
+                        firstHeader = header;
+
+                        if (header.IsFloat)
+                        {
+                            throw new NotSupportedException($"'{filePath}' is floating-point WavPack; only lossless integer WavPack is supported");
+                        }
+
+                        if (header.IsHybrid)
+                        {
+                            throw new NotSupportedException($"'{filePath}' is hybrid (lossy) WavPack; only lossless WavPack is supported");
+                        }
+
+                        groupBitsPerSample = header.BitsPerSample;
+                        if (groupBitsPerSample != 16 && groupBitsPerSample != 24)
+                        {
+                            throw new NotSupportedException($"'{filePath}' has {groupBitsPerSample}-bit samples; only 16-bit and 24-bit WavPack are supported");
+                        }
+
+                        groupSampleRate = header.StandardSampleRate ?? FindNonStandardSampleRate(data, offset + WavPackBlockHeader.ByteLength, blockEnd)
+                            ?? throw new NotSupportedException($"'{filePath}' has a non-standard sample rate but is missing the metadata that would specify it");
+                        groupTotalSamples = header.TotalSamples;
+                    }
+
+                    var blockChannelSamples = WavPackBlockDecoder.Decode(data, offset + WavPackBlockHeader.ByteLength, blockEnd, header, out var actualCrc, out var extraShift);
+                    if (actualCrc != header.Crc)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block CRC mismatch (computed 0x{actualCrc:x8}, recorded 0x{header.Crc:x8}) -- the file is corrupt or truncated.");
+                    }
+
+                    var shift = header.LeftShift + extraShift;
+                    foreach (var channelData in blockChannelSamples)
+                    {
+                        if (shift > 0)
+                        {
+                            for (var i = 0; i < channelData.Length; i++)
+                            {
+                                channelData[i] <<= shift;
+                            }
+                        }
+
+                        groupChannelSamples.Add(channelData);
+                    }
+
+                    if (groupChannelSamples.Count > 2)
+                    {
+                        throw new NotSupportedException($"'{filePath}' has more than 2 channels split across its per-frame block sequence; only mono and stereo WavPack are supported");
+                    }
+
+                    if (header.IsFinalBlockOfSequence)
+                    {
+                        offset = blockEnd;
+                        break;
+                    }
+
+                    offset = blockEnd;
+                    if (offset + WavPackBlockHeader.ByteLength > data.Length)
+                    {
+                        throw new InvalidDataException($"'{filePath}' ended in the middle of a multi-block WavPack per-frame sequence -- the file is likely truncated.");
+                    }
+
+                    header = WavPackBlockHeader.Parse(data, offset);
+                }
+
+                if (isFirstGroupInFile)
+                {
+                    channels = groupChannelSamples.Count;
+                    bitsPerSample = groupBitsPerSample;
+                    sampleRate = groupSampleRate;
+                    totalSamples = groupTotalSamples;
+                }
+                else if (groupChannelSamples.Count != channels)
+                {
+                    throw new InvalidDataException($"'{filePath}' has a WavPack per-frame block sequence with {groupChannelSamples.Count} channels, but the file started with {channels} -- the channel count can't change mid-stream.");
+                }
+
                 var interleaved = new int[blockSamples * channels];
-                var shift = header.LeftShift + extraShift;
                 for (var i = 0; i < blockSamples; i++)
                 {
                     for (var c = 0; c < channels; c++)
                     {
-                        var sample = channelSamples[c][i];
-                        if (shift > 0)
-                        {
-                            sample <<= shift;
-                        }
-
-                        interleaved[(i * channels) + c] = sample;
+                        interleaved[(i * channels) + c] = groupChannelSamples[c][i];
                     }
                 }
 
                 onBlockDecoded(interleaved, channels, sampleRate, bitsPerSample, totalSamples);
-
-                offset = blockEnd;
             }
 
             if (firstHeader is null)

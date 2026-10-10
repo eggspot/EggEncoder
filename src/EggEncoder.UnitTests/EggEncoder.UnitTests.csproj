@@ -82,6 +82,8 @@
     <None Include="Codecs\WavPack\sample_nonstandard_rate_wavpack.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_silence_run_wavpack.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_silence_run_wavpack.wv" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_split_mono_blocks_wavpack.wav" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\WavPack\sample_split_mono_blocks_wavpack.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_24bit_stereo_wavpack.wav" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_24bit_stereo_wavpack.wv" CopyToOutputDirectory="Always" />
     <None Include="Codecs\WavPack\sample_false_stereo_wavpack.wav" CopyToOutputDirectory="Always" />

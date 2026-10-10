@@ -12,6 +12,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         private static readonly string _hybridFixturePath = Path.GetFullPath("Codecs/WavPack/sample_hybrid_wavpack.wv");
         private static readonly string _nonStandardRateFixturePath = Path.GetFullPath("Codecs/WavPack/sample_nonstandard_rate_wavpack.wv");
         private static readonly string _monoFixturePath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wv");
+        private static readonly string _splitMonoBlocksFixturePath = Path.GetFullPath("Codecs/WavPack/sample_split_mono_blocks_wavpack.wv");
 
         [Fact]
         public void Decode_StereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()
@@ -236,6 +237,127 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
 
                 streamInfo.TotalSamples.Should().Be(13230);
                 decoded.Should().HaveCount(13230);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithNonInitialBlockWhereSequenceStartExpected_Should_Throw()
+        {
+            // Takes a genuine single standalone block (the first block of sample_mono_ffmpeg.wv) and
+            // appends a second copy of it with its own "initial block of sequence" flag bit cleared,
+            // to exercise the guard against a block sequence starting mid-stream with something
+            // other than a real sequence-start block (a malformed/corrupt file, since a well-formed
+            // one always closes every sequence with a final-flagged block before the next one
+            // starts).
+            var fullBytes = File.ReadAllBytes(_monoFixturePath);
+            var firstBlockCkSize = BitConverter.ToUInt32(fullBytes, 4);
+            var firstBlockEnd = 8 + (int)firstBlockCkSize;
+            var firstBlock = fullBytes[..firstBlockEnd];
+
+            var secondBlock = (byte[])firstBlock.Clone();
+            secondBlock[25] &= 0xF7; // clear bit 11 (the "initial block of sequence" flag) of the flags field
+
+            var combined = new byte[firstBlock.Length + secondBlock.Length];
+            firstBlock.CopyTo(combined, 0);
+            secondBlock.CopyTo(combined, firstBlock.Length);
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_noninitial_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, combined);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("isn't the start of its own per-frame sequence");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithFileTruncatedBetweenSequenceBlocks_Should_Throw()
+        {
+            // Keeps only the first (initial, non-final) block of sample_split_mono_blocks_wavpack.wv's
+            // two-block stereo sequence, so the file ends cleanly after a whole block but mid-sequence
+            // -- distinct from Decode_WithFileTruncatedMidBlock_Should_Throw, which cuts off inside a
+            // single block's own declared size.
+            var fullBytes = File.ReadAllBytes(_splitMonoBlocksFixturePath);
+            var firstBlockCkSize = BitConverter.ToUInt32(fullBytes, 4);
+            var firstBlockEnd = 8 + (int)firstBlockCkSize;
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_midsequence_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, fullBytes[..firstBlockEnd]);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("multi-block WavPack per-frame sequence");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithMismatchedBlockSamplesWithinSequence_Should_Throw()
+        {
+            // sample_split_mono_blocks_wavpack.wv is a genuine reference-encoder-produced file whose
+            // stereo pair is split into two single-channel blocks (initial + final) in the same
+            // per-frame sequence, both declaring 4 samples. Corrupting the second block's own
+            // declared sample count exercises the guard against a sequence whose sibling blocks
+            // disagree on how many samples they each cover.
+            var corruptBytes = File.ReadAllBytes(_splitMonoBlocksFixturePath);
+            const int secondBlockSamplesOffset = 190 + 20;
+            BitConverter.GetBytes(5u).CopyTo(corruptBytes, secondBlockSamplesOffset);
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_blocksamples_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, corruptBytes);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("sample count doesn't match");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithChannelCountChangingMidStream_Should_Throw()
+        {
+            // Concatenates a genuine 2-channel-via-split-mono-blocks sequence with a genuine
+            // 1-channel sequence (sample_mono_ffmpeg.wv) to exercise the guard against a later
+            // per-frame block sequence in the same file reporting a different total channel count
+            // than the one the file started with.
+            var firstFileBytes = File.ReadAllBytes(_splitMonoBlocksFixturePath);
+            var secondFileBytes = File.ReadAllBytes(_monoFixturePath);
+            var combined = new byte[firstFileBytes.Length + secondFileBytes.Length];
+            firstFileBytes.CopyTo(combined, 0);
+            secondFileBytes.CopyTo(combined, firstFileBytes.Length);
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"wavpack_decoder_channelchange_{Guid.NewGuid():N}.wv");
+            try
+            {
+                File.WriteAllBytes(filePath, combined);
+
+                var act = () => WavPackDecoder.Decode(filePath, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<InvalidDataException>()
+                    .Which.Message.Should().Contain("channel count can't change mid-stream");
             }
             finally
             {

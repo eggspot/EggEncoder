@@ -106,6 +106,24 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             decodedSamples.Should().Equal(expectedSamples);
         }
 
+        // Exercises WavPack's multi-block-per-frame sequence: a stereo stream with no explicit
+        // channel layout (matching what this project's own native WavPackEncoderSession produces,
+        // since it never sets WavpackConfig's ChannelMask) is split by the reference encoder into
+        // two single-channel blocks per frame (initial + final) rather than one combined block.
+        [Fact]
+        public void Decode_ReferenceEncoderSplitMonoBlocksWavPack_Should_Match_Original_Wav_Samples()
+        {
+            var wavPath = Path.GetFullPath("Codecs/WavPack/sample_split_mono_blocks_wavpack.wav");
+            var wvPath = Path.GetFullPath("Codecs/WavPack/sample_split_mono_blocks_wavpack.wv");
+            var expectedSamples = ReadAllSamples(wavPath, out var channels, out var sampleRate);
+
+            var (streamInfo, decodedSamples) = WavPackTestDecoder.DecodeAll(wvPath);
+
+            streamInfo.Channels.Should().Be(channels);
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            decodedSamples.Should().Equal(expectedSamples);
+        }
+
         // Exercises WP_ID_SAMPLE_RATE metadata: a non-standard sample rate (not one of WavPack's 15
         // standard-rate-table entries) is carried as a plain 24-bit value in this sub-block instead
         // of the block header's own 4-bit rate index.
