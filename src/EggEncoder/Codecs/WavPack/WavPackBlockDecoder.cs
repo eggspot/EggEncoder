@@ -325,22 +325,22 @@ namespace EggEncoder.Codecs.WavPack
         }
 
         // WP_ID_INT32_INFO's 4-byte payload: byte 0 is an "extra bits" count used only for
-        // integers wider than 24 bits (out of scope for this 16/24-bit-only decoder, so ignored
-        // here); bytes 1-3 each independently carry an additional post-decode left-shift amount,
-        // applied on top of (not replacing) the block header's own 5-bit left-shift field -- the
-        // last of the three that's nonzero wins, since a real encoder only ever populates one.
+        // integers wider than 24 bits (out of scope for this 16/24-bit-only decoder); byte 1 is a
+        // plain additional post-decode left-shift amount, applied on top of (not replacing) the
+        // block header's own 5-bit left-shift field. Bytes 2 and 3 select a variant where the
+        // newly-shifted-in low bits are filled with ones or with a copy of the sample's own low bit
+        // (rather than zeros) -- real-world WavPack sources document this as relevant to hybrid
+        // (lossy) and >24-bit integer decode, both already out of scope for this lossless 16/24-bit
+        // decoder, so a nonzero byte 2 or 3 is rejected explicitly rather than silently producing
+        // the wrong samples by treating it as a plain shift.
         private static int ParseInt32InfoShift(ArraySegment<byte> data)
         {
-            var shift = 0;
-            for (var i = 1; i <= 3; i++)
+            if (data[2] != 0 || data[3] != 0)
             {
-                if (data[i] != 0)
-                {
-                    shift = data[i];
-                }
+                throw new NotSupportedException("A WavPack block's WP_ID_INT32_INFO metadata uses the bit-filling shift variant, which is only supported for this decoder's existing plain-shift case.");
             }
 
-            return shift;
+            return data[1];
         }
 
         private static short ReadInt16Le(ArraySegment<byte> data, int offset) => (short)(data[offset] | (data[offset + 1] << 8));
