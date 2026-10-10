@@ -261,6 +261,17 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                     }
                 }
 
+                // Frequency inversion -- mirrors ComputeGranuleCoefficients's own pre-MDCT
+                // correction (see its doc comment): negate every odd subband's sample at every
+                // odd tick index within this granule.
+                for (var sb = 1; sb < 32; sb += 2)
+                {
+                    for (var t = 1; t < 18; t += 2)
+                    {
+                        perSubband[sb][t] = -perSubband[sb][t];
+                    }
+                }
+
                 var refXr = new double[576];
                 for (var sb = 0; sb < 32; sb++)
                 {
