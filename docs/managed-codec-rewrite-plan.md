@@ -482,7 +482,23 @@ commitments.
       joint/intensity stereo (already excluded above, repeated here since it affects quantization
       scope too: independent stereo quantizes/Huffman-codes each channel's granule completely
       separately, with no cross-channel step to design at all for this item).
-  - Status: not started.
+  - Status: **in progress, blocked** — see `feat/managed-mp3-encoder` (draft PR, WIP). The full
+    pipeline above is implemented (`Mp3PolyphaseFilter`, `Mp3AliasReduction`, `Mp3Quantizer`,
+    `Mp3HuffmanTables`, `Mp3FrameEncoder`), and several of its stages are independently proven
+    correct: the polyphase/MDCT/alias-reduction DSP chain matches fresh, independently-derived
+    reference formulas to 1e-6/1e-9 precision (differential tests); every one of this project's own
+    Huffman code/length table entries (all real `table_select` values 1-31 plus both quadruples
+    tables) was mechanically cross-checked, bit-for-bit, against NLayer's own decoder tables (used
+    read-only as a test oracle) with zero mismatches; and a from-scratch, independently-written
+    IMDCT+synthesis-filter decoder reconstructs a real encoded tone at 36dB SNR. Despite all of
+    that, real decoders (NLayer and ffmpeg, independently) still fail to decode most
+    content/configuration combinations correctly — output degrades into genuine noise (not a
+    clean amplitude/scale error) partway through longer content, and one previously-passing
+    structural test now throws inside NLayer's own bit reservoir. The remaining divergence is
+    real but not yet isolated; see the draft PR description for the full diagnostic trail and
+    remaining hypotheses (bit-reservoir/frame-boundary bookkeeping is the leading suspect, since
+    DSP correctness, bitstream self-consistency, and Huffman table content are now all
+    independently ruled out). Not ready to tick done.
 
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
   - **Scope**: variable bit rate modes and whatever psychoacoustic/bit-allocation improvements prove

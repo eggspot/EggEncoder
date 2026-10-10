@@ -7,9 +7,15 @@ namespace EggEncoder.Codecs.Mp3
     {
         private const int MaxSyncSearchBytes = 65536;
 
-        private static readonly int[] _mpeg1Layer3BitrateKbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1];
+        // internal (not private) so Mp3FrameEncoder can map its own sampleRate/bitRateKbps to the
+        // header's bitrate-index/sample-rate-index fields via the exact same tables this probe
+        // already uses to go the other direction, rather than duplicating them.
+        internal static readonly int[] Mpeg1Layer3BitrateKbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1];
+        internal static readonly int[] Mpeg1SampleRates = [44100, 48000, 32000, -1];
+
+        private static readonly int[] _mpeg1Layer3BitrateKbps = Mpeg1Layer3BitrateKbps;
         private static readonly int[] _mpeg2Layer3BitrateKbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1];
-        private static readonly int[] _mpeg1SampleRates = [44100, 48000, 32000, -1];
+        private static readonly int[] _mpeg1SampleRates = Mpeg1SampleRates;
         private static readonly int[] _mpeg2SampleRates = [22050, 24000, 16000, -1];
         private static readonly int[] _mpeg25SampleRates = [11025, 12000, 8000, -1];
 
