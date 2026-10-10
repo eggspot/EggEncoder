@@ -8,11 +8,22 @@ tracing to one of these three DLLs — see the per-item sections below for the e
 **The owner's decision: remove `NativeLibraryLoader` and all three native dependencies entirely.**
 Every replacement is clean-room managed C#, implemented from the public format specs (RFC 9639 for
 FLAC, ISO/IEC 11172-3 for MP3, the WavPack 4/5 bitstream format) — no code derived from
-LAME/libFLAC/libwavpack sources, no GPL/LGPL dependency of any kind, matching this project's
-existing MIT license and its own established pattern for AAC/ALAC/TTA/WMA (all already pure
-managed, built from scratch). Permissively licensed (MIT/BSD/Apache) NuGet packages or reference
-implementations are allowed as a dependency or study reference if independently verified — see each
-item below for specific candidates already checked.
+LAME/libFLAC/libwavpack sources, no GPL/LGPL *dependency* (nothing linked, vendored, or shipped),
+matching this project's existing MIT license and its own established pattern for AAC/ALAC/TTA/WMA
+(all already pure managed, built from scratch). Permissively licensed (MIT/BSD/Apache) NuGet
+packages or reference implementations are allowed as a dependency or study reference if
+independently verified — see each item below for specific candidates already checked.
+
+**One item-specific exception to "clean-room from the spec alone," both with the owner's explicit
+sign-off**: item 4 (WavPack decode)'s own decorrelation/entropy-coding algorithm has no public
+written spec at all (unlike FLAC/MP3 — see that item's own section for the full story), so after
+general-reference-project familiarity alone proved insufficient for bit-exactness, the owner
+approved studying FFmpeg's independently-written WavPack decoder (`libavcodec/wavpack.c`, LGPL
+2.1+) at arm's length — extracting documented facts/formulas in the researcher's own words, never
+copying code or structure, with no FFmpeg source vendored, linked, or shipped. This keeps the "no
+GPL/LGPL dependency" guarantee intact (nothing from FFmpeg ships in this project) while relaxing
+the stricter "never even read copyleft source" posture for this one, spec-less item — see
+`THIRD-PARTY-NOTICES.md`'s "WavPack decode algorithm" entry for the full acknowledgment.
 
 This is a multi-session, multi-PR initiative. **This file is the source of truth for what's done,
 what's next, and why** — it exists so a fresh session can make real progress without re-deriving
@@ -269,7 +280,7 @@ commitments.
 
 ### Phase 2 — WavPack (no managed reference found; clean-room from the spec with no shortcut)
 
-- [ ] **4. WavPack decode (managed)** — replaces `WavPackDecoder.Decode` and the decode half of
+- [x] **4. WavPack decode (managed)** — replaces `WavPackDecoder.Decode` and the decode half of
   `WavPackNative.cs`.
   - **Scope**: mono/stereo, 16/24-bit lossless integer PCM only (matching this project's own
     existing scope restriction — lossy/hybrid/float WavPack stays explicitly out of scope and
@@ -284,7 +295,21 @@ commitments.
     `sample_3channel.wv` (→ `NotSupportedException`, unchanged contract), `sample_float.wv`/
     `sample_8bit.wv` (→ whatever this project's existing contract already specifies for those,
     unchanged) all behave identically to today's native-backed implementation.
-  - Status: not started.
+  - Status: done — https://github.com/eggspot/EggEncoder/pull/77. The block/container spec turned
+    out fully documented as expected, but the decorrelation/entropy codec algorithm itself required
+    two owner sign-offs beyond the original clean-room plan: first to implement from general
+    familiarity with the WavPack reference project (standard "prior exposure, fresh rewrite"
+    practice), then — once that alone proved insufficiently precise for bit-exactness — to also
+    study FFmpeg's own independently-written decoder at arm's length (see
+    `THIRD-PARTY-NOTICES.md`'s "WavPack decode algorithm" entry for the full acknowledgment). CI
+    against the real native encoder on Windows (this plan's own ffmpeg-fixture test plan above
+    wasn't sufficient alone) surfaced several additional real-world cases beyond the original
+    scope note: multi-block-per-frame mono/stereo sequences (this project's own
+    `WavPackEncoderSession` never sets a channel mask, so the reference encoder splits stereo into
+    two single-channel blocks per frame), `WP_ID_SAMPLE_RATE` metadata for non-standard rates, and
+    `WP_ID_INT32_INFO`'s bit-filling shift variant (occurs for ordinary full-scale 16-bit content,
+    not just hybrid/>24-bit as general WavPack documentation describes) — all now implemented and
+    covered by dedicated reference-encoder-produced fixtures, not just the ffmpeg ones.
 
 - [ ] **5. WavPack encode (managed)** — replaces `WavPackEncoder`/`WavPackEncoderSession` and the
   encode half of `WavPackNative.cs`.
