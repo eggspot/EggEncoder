@@ -51,9 +51,6 @@
       consumers (e.g. EggEncoder.UnitTests), not for real PackageReference consumers, who would get
       a DllNotFoundException at P/Invoke time instead.
     -->
-    <None Include="Native\win-x64\libmp3lame.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libmp3lame.dll" PackageCopyToOutput="true">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll" PackageCopyToOutput="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

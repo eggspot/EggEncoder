@@ -1,9 +1,21 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Wav;
-using EggEncoder.Native;
+using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.Mp3
 {
+    // Pure managed MPEG-1 Layer III encoder, clean-room from the published ISO/IEC 11172-3 standard
+    // text (see Mp3Tables/Mp3HuffmanTables/Mp3PolyphaseFilter/Mp3AliasReduction/Mp3Quantizer/
+    // Mp3FrameEncoder's own doc comments for the per-stage provenance) -- no LAME, GroovyCodecs, or
+    // any other encoder's source was consulted, per docs/managed-codec-rewrite-plan.md item 6.
+    //
+    // A deliberately simple CBR-only baseline: long blocks only (no block switching/transient
+    // handling), independent (non-joint) stereo, no psychoacoustic model (global_gain alone is
+    // searched to fit each granule's own fixed bit budget), and no bit-reservoir borrowing across
+    // frames -- matching this project's own "correctness first, not yet compression-competitive"
+    // precedent (see FlacEncoder's own items 2/3 history, and the WavPack encoder's own
+    // single-decorrelation-term MVP choice). Correctness is the bar: every frame this encoder
+    // writes decodes cleanly via this project's own Mp3Decoder (NLayer).
     public static class Mp3Encoder
     {
         public const int DefaultBitRateKbps = 320;
@@ -27,68 +39,30 @@ namespace EggEncoder.Codecs.Mp3
 
         public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps)
         {
-            var config = new BeConfig
-            {
-                DwConfig = BeConfig.ConfigLame,
-                DwStructVersion = 1,
-                DwStructSize = 331,
-                DwSampleRate = (uint)sampleRate,
-                NMode = (int)(channels == 1 ? BeMp3Mode.Mono : BeMp3Mode.JointStereo),
-                DwBitrate = (uint)bitRateKbps,
-                NPreset = (int)BeQualityPreset.NoPreset,
-                DwMpegVersion = 1,
-                BOriginal = 1,
-                BWriteVbrHeader = 1,
-                NVbrMethod = (int)BeVbrMethod.None
-            };
-
-            uint samplesPerChunk = 0;
-            var initResult = Mp3Native.BeInitStream(ref config, ref samplesPerChunk, out var mp3BufferSize, out var streamHandle);
-            if (initResult != 0)
-            {
-                throw new InvalidOperationException($"Failed to initialize LAME encoder for '{destMp3FilePath}': error {initResult}");
-            }
-
-            FileStream? destStream = null;
-            try
-            {
-                destStream = new FileStream(destMp3FilePath, FileMode.Create, FileAccess.Write);
-
-                return new Mp3EncoderSession(streamHandle, channels, bitsPerSample - 16, samplesPerChunk, mp3BufferSize, destStream, destMp3FilePath);
-            }
-            catch
-            {
-                destStream?.Dispose();
-                Mp3Native.BeCloseStream(streamHandle);
-                throw;
-            }
+            var destStream = File.Create(destMp3FilePath);
+            return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, bitRateKbps);
         }
     }
 
     public sealed class Mp3EncoderSession : IAudioSink
     {
-        private readonly IntPtr _streamHandle;
+        private const int FrameSamples = 1152;
+
+        private readonly FileStream _destStream;
         private readonly int _channels;
         private readonly int _bitsPerSampleShift;
-        private readonly uint _samplesPerChunk;
-        private readonly short[] _pendingSamples;
-        private readonly byte[] _mp3Buffer;
-        private readonly FileStream _destStream;
-        private readonly string _destMp3FilePath;
+        private readonly Mp3FrameEncoder _frameEncoder;
+        private readonly List<int> _pendingInterleaved = [];
 
-        private int _pendingSampleCount;
+        private bool _finished;
         private bool _disposed;
 
-        internal Mp3EncoderSession(IntPtr streamHandle, int channels, int bitsPerSampleShift, uint samplesPerChunk, uint mp3BufferSize, FileStream destStream, string destMp3FilePath)
+        internal Mp3EncoderSession(FileStream destStream, int channels, int sampleRate, int bitsPerSample, int bitRateKbps)
         {
-            _streamHandle = streamHandle;
-            _channels = channels;
-            _bitsPerSampleShift = bitsPerSampleShift;
-            _samplesPerChunk = samplesPerChunk;
-            _pendingSamples = new short[samplesPerChunk];
-            _mp3Buffer = new byte[mp3BufferSize];
             _destStream = destStream;
-            _destMp3FilePath = destMp3FilePath;
+            _channels = channels;
+            _bitsPerSampleShift = bitsPerSample - 16;
+            _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -99,43 +73,43 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var sampleCount = frameCount * _channels;
-            var sampleIndex = 0;
-
-            while (sampleIndex < sampleCount)
+            for (var i = 0; i < sampleCount; i++)
             {
-                var samplesToCopy = Math.Min(sampleCount - sampleIndex, (int)_samplesPerChunk - _pendingSampleCount);
-                for (var i = 0; i < samplesToCopy; i++)
-                {
-                    var sample = buffer[sampleIndex + i];
-                    _pendingSamples[_pendingSampleCount + i] = (short)(_bitsPerSampleShift > 0 ? sample >> _bitsPerSampleShift : sample);
-                }
+                var sample = buffer[i];
+                _pendingInterleaved.Add(_bitsPerSampleShift > 0 ? sample >> _bitsPerSampleShift : sample);
+            }
 
-                _pendingSampleCount += samplesToCopy;
-                sampleIndex += samplesToCopy;
-
-                if (_pendingSampleCount == _samplesPerChunk)
-                {
-                    EncodeChunk((uint)_pendingSampleCount);
-                    _pendingSampleCount = 0;
-                }
+            while (_pendingInterleaved.Count >= FrameSamples * _channels)
+            {
+                EncodeFrame();
             }
         }
 
         public void Finish()
         {
-            if (_pendingSampleCount > 0)
+            if (_finished)
             {
-                EncodeChunk((uint)_pendingSampleCount);
-                _pendingSampleCount = 0;
+                return;
             }
 
-            var deinitResult = Mp3Native.BeDeinitStream(_streamHandle, _mp3Buffer, out var flushBytesWritten);
-            if (deinitResult != 0)
-            {
-                throw new InvalidOperationException($"LAME encoder failed to flush '{_destMp3FilePath}': error {deinitResult}");
-            }
+            _finished = true;
 
-            _destStream.Write(_mp3Buffer, 0, (int)flushBytesWritten);
+            if (_pendingInterleaved.Count > 0)
+            {
+                // The encoder's own polyphase/hybrid filterbank needs exactly 1152 samples per
+                // channel per frame -- silence-pad the final, shorter-than-a-frame tail rather than
+                // special-casing a partial frame. A few dozen milliseconds of trailing silence is
+                // the normal cost of any block-based encoder's own fixed frame size, not specific to
+                // this implementation.
+                var remainingFrames = _pendingInterleaved.Count / _channels;
+                var paddingFrames = FrameSamples - remainingFrames;
+                for (var i = 0; i < paddingFrames * _channels; i++)
+                {
+                    _pendingInterleaved.Add(0);
+                }
+
+                EncodeFrame();
+            }
         }
 
         public void Dispose()
@@ -146,19 +120,14 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             _disposed = true;
-            Mp3Native.BeCloseStream(_streamHandle);
             _destStream.Dispose();
         }
 
-        private void EncodeChunk(uint sampleCount)
+        private void EncodeFrame()
         {
-            var encodeResult = Mp3Native.BeEncodeChunk(_streamHandle, sampleCount, _pendingSamples, _mp3Buffer, out var bytesWritten);
-            if (encodeResult != 0)
-            {
-                throw new InvalidOperationException($"LAME encoder failed to process samples for '{_destMp3FilePath}': error {encodeResult}");
-            }
-
-            _destStream.Write(_mp3Buffer, 0, (int)bytesWritten);
+            var frameBytes = _frameEncoder.EncodeFrame(CollectionsMarshal.AsSpan(_pendingInterleaved)[..(FrameSamples * _channels)]);
+            _destStream.Write(frameBytes);
+            _pendingInterleaved.RemoveRange(0, FrameSamples * _channels);
         }
     }
 }
