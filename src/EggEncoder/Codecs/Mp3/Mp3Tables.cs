@@ -185,24 +185,5 @@ namespace EggEncoder.Codecs.Mp3
             return ca;
         }
 
-        // Tables 54/56/58's scalefactor band widths for long blocks at this project's three
-        // supported sample rates. Each rate's own widths sum to less than 576 (550/418/384) --
-        // the spec's own tables simply stop defining bands at that point for every rate, so
-        // this encoder's own quantizer treats every remaining index as part of the implicit
-        // "rzero" region (never transmitted at all), matching that scope exactly rather than
-        // inventing extra bands the spec itself doesn't define.
-        public static readonly int[] ScalefactorBandWidths32000 = [4, 4, 4, 4, 4, 4, 6, 6, 8, 10, 12, 16, 20, 24, 30, 38, 46, 56, 68, 84, 102];
-
-        public static readonly int[] ScalefactorBandWidths44100 = [4, 4, 4, 4, 4, 4, 6, 6, 8, 8, 10, 12, 16, 20, 24, 28, 34, 42, 50, 54, 76];
-
-        public static readonly int[] ScalefactorBandWidths48000 = [4, 4, 4, 4, 4, 4, 6, 6, 6, 8, 10, 12, 16, 18, 22, 28, 34, 40, 46, 54, 54];
-
-        public static int[] ScalefactorBandWidths(int sampleRate) => sampleRate switch
-        {
-            32000 => ScalefactorBandWidths32000,
-            44100 => ScalefactorBandWidths44100,
-            48000 => ScalefactorBandWidths48000,
-            _ => throw new NotSupportedException($"MP3 encoding only supports 32000/44100/48000 Hz, not {sampleRate} Hz"),
-        };
     }
 }
