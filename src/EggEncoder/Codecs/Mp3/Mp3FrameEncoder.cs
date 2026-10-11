@@ -18,6 +18,21 @@ namespace EggEncoder.Codecs.Mp3
         private const int CoefficientsPerSubband = 18;
         private const int MdctWindowSize = CoefficientsPerSubband * 2;
 
+        // The MP3 bitstream itself carries no explicit PCM-scale convention, but every real
+        // decoder's own int16 output stage (confirmed directly in NLayer's ReadSamplesImpl:
+        // `(int)Math.Round(32767.5f * sample - 0.5f)`) assumes the hybrid filterbank's own
+        // reconstructed float samples sit in the standard normalized -1.0..+1.0 range (full scale
+        // == 1.0), NOT this project's own int16-native PCM convention every OTHER codec here uses
+        // directly. Confirmed empirically: feeding raw int16-range PCM (e.g. amplitude 8000)
+        // straight into the polyphase filter without this scale-down produces a transmitted xr
+        // ~32768x too loud, which a real decoder's own *32767.5 int16 rescale then overflows/wraps
+        // catastrophically (not a graceful clip -- NLayer's int16 packing is a raw, unclamped
+        // `value % 256` / `value / 256`), producing output that looks like exponentially growing
+        // noise as signal magnitude increases, not a bounded scale error. The polyphase/MDCT/alias
+        // reduction chain is entirely linear, so scaling the final xr once here is mathematically
+        // identical to scaling the source PCM before analysis.
+        private const double PcmNormalizationScale = 1.0 / 32768.0;
+
         private readonly int _channels;
         private readonly int _sampleRate;
         private readonly int _bitRateKbps;
@@ -194,6 +209,11 @@ namespace EggEncoder.Codecs.Mp3
                 Array.Copy(coefficients, 0, xr, sb * CoefficientsPerSubband, CoefficientsPerSubband);
 
                 Array.Copy(perSubband[sb], history, CoefficientsPerSubband);
+            }
+
+            for (var i = 0; i < GranuleSamples; i++)
+            {
+                xr[i] *= PcmNormalizationScale;
             }
 
             Mp3AliasReduction.Encode(xr);
