@@ -31,6 +31,24 @@ public sealed class EchoTransform : IPcmTransform
     /// <summary>Hard ceiling on the tail <see cref="Flush"/> will ever produce, regardless of how slowly <c>feedback</c> decays.</summary>
     public const double MaxTailSeconds = 30.0;
 
+    // No real audio use case needs anywhere near this many channels; this exists purely so an
+    // accidental or pathological huge value fails validation immediately with a clear exception
+    // instead of attempting to allocate _delayLine at that size -- the same reasoning behind
+    // BiquadTransform.MaxChannels/FirFilterTransform.MaxChannels/ButterworthTransform.MaxOrder.
+    public const int MaxChannels = 1024;
+
+    // The delay line's own element count (_delayFrames * channels) -- not MaxDelaySeconds or
+    // MaxChannels individually -- is what actually has to fit safely in memory and in an int32
+    // array length. sampleRate has no upper bound of its own (consistent with every other
+    // sampleRate-taking transform in this codebase), so an extreme sampleRate combined with even
+    // a moderate delaySeconds/channels can still overflow int32 well before either individual
+    // bound would catch it -- e.g. delaySeconds=60, sampleRate=100_000_000 alone already computes
+    // a 6-billion-frame delay, overflowing int32 in the (int) cast before channels is even
+    // multiplied in. Checked directly against the actual array size (in double arithmetic, which
+    // has far more headroom than int32 before precision loss matters at these magnitudes) rather
+    // than trying to bound every contributing factor separately.
+    private const double MaxDelayLineLength = 100_000_000; // ~400MB of int[], generously above any real use
+
     private const double DecayThreshold = 0.001; // -60dB: the point at which the loudest remaining repeat is considered inaudible
 
     private readonly int _sampleRate;
@@ -44,7 +62,7 @@ public sealed class EchoTransform : IPcmTransform
     private int _lastBitsPerSample;
 
     /// <param name="sampleRate">Sample rate in Hz this transform will process (must match actual input).</param>
-    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input).</param>
+    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input). Must be positive and no more than <see cref="MaxChannels"/>.</param>
     /// <param name="delaySeconds">Time between the dry signal and its first echo, in seconds. Must be &gt; 0 and &lt;= <see cref="MaxDelaySeconds"/> (rounds to at least 1 frame).</param>
     /// <param name="feedback">Fraction of each repeat that feeds back into the delay line to produce the next, quieter one. Must be in [0, 1) -- 1.0 or more would never decay, so <see cref="Flush"/> could never finish draining it.</param>
     /// <param name="wetGain">Linear gain applied to each echo before it's added to the dry signal. Must be finite and &gt;= 0.</param>
@@ -52,8 +70,8 @@ public sealed class EchoTransform : IPcmTransform
     {
         if (sampleRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive");
-        if (channels <= 0)
-            throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channel count must be positive");
+        if (channels <= 0 || channels > MaxChannels)
+            throw new ArgumentOutOfRangeException(nameof(channels), channels, $"Channel count must be positive and no more than {MaxChannels}");
         if (double.IsNaN(delaySeconds) || delaySeconds <= 0 || delaySeconds > MaxDelaySeconds)
             throw new ArgumentOutOfRangeException(nameof(delaySeconds), delaySeconds, $"Delay time must be > 0 and <= {MaxDelaySeconds} seconds");
         if (!double.IsFinite(feedback) || feedback < 0 || feedback >= 1.0)
@@ -61,9 +79,18 @@ public sealed class EchoTransform : IPcmTransform
         if (!double.IsFinite(wetGain) || wetGain < 0)
             throw new ArgumentOutOfRangeException(nameof(wetGain), wetGain, "Wet gain must be a finite number >= 0");
 
+        var delayFramesExact = delaySeconds * sampleRate;
+        var delayLineLengthExact = delayFramesExact * channels;
+        if (delayLineLengthExact > MaxDelayLineLength)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(delaySeconds), delaySeconds,
+                $"delaySeconds ({delaySeconds}) x sampleRate ({sampleRate}) x channels ({channels}) would require a delay line of {delayLineLengthExact:F0} samples, which exceeds the {MaxDelayLineLength:F0}-sample limit");
+        }
+
         _sampleRate = sampleRate;
         _channels = channels;
-        _delayFrames = Math.Max(1, (int)Math.Round(delaySeconds * sampleRate));
+        _delayFrames = Math.Max(1, (int)Math.Round(delayFramesExact));
         _feedback = feedback;
         _wetGain = wetGain;
         _delayLine = new int[_delayFrames * channels];

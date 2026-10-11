@@ -15,8 +15,13 @@ public sealed class PanTransform : IPcmTransform
     /// <param name="law">How gain is distributed across the pan range (see <see cref="PanLaw"/>).</param>
     public PanTransform(double pan, PanLaw law = PanLaw.Linear)
     {
-        if (pan < -1.0 || pan > 1.0)
-            throw new ArgumentOutOfRangeException(nameof(pan), pan, "Pan must be between -1.0 and 1.0");
+        // `pan < -1.0 || pan > 1.0` alone lets NaN through unnoticed (every comparison against
+        // NaN is false under IEEE 754) -- it would then propagate through _leftGain/_rightGain
+        // (e.g. `1.0 - NaN == NaN`) into every sample this transform ever touches, reaching the
+        // `(int)` cast in Apply with an unspecified result instead of a thrown exception.
+        // +-Infinity is already rejected by the range check itself (both comparisons are true).
+        if (!double.IsFinite(pan) || pan < -1.0 || pan > 1.0)
+            throw new ArgumentOutOfRangeException(nameof(pan), pan, "Pan must be a finite number between -1.0 and 1.0");
 
         Pan = pan;
         Law = law;

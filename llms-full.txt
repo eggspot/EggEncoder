@@ -226,6 +226,7 @@ public sealed class EchoTransform : IPcmTransform
 {
     public const double MaxDelaySeconds = 60.0;
     public const double MaxTailSeconds = 30.0;
+    public const int MaxChannels = 1024;
 
     // A feedback delay line, one per channel (channels/sampleRate fixed at construction, like
     // BiquadTransform/FirFilterTransform). feedback controls how much of each repeat feeds the
@@ -266,6 +267,8 @@ public enum FadeCurve { Linear, EqualPower }
 
 public sealed class BiquadTransform : IPcmTransform
 {
+    public const int MaxChannels = 1024;
+
     public BiquadTransform(BiquadFilterType filterType, int channels, int sampleRate, double frequencyHz, double q = 0.7071067811865476, double gainDb = 0.0);
     public void Reset();
 }
@@ -279,6 +282,8 @@ public sealed class ButterworthTransform : IPcmTransform
 
 public sealed class FirFilterTransform : IPcmTransform
 {
+    public const int MaxChannels = 1024;
+
     public FirFilterTransform(int channels, double[] taps);
     public void Reset();
 }

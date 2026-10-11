@@ -20,6 +20,17 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Constructor_ChannelsAboveMax_Should_Throw()
+        {
+            // An accidental or pathological huge channel count would otherwise attempt to allocate
+            // the per-channel _history jagged array at that size, risking an OutOfMemoryException
+            // instead of a clean, immediate validation failure.
+            var act = () => new FirFilterTransform(FirFilterTransform.MaxChannels + 1, [1.0]);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("channels");
+        }
+
+        [Fact]
         public void Constructor_NullTaps_Should_Throw()
         {
             var act = () => new FirFilterTransform(channels: 1, taps: null!);

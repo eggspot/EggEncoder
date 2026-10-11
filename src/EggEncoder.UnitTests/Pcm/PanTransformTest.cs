@@ -168,8 +168,14 @@ namespace EggEncoder.UnitTests.Pcm
         [Theory]
         [InlineData(-1.1)]
         [InlineData(1.1)]
-        public void Constructor_PanOutOfRange_Should_Throw(double pan)
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        [InlineData(double.NegativeInfinity)]
+        public void Constructor_PanOutOfRangeOrNonFinite_Should_Throw(double pan)
         {
+            // NaN in particular: `pan < -1.0 || pan > 1.0` alone lets it through unnoticed (every
+            // comparison against NaN is false), silently producing a NaN gain that corrupts every
+            // sample Apply touches instead of throwing here.
             var act = () => new PanTransform(pan);
 
             act.Should().Throw<ArgumentOutOfRangeException>();

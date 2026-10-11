@@ -28,13 +28,20 @@ namespace EggEncoder.Pcm;
 /// </summary>
 public sealed class FirFilterTransform : IPcmTransform
 {
+    // No real audio use case needs anywhere near this many channels; this exists purely so an
+    // accidental or pathological huge value fails validation immediately with a clear exception
+    // instead of attempting to allocate the per-channel _history jagged array at that size,
+    // which risks an OutOfMemoryException instead of a clean validation failure -- the same
+    // reasoning behind BiquadTransform.MaxChannels/ButterworthTransform.MaxOrder.
+    public const int MaxChannels = 1024;
+
     private readonly int _channels;
     private readonly double[] _taps;
     private readonly int _historyLength;
     private readonly double[][] _history;
     private double[] _extendedScratch = [];
 
-    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input).</param>
+    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input). Must be positive and no more than <see cref="MaxChannels"/>.</param>
     /// <param name="taps">
     /// Filter coefficients <c>h[0..M-1]</c>, applied identically to every channel: <c>taps[0]</c> weights
     /// the current sample, <c>taps[1]</c> the previous sample, and so on. Must be non-null, non-empty, and
@@ -42,8 +49,8 @@ public sealed class FirFilterTransform : IPcmTransform
     /// </param>
     public FirFilterTransform(int channels, double[] taps)
     {
-        if (channels <= 0)
-            throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channels must be positive");
+        if (channels <= 0 || channels > MaxChannels)
+            throw new ArgumentOutOfRangeException(nameof(channels), channels, $"Channels must be positive and no more than {MaxChannels}");
 
         ArgumentNullException.ThrowIfNull(taps);
         if (taps.Length == 0)
