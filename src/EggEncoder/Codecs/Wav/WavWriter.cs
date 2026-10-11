@@ -115,10 +115,15 @@ namespace EggEncoder.Codecs.Wav
                 return [];
             }
 
-            using var stream = new MemoryStream();
-            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
-
+            // Enumerated exactly once into a materialized list: `tags` is a caller-supplied
+            // IReadOnlyDictionary<string, string>, and an arbitrary implementation of that
+            // interface isn't guaranteed to enumerate in the same order twice in a row the way the
+            // concrete Dictionary<TKey, TValue> most callers actually pass does -- computing the
+            // size in one pass over `tags` directly and writing in a second would risk the two
+            // passes disagreeing for such an implementation.
+            var entries = new List<(byte[] Id, byte[] Value)>(tags.Count);
             var infoPayloadSize = 4; // the 'INFO' sub-type FourCC itself
+
             foreach (var (id, value) in tags)
             {
                 // Every size/offset computed below assumes a 4-byte sub-chunk id (RIFF's own FourCC
@@ -129,21 +134,26 @@ namespace EggEncoder.Codecs.Wav
                     throw new ArgumentException($"Tag id '{id}' must be exactly 4 ASCII characters (RIFF's own FourCC convention, e.g. \"INAM\"/\"IART\")", nameof(tags));
                 }
 
+                var idBytes = Encoding.ASCII.GetBytes(id);
                 var valueBytes = Encoding.UTF8.GetBytes(value);
+                entries.Add((idBytes, valueBytes));
+
                 var subSize = valueBytes.Length + 1; // +1 for the null terminator
                 infoPayloadSize += 8 + subSize + (subSize % 2); // id(4) + size(4) + padded data
             }
+
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
 
             writer.Write("LIST"u8);
             writer.Write((uint)infoPayloadSize);
             writer.Write("INFO"u8);
 
-            foreach (var (id, value) in tags)
+            foreach (var (idBytes, valueBytes) in entries)
             {
-                var valueBytes = Encoding.UTF8.GetBytes(value);
                 var subSize = valueBytes.Length + 1;
 
-                writer.Write(Encoding.ASCII.GetBytes(id));
+                writer.Write(idBytes);
                 writer.Write((uint)subSize);
                 writer.Write(valueBytes);
                 writer.Write((byte)0); // null terminator
