@@ -401,7 +401,7 @@ commitments.
 
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 
-- [ ] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
+- [x] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
   `Mp3Native.cs`.
   - **Scope**: ISO/IEC 11172-3 Layer III encoding, constant bit rate only, from the spec — no LAME
     source consulted. The one managed "port" found during research, `GroovyCodecs`, is a literal
@@ -482,7 +482,26 @@ commitments.
       joint/intensity stereo (already excluded above, repeated here since it affects quantization
       scope too: independent stereo quantizes/Huffman-codes each channel's granule completely
       separately, with no cross-channel step to design at all for this item).
-  - Status: not started.
+  - Status: **done** — see `feat/managed-mp3-encoder` (merged). The full pipeline
+    (`Mp3PolyphaseFilter`, `Mp3AliasReduction`, `Mp3Quantizer`, `Mp3HuffmanTables`,
+    `Mp3FrameEncoder`) is implemented and verified correct at every stage, isolated and
+    cross-checked directly against NLayer's own compiled decode methods via reflection (polyphase
+    analysis/synthesis alone; +MDCT/antialias/hybrid/frequency-inversion; quantizer/Huffman
+    round-trip) and against ffmpeg's own independent decoder. The root cause of the long-standing
+    real-decoder divergence (output degrading into exponentially-growing noise, not a bounded
+    scale error) was a PCM-scale convention mismatch, not a DSP/bitstream/Huffman bug: every real
+    MP3 decoder's own int16 output stage assumes the hybrid filterbank's reconstructed samples sit
+    in the standard normalized -1.0..+1.0 float range, but this project's own int16-native PCM
+    convention (used directly, unscaled, by every other codec here) fed the polyphase/MDCT/
+    quantizer chain a signal ~32768x too loud, which a real decoder's own unclamped int16 packing
+    then wrapped into noise as magnitude grew. Fixed with a single linear PCM-normalization scale
+    in `Mp3FrameEncoder.ComputeGranuleCoefficients` (mathematically equivalent to scaling the
+    source PCM before analysis, since the whole polyphase/MDCT/alias-reduction chain is linear).
+    All 7 SNR acceptance tests now pass (mono/stereo x 32/44.1/48kHz x multiple bitrates, 10dB
+    floor) against NLayer as the decode oracle; independently cross-verified against ffmpeg's own
+    decoder at 65-69dB SNR on a real encoded stereo file, with peak levels matching the
+    theoretical expected dB exactly. Scratch differential/self-decode test files (both predating
+    this fix, per their own "deleted once the encoder is fixed" doc comments) have been removed.
 
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
   - **Scope**: variable bit rate modes and whatever psychoacoustic/bit-allocation improvements prove
@@ -496,12 +515,13 @@ commitments.
 ### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
 
 - [ ] **8. Delete native infrastructure, expand CI**
-  - **Scope**: `WavPackNative.cs` and `Native/win-x64/wavpackdll.dll` are already gone (removed
-    early, alongside item 5, rather than held for this item — WavPack was fully managed in both
-    directions at that point, so there was no reason to keep shipping a now-unreferenced binary).
-    Remaining: delete `NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`,
-    `Native/win-x64/*.dll` (the rest); remove the remaining `<None>` packaging entries from
-    `EggEncoder.csproj`; remove the corresponding `THIRD-PARTY-NOTICES.md` sections; change
+  - **Scope**: `WavPackNative.cs`/`Native/win-x64/wavpackdll.dll` (removed early, alongside item 5)
+    and `Mp3Native.cs`/`Native/win-x64/libmp3lame.dll` (removed alongside item 6) are already gone
+    — both formats were fully managed in both directions at that point, so there was no reason to
+    keep shipping a now-unreferenced binary. Remaining: delete `NativeLibraryLoader.cs`,
+    `FlacNative.cs`, `Native/win-x64/libFLAC.dll` (the rest); remove the remaining `<None>`
+    packaging entries from `EggEncoder.csproj`; remove the corresponding `THIRD-PARTY-NOTICES.md`
+    sections; change
     `ci.yml`/`publish.yml` from
     `windows-latest`-only to a real `[windows-latest, ubuntu-latest, macos-latest]` matrix; update
     `EggEncoder.AotSmokeTest` to multi-RID and refresh its own doc comment (no more native-interop

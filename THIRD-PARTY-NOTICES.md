@@ -4,19 +4,6 @@ EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source c
 The package also redistributes pre-built native codec libraries as separate, unmodified
 binary files under `Native/win-x64/`. Their licenses apply to those files independently.
 
-## libmp3lame.dll — LAME MP3 encoder
-
-- **Project**: [LAME](https://lame.sourceforge.io/)
-- **License**: GNU Lesser General Public License v2.1 (LGPL-2.1) — full text at
-  https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
-- **How it's used**: EggEncoder loads `libmp3lame.dll` dynamically at runtime via
-  `NativeLibrary.Load` / P/Invoke (see `Native/Mp3Native.cs`, `Native/NativeLibraryLoader.cs`).
-  It is shipped as a separate, unmodified binary file alongside the managed assembly, not
-  statically linked or embedded — consumers of this package may replace the DLL with their own
-  LGPL-compliant build without recompiling EggEncoder, satisfying LGPL-2.1's relinking
-  requirement.
-- **Source availability**: LAME source code is available at https://lame.sourceforge.io/download.php
-
 ## libFLAC.dll — FLAC reference codec
 
 - **Project**: [FLAC](https://xiph.org/flac/) (Xiph.Org Foundation)
@@ -62,7 +49,25 @@ by this project itself rather than by consulting any encoder implementation.
 - **Project**: [NLayer](https://github.com/naudio/NLayer)
 - **License**: MIT / LGPL dual-licensed (used here under MIT)
 - **How it's used**: Referenced as a standard NuGet `PackageReference` for MP3 decoding
-  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored.
+  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored. Its own decoder source
+  (`NLayer/Decoder/*.cs`) was also read at arm's length, read-only, as a test oracle while
+  debugging the managed MP3 **encoder** below (`git log`-visible under `feat/managed-mp3-encoder`)
+  — to cross-check this project's own Huffman table transcription and understand decode-side
+  framing expectations (bit reservoir, `part2_3_length`/`part3end`, region boundaries). No NLayer
+  source was copied; only independently-rederived facts (confirmed correct by mechanical,
+  bit-for-bit comparison, not by inspection) fed back into the encoder's own, separately-written
+  code.
+
+## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
+
+The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke
+path) was implemented from the published ISO/IEC 11172-3 standard text and this project's own
+derivations only. No source from any MP3 **encoder** (LAME, GroovyCodecs, shine, FFmpeg's own
+encoder, or any other) was read or copied. Real `lame`/`ffmpeg` CLI builds were used, black-box
+only (as independent binaries, never their source), to cross-validate bitstream structure during
+development — the same arm's-length methodology already established for WavPack above. NLayer's
+own **decoder** source was read as a test oracle per the note above; this is explicitly a
+decode-side-only exception load-bearing for verification, not an encoder-algorithm source.
 
 ## Concentus — managed Opus encoder/decoder
 
