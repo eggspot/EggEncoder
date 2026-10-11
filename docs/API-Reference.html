@@ -381,7 +381,7 @@ public sealed class FlacEncoderSession : IDisposable // for incremental/streamin
     public static Mp3StreamInfo Decode(string mp3FilePath, AudioBlockDecodedCallback onBlockDecoded);
 }
 
-public static class Mp3Encoder // backed by native libmp3lame
+public static class Mp3Encoder // pure managed, clean-room from ISO/IEC 11172-3, no native call
 {
     public const int DefaultBitRateKbps = 320;
     public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
@@ -545,7 +545,7 @@ public sealed class WavPackEncoderSession : IDisposable
     public static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
-      <p>Lossless, in its own <code>.wv</code> container. Mono and stereo, 16-bit or 24-bit integer PCM only (WavPack's own lossy/hybrid and floating-point modes are rejected) — throws <code>NotSupportedException</code> otherwise. Unlike every other codec here, WavPack delegates to a native binary (<code>wavpackdll.dll</code>, the official WavPack project's own prebuilt library, loaded the same way as <code>libmp3lame</code>/<code>libFLAC</code>) rather than a pure-managed implementation. <code>OpenSession</code> requires an exact, positive <code>totalSamples</code> up front (like <code>WavWriter</code>/<code>AiffWriter</code>) — WavPack genuinely cannot represent an empty/zero-sample stream at all, so a zero or negative total throws <code>NotSupportedException</code> rather than producing a file that would only turn out to be unreadable later.</p>
+      <p>Lossless, in its own <code>.wv</code> container. Mono and stereo, 16-bit or 24-bit integer PCM only (WavPack's own lossy/hybrid and floating-point modes are rejected) — throws <code>NotSupportedException</code> otherwise. Both decode and encode are pure managed implementations, clean-room from the WavPack 4/5 format spec (see THIRD-PARTY-NOTICES.md) — no native binary is involved for this codec at all. <code>OpenSession</code> requires an exact, positive <code>totalSamples</code> up front (like <code>WavWriter</code>/<code>AiffWriter</code>) — WavPack genuinely cannot represent an empty/zero-sample stream at all, so a zero or negative total throws <code>NotSupportedException</code> rather than producing a file that would only turn out to be unreadable later.</p>
 
       <h3>Opus — <code>EggEncoder.Codecs.Opus</code></h3>
       <pre><code class="language-csharp">public static class OpusDecoder

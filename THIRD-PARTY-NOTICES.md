@@ -1,18 +1,12 @@
 # Third-Party Notices
 
 EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
-The package also redistributes pre-built native codec libraries as separate, unmodified
-binary files under `Native/win-x64/`. Their licenses apply to those files independently.
-
-## libFLAC.dll — FLAC reference codec
-
-- **Project**: [FLAC](https://xiph.org/flac/) (Xiph.Org Foundation)
-- **License**: BSD-style Xiph.Org license (permissive) — full text at
-  https://xiph.org/flac/license.html
-- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
-  `Native/FlacNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
-  binary file under `Native/win-x64/`.
-- **Source availability**: FLAC source code is available at https://github.com/xiph/flac
+As of the managed codec rewrite (`docs/managed-codec-rewrite-plan.md`), EggEncoder no longer
+bundles or loads any pre-built native binary of any kind — every codec is pure managed C#,
+either implemented directly in this project or via a permissively-licensed managed NuGet
+dependency (acknowledged individually below). FLAC, MP3, and WavPack were all previously
+backed by bundled native libraries (`libFLAC.dll`, `libmp3lame.dll`, `wavpackdll.dll`
+respectively); none of them ship any more.
 
 ## WavPack algorithm (decode and encode) — clean-room acknowledgment (no code copied)
 

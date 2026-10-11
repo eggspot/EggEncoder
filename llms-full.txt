@@ -1,10 +1,10 @@
 # EggEncoder — Full Reference
 
-> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, entirely pure C# (no native MP3 or WavPack bindings), built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, 100% pure C# (no native binaries at all, genuinely cross-platform), built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## Overview
 
-EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations for every supported format (AAC, AIFF/AIFC, ALAC, AU, FLAC, MP3 — decode delegates to the NLayer NuGet package, encode is clean-room from the ISO/IEC 11172-3 spec — TTA, Opus, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA, WavPack decode *and* encode). No external process, no ffmpeg install, no subprocess overhead, and no code path calls into a native binary any more — a legacy native `libFLAC.dll` still ships for packaging-compatibility reasons (see `FlacNative` below), but this library ships and is tested as a Windows x64 package regardless.
+EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations for every supported format (AAC, AIFF/AIFC, ALAC, AU, FLAC, MP3 — decode delegates to the NLayer NuGet package, encode is clean-room from the ISO/IEC 11172-3 spec — TTA, Opus, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA, WavPack decode *and* encode). No external process, no ffmpeg install, no subprocess overhead, and no native binary of any kind — this library is genuinely cross-platform (Windows, Linux, macOS) and is built and tested on all three in CI.
 
 ## Installation
 
@@ -12,7 +12,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction for probing, convertin
 dotnet add package EggEncoder
 ```
 
-Targets `net8.0`, `net9.0`, `net10.0`. A native `libFLAC.dll` binary for `win-x64` ships inside the package via the NuGet `contentFiles` convention and is copied to your output directory at `Native/win-x64/*.dll` automatically — no separate install step.
+Targets `net8.0`, `net9.0`, `net10.0`. No native binaries, no extra install steps — just the package. EggEncoder runs anywhere .NET 8/9/10 runs.
 
 ## Core Interface
 
@@ -376,7 +376,7 @@ public sealed class FlacEncoderSession : IDisposable
 }
 ```
 
-FLAC is now fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). `EggEncoder.Native.FlacNative`'s P/Invoke declarations are consequently unused dead code, not yet removed -- MP3 and WavPack have both since completed their own equivalent migrations to pure managed encode/decode, so this is now a FLAC-only cleanup item (see docs/managed-codec-rewrite-plan.md item 8).
+FLAC is fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). The former `EggEncoder.Native.FlacNative` P/Invoke declarations, `NativeLibraryLoader`, and the bundled `libFLAC.dll` binary have all been fully removed (docs/managed-codec-rewrite-plan.md item 8) now that every codec -- FLAC included -- is pure managed; this project no longer bundles or loads a native binary of any kind, and CI now builds and tests on Windows, Linux, and macOS.
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
@@ -740,7 +740,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 
 ## Constraints and Gotchas
 
-- **Every codec is now pure managed; no code path calls into a native binary.** MP3 (decode via NLayer, encode clean-room from ISO/IEC 11172-3) and WavPack (decode and encode) have both completed their migration off native P/Invoke. A legacy native `libFLAC.dll` still ships for packaging-compatibility reasons (`FlacNative`'s own P/Invoke declarations are unused dead code, not yet removed -- see `docs/managed-codec-rewrite-plan.md` item 8), but this library ships and is CI-tested as a Windows x64 package regardless.
+- **Every codec is pure managed; this project bundles or loads no native binary of any kind.** MP3 (decode via NLayer, encode clean-room from ISO/IEC 11172-3), WavPack (decode and encode), and FLAC (decode and encode) have all completed their migration off native P/Invoke (`docs/managed-codec-rewrite-plan.md` item 8) -- `NativeLibraryLoader`/`FlacNative.cs`/`libFLAC.dll` are gone. EggEncoder is genuinely cross-platform now, and CI builds and tests on Windows, Linux, and macOS.
 - **WAV's three ADPCM variants and G.711** are genuinely different algorithms despite the shared 4-bit (ADPCM) or 8-bit (G.711) coded width -- see "WAV's own format-tag variants" above.
 - **`ProbeResult.Tags`/`WavReader.Tags` never throws on a malformed or truncated `'LIST'`/`'INFO'` chunk.** Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (`Mp4EsdsParser`, `AsfContainerReader`), this is optional, decorative metadata -- parsing just stops at the first inconsistency and returns whatever sub-chunks were read cleanly before it (or `null` if none were).
 - **`AudioCutter.Cut`/`Convert` can transcode while they trim/convert.** Source and destination extensions no longer need to match.
@@ -757,7 +757,7 @@ double rms = calculator.GetNormalizedRmsLevel();
 
 ## License
 
-MIT (see LICENSE). EggEncoder bundles a pre-built `libFLAC.dll` (BSD-style Xiph.Org license) as a separate, dynamically-loaded native binary, not statically linked -- see THIRD-PARTY-NOTICES.md for details and source links. Opus (via Concentus), Vorbis decode (via NVorbis), and Vorbis encode (via OggVorbisEncoder) are pure managed, permissively-licensed NuGet dependencies, not bundled native binaries.
+MIT (see LICENSE). EggEncoder bundles no native binaries of any kind -- see THIRD-PARTY-NOTICES.md for the licenses of its pure managed codec dependencies. MP3 decode (via NLayer), Opus (via Concentus), Vorbis decode (via NVorbis), and Vorbis encode (via OggVorbisEncoder) are all permissively-licensed, pure managed NuGet dependencies.
 
 ## Links
 
