@@ -23,7 +23,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 ### `IMediaEncoder` implementation
 
-- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no external binary dependency beyond the bundled `libFLAC` DLL.
+- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no native binary dependency at all (despite the class name, which predates the managed codec rewrite — see `docs/managed-codec-rewrite-plan.md`).
 
 ### Codecs (`src/EggEncoder/Codecs/`)
 
@@ -48,7 +48,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 ### Supporting infrastructure
 
 - **`Transform/`** — `BitReader`, `BitWriter`, `HuffmanTable`, `Mdct` — low-level bitstream and signal-processing primitives shared by the AAC/WMA codecs
-- **`Native/`** — `FlacNative.cs` (`[LibraryImport]` P/Invoke declarations), `NativeLibraryLoader.cs` (a `[ModuleInitializer]` that registers a custom `DllImportResolver` so `libFLAC` loads from `Native/win-x64/` relative to `AppContext.BaseDirectory` regardless of the consuming app's working directory). `WavPackNative.cs`/`wavpackdll.dll` were removed once WavPack encode (the last native-backed direction for this codec) became pure managed — see the `WavPack/` row above. `Mp3Native.cs`/`libmp3lame.dll` were removed once MP3 encode moved to a pure managed implementation — see the `Mp3/` row above
+- **`Native/` — gone.** `FlacNative.cs`/`NativeLibraryLoader.cs`/`libFLAC.dll` (the last native infrastructure in this project) were removed in `docs/managed-codec-rewrite-plan.md` item 8, the same way `WavPackNative.cs`/`wavpackdll.dll` and `Mp3Native.cs`/`libmp3lame.dll` were removed alongside their own respective managed rewrites (see the `WavPack/`/`Mp3/` rows above). There is no native binary or P/Invoke binding left anywhere in this codebase
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`; also tracks an overall peak absolute sample and running sum-of-squares across every block (independent of window finalization, so no flush step needed) to back `ProbeResult.PeakAmplitude`/`RmsLevel`
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
 - **`ServiceCollectionExtensions.cs`** — `AddEggEncoder(enableLogging: true)` DI registration; registers `NativeEncoder` itself as scoped, then maps both `IMediaEncoder` and `IPcmTransformEncoder` to resolve that same scoped instance. `enableLogging: false` fully silences `NativeEncoder`'s start/completion/failure logs
@@ -83,11 +83,17 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 ### Native binary packaging
 
-`libFLAC.dll` lives at `src/EggEncoder/Native/win-x64/` and is packed via the NuGet `contentFiles` convention (see `EggEncoder.csproj`) so it lands at `Native/win-x64/*.dll` relative to the consuming application's output directory — exactly where `NativeLibraryLoader` expects it. If you change this packaging, keep it in sync with `NativeLibraryLoader.Resolve`. **This is being actively removed** — the owner's decision is a 100% pure managed C# rewrite (FLAC decode/encode, MP3 encode, WavPack decode/encode, clean-room from the format specs, no GPL/LGPL) so EggEncoder stops being Windows-x64-only; `wavpackdll.dll` has already been fully removed now that WavPack decode and encode are both managed; `libmp3lame.dll` has likewise been fully removed now that MP3 encode is also pure managed (see the `Mp3/` row above); see `docs/managed-codec-rewrite-plan.md` for the audit, ordered work items, and current status before touching anything in `Native/`.
+**There is none.** `docs/managed-codec-rewrite-plan.md` item 8 removed the last native binary
+(`libFLAC.dll`) and its supporting infrastructure (`NativeLibraryLoader.cs`, `FlacNative.cs`,
+the corresponding `EggEncoder.csproj` `<None>` packaging entries and `THIRD-PARTY-NOTICES.md`
+section) — `wavpackdll.dll`/`WavPackNative.cs` and `libmp3lame.dll`/`Mp3Native.cs` were removed
+earlier, alongside their own respective managed rewrites (see the `WavPack/`/`Mp3/` rows above).
+EggEncoder is now 100% pure managed C# with zero native dependency of any kind, and CI builds
+and tests on `windows-latest`/`ubuntu-latest`/`macos-latest` to prove it.
 
 ### Native AOT
 
-`EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe interop: `[LibraryImport]` (not `[DllImport]`) for P/Invoke, `[UnmanagedCallersOnly]` static methods + `GCHandle` (not marshaled delegate closures) for native callbacks (`FlacDecoder`'s own decode callback was this pattern's example until it was replaced by the pure managed decoder in `FlacFrameDecoder`; `WavPackEncoderSession`'s own encode callback was this pattern's other example until WavPack encode was replaced by the pure managed `WavPackBlockWriter`/`WavPackEntropyEncoder`), and `AppContext.BaseDirectory` (not `Assembly.Location`) for native binary resolution. `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project that round-trips WAV → MP3/FLAC/WavPack → probe through a real native-compiled binary in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling or `Reflection.Emit`.
+`EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe constructs now that no P/Invoke remains at all — no `[LibraryImport]`/`[DllImport]`, no `[UnmanagedCallersOnly]` native callbacks (`FlacDecoder`'s own decode callback was this pattern's last example, until it was replaced by the pure managed decoder in `FlacFrameDecoder`; `WavPackEncoderSession`'s own encode callback was replaced by the pure managed `WavPackBlockWriter`/`WavPackEntropyEncoder` before that). `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project, multi-RID (`win-x64`/`linux-x64`/`osx-arm64`), that round-trips WAV → MP3/FLAC/WavPack → probe through a real native-compiled binary on every OS in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling, `Reflection.Emit`, or a native binary dependency.
 
 ## Testing Conventions
 
@@ -97,7 +103,7 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 - Tests live in `src/EggEncoder.UnitTests/`, mirroring the `src/EggEncoder/` folder structure
 - Fixture audio files (`.wav`/`.flac`/`.mp3`/`.aac`/`.wma`/`.wv`/`.mov`/`.mp4`, plus raw `.pcm` ground-truth references for cross-check tests) live alongside their tests and are copied to the test output directory — see `<None ... CopyToOutputDirectory>` entries in `EggEncoder.UnitTests.csproj`
 - Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference fixtures checked into the repo — no external ffmpeg install is needed to run the tests, only the fixture files themselves
-- `src/EggEncoder.AotSmokeTest/` covers Native AOT: it's a separate `PublishAot=true` console project (not an xUnit test, since xUnit runs under the JIT) that CI publishes with `dotnet publish -r win-x64` and then executes, to catch AOT/trimming regressions that the build-time analyzer alone can't (e.g. inside the `NLayer` dependency, which ships no AOT metadata of its own)
+- `src/EggEncoder.AotSmokeTest/` covers Native AOT: it's a separate `PublishAot=true` console project (not an xUnit test, since xUnit runs under the JIT) that CI publishes with `dotnet publish -r <rid>` (the RID matching whichever OS the current CI matrix leg is running on — `win-x64`/`linux-x64`/`osx-arm64`) and then executes, to catch AOT/trimming regressions that the build-time analyzer alone can't (e.g. inside the `NLayer` dependency, which ships no AOT metadata of its own)
 
 ## Release Process
 

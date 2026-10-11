@@ -10,9 +10,9 @@ namespace EggEncoder.Codecs.Opus
     // default). EggEncoder bundles no native Opus binary and depends on Concentus specifically
     // *because* it's pure managed code -- silently picking up some unrelated native opus library
     // that happens to be installed on a given machine would make behavior depend on host state
-    // this project doesn't control or test against, same risk class NativeLibraryLoader's own
-    // explicit DllImportResolver exists to avoid for libmp3lame/libFLAC. Pinned false here, once,
-    // before any encoder/decoder is ever created.
+    // this project doesn't control or test against, the same risk class EggEncoder avoids entirely
+    // everywhere else by not bundling or loading any native binary at all. Pinned false here,
+    // once, before any encoder/decoder is ever created.
     internal static class OpusRuntimeConfiguration
     {
         [ModuleInitializer]

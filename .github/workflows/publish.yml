@@ -46,9 +46,12 @@ concurrency:
 
 jobs:
   publish:
-    # windows-latest — the test step exercises NativeEncoder's win-x64 native P/Invoke
-    # bindings (libmp3lame.dll, libFLAC.dll), which won't load on a Linux/macOS runner.
-    runs-on: windows-latest
+    # ubuntu-latest — every codec is pure managed C# (no native binary, no P/Invoke, anywhere
+    # in this project any more), so the published package is RID-agnostic and this job no
+    # longer needs a Windows runner; ubuntu-latest is the cheaper/faster default. There's
+    # exactly one artifact to build/pack/publish here, so (unlike ci.yml's build-and-test job)
+    # this intentionally stays single-OS rather than becoming a matrix.
+    runs-on: ubuntu-latest
     # Path filter (src/**) on push trigger prevents runs for README-only/docs changes.
 
     steps:
@@ -148,10 +151,11 @@ jobs:
       # ── Pack ─────────────────────────────────────────────────────────────
       - name: Pack
         if: steps.tag_check.outputs.ALREADY_TAGGED == 'false'
+        shell: bash
         run: |
-          dotnet pack src/EggEncoder/EggEncoder.csproj `
-            --configuration Release --no-build `
-            -p:Version=${{ steps.version.outputs.VERSION }} `
+          dotnet pack src/EggEncoder/EggEncoder.csproj \
+            --configuration Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
             --output ./artifacts
 
       - name: Upload artifacts

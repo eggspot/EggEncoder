@@ -514,7 +514,7 @@ commitments.
 
 ### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
 
-- [ ] **8. Delete native infrastructure, expand CI**
+- [x] **8. Delete native infrastructure, expand CI**
   - **Scope**: `WavPackNative.cs`/`Native/win-x64/wavpackdll.dll` (removed early, alongside item 5)
     and `Mp3Native.cs`/`Native/win-x64/libmp3lame.dll` (removed alongside item 6) are already gone
     — both formats were fully managed in both directions at that point, so there was no reason to
@@ -530,7 +530,24 @@ commitments.
   - **Depends on**: 1, 2, 3, 4, 5, 6 (7 is optional/open-ended — don't block cleanup on it; CBR-only
     MP3 is still a complete, fully-managed replacement for what shipped natively before).
   - **Size**: ~3–5 ticks — mechanical, but touches a lot of files.
-  - Status: not started.
+  - Status: **done**. `NativeLibraryLoader.cs`, `FlacNative.cs`, and `Native/win-x64/libFLAC.dll`
+    are deleted; the corresponding `EggEncoder.csproj` `<None>` packaging entries and
+    `THIRD-PARTY-NOTICES.md` `libFLAC.dll` section are removed. `ci.yml`'s `build-and-test` job
+    now matrices across `[windows-latest, ubuntu-latest, macos-latest]` x three .NET SDKs;
+    `publish.yml` moved from `windows-latest` to the cheaper `ubuntu-latest` (the published
+    package is now RID-agnostic, so there's no reason to build it on Windows — caught and fixed a
+    latent bug along the way: its own Pack step used PowerShell backtick line-continuation with no
+    explicit `shell:`, which only worked because `windows-latest` defaults to `pwsh`; switched to
+    bash-compatible `\` continuation with an explicit `shell: bash`). `EggEncoder.AotSmokeTest`'s
+    `RuntimeIdentifiers` is now `win-x64;linux-x64;osx-arm64`, and `ci.yml` AOT-publishes +
+    executes the matching RID's real binary on each OS. Verified directly on this machine (macOS,
+    not just by reasoning about it): the full test suite already passed nativeless on Darwin
+    before this item even started (proving `FlacNative`/`libFLAC.dll` were already fully
+    dead weight), and a real `dotnet publish -p:PublishAot=true -r osx-arm64` smoke-test binary
+    ran clean end-to-end. Full docs-sync (README.md, llms.txt, llms-full.txt, CLAUDE.md,
+    THIRD-PARTY-NOTICES.md, and `docs/{index,Getting-Started,Configuration,Advanced-Features,
+    API-Reference}.html`) removing every "Windows x64 only"/native-binary claim this item's own
+    scope called for.
 
 ## What this plan deliberately does not decide
 

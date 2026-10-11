@@ -16,15 +16,16 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 
 ### Why EggEncoder?
 
-- 🚀 **Entirely pure managed, fully in-process** — no codec shells out to native P/Invoke any more (MP3 encode is now a clean-room managed implementation, same as every other format here); no subprocess/shell-out overhead anywhere
+- 🚀 **100% pure managed, fully in-process** — no native binary, no P/Invoke, anywhere in this project; no subprocess/shell-out overhead anywhere
+- 🌍 **Truly cross-platform** — runs anywhere .NET 8/9/10 runs (Windows, Linux, macOS); CI builds and tests on all three
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - 🏷️ **WAV metadata tags** — `Probe` surfaces a WAV file's `'LIST'`/`'INFO'` chunk (title, artist, etc.) via `ProbeResult.Tags`
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
-- 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
-- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec license (BSD-style libFLAC)
+- 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and a handful of pure managed codec NuGet packages (NLayer, Concentus, NVorbis, OggVorbisEncoder)
+- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of the pure managed codec dependencies above
 
 ## Installation
 
@@ -32,7 +33,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 dotnet add package EggEncoder
 ```
 
-A native codec binary (`libFLAC.dll`) ships inside the package for `win-x64` and is copied to your output directory automatically.
+No native binaries, no extra install steps — just the package.
 
 ## Quick Start
 
@@ -143,6 +144,6 @@ WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). EggEncoder bundles a pre-built `libFLAC.dll` (BSD-style) as a
-separate, dynamically-loaded native binary; see
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
+MIT — see [LICENSE](LICENSE). EggEncoder bundles no native binaries of any kind; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of its pure managed codec
+dependencies.

@@ -45,7 +45,7 @@
     <section class="hero">
       <div class="hero-badge">Free &amp; MIT Licensed</div>
       <h1>Audio encode/decode <span class="accent">without the ceremony</span></h1>
-      <p class="hero-sub">One <code>IMediaEncoder</code> interface, fully native and in-process. 12 formats — AAC, AIFF, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA, plus MOV/MP4 probing — mostly pure C# alongside direct P/Invoke bindings to LAME, libFLAC, and WavPack, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) — no ffmpeg, no subprocess.</p>
+      <p class="hero-sub">One <code>IMediaEncoder</code> interface, 100% pure managed C# and fully in-process. 12 formats — AAC, AIFF, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA, plus MOV/MP4 probing — no native binary, no P/Invoke, anywhere in this project, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) — no ffmpeg, no subprocess, no platform restriction.</p>
       <div class="btn-group">
         <a class="btn btn-primary" href="Getting-Started.html">Get Started</a>
         <a class="btn btn-outline" href="https://github.com/eggspot/EggEncoder" target="_blank" rel="noopener">View on GitHub</a>
@@ -65,15 +65,16 @@
         <span class="install-cmd">dotnet add package EggEncoder</span>
         <button class="copy-btn">Copy</button>
       </div>
-      <p>Supports <code>net8.0</code>, <code>net9.0</code>, <code>net10.0</code>. Native <code>libmp3lame.dll</code>/<code>libFLAC.dll</code>/<code>wavpackdll.dll</code> binaries for <code>win-x64</code> ship inside the package.</p>
+      <p>Supports <code>net8.0</code>, <code>net9.0</code>, <code>net10.0</code>. No native binaries of any kind — just the package. Runs anywhere .NET 8/9/10 runs (Windows, Linux, macOS).</p>
 
-      <h2>Fully Native</h2>
+      <h2>Fully Managed</h2>
       <div class="table-wrap">
         <table>
           <thead><tr><th></th><th>EggEncoder</th></tr></thead>
           <tbody>
             <tr><td><strong>External process</strong></td><td class="yes">None</td></tr>
-            <tr><td><strong>Setup</strong></td><td class="yes">Nothing — DLLs ship in the package</td></tr>
+            <tr><td><strong>Setup</strong></td><td class="yes">Nothing — 100% pure managed, no native binaries at all</td></tr>
+            <tr><td><strong>Platform support</strong></td><td class="yes">Windows, Linux, macOS — CI builds and tests on all three</td></tr>
             <tr><td><strong>Format coverage</strong></td><td class="yes">AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV (incl. IMA/MS/Yamaha ADPCM and G.711), WavPack, WMA; MOV/MP4 metadata + mono AAC audio decode</td></tr>
             <tr><td><strong>Sample-accurate cut</strong></td><td class="yes">Any source (incl. WMA) to any dest format — no re-encode of the untouched region</td></tr>
           </tbody>
@@ -101,8 +102,8 @@ public class MediaService(IMediaEncoder mediaEncoder)
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#9889;</div>
-          <div class="feature-title">Native Codec Bindings</div>
-          <p class="feature-desc">Direct P/Invoke to LAME (MP3), libFLAC, and WavPack — no subprocess, no shell-out overhead.</p>
+          <div class="feature-title">100% Pure Managed</div>
+          <p class="feature-desc">Every codec — including MP3, FLAC, and WavPack — is pure managed C#. No native binary, no P/Invoke, anywhere in this project.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128202;</div>

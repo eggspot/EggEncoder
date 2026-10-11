@@ -43,14 +43,12 @@
       <h1>Configuration</h1>
 
       <h2>Almost None</h2>
-      <p>EggEncoder is fully native and has one optional setting: whether it logs. <code>AddEggEncoder()</code> takes an optional <code>enableLogging</code> parameter (default <code>true</code>):</p>
+      <p>EggEncoder is 100% pure managed C# and has one optional setting: whether it logs. <code>AddEggEncoder()</code> takes an optional <code>enableLogging</code> parameter (default <code>true</code>):</p>
       <pre><code class="language-csharp">builder.Services.AddEggEncoder();                      // logs via ILogger&lt;NativeEncoder&gt; (default)
 builder.Services.AddEggEncoder(enableLogging: false);   // fully silent</code></pre>
       <p>This registers one scoped <code>NativeEncoder</code> instance and maps both <code>IMediaEncoder</code> and <code>IPcmTransformEncoder</code> to it (see <a href="Dependency-Injection.html">Dependency Injection</a>) — <code>enableLogging</code> applies to both, since they share the same underlying instance. There's no engine to pick, no binary path to provide, and nothing that can fail to resolve at startup due to missing external tooling.</p>
       <p>Every <code>Probe</code>/<code>ConvertFile</code>/<code>CutFile</code> call logs a start and a completion message at <code>LogInformation</code>, and logs (then rethrows) any failure at <code>LogError</code> — set <code>enableLogging: false</code> to suppress all of it, or leave it on and control verbosity the standard way via your app's logging configuration (e.g. <code>"Logging:LogLevel:EggEncoder.NativeEncoder": "None"</code> in <code>appsettings.json</code>).</p>
-
-      <h2>Native Binary Resolution</h2>
-      <p>The bundled <code>libmp3lame.dll</code>, <code>libFLAC.dll</code>, and <code>wavpackdll.dll</code> are located automatically at runtime by <code>NativeLibraryLoader</code>, relative to <code>AppContext.BaseDirectory</code> — this is not configurable and requires no setup. See <a href="Advanced-Features.html#native-binary-packaging">Native Binary Packaging</a> for how the files get there.</p>
+      <p>There's no native binary resolution to configure — EggEncoder bundles no native binaries of any kind, so there's nothing to locate or fail to find at runtime.</p>
     </div>
   </main>
 </div>
