@@ -401,7 +401,7 @@ commitments.
 
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 
-- [ ] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
+- [x] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
   `Mp3Native.cs`.
   - **Scope**: ISO/IEC 11172-3 Layer III encoding, constant bit rate only, from the spec — no LAME
     source consulted. The one managed "port" found during research, `GroovyCodecs`, is a literal
@@ -482,23 +482,26 @@ commitments.
       joint/intensity stereo (already excluded above, repeated here since it affects quantization
       scope too: independent stereo quantizes/Huffman-codes each channel's granule completely
       separately, with no cross-channel step to design at all for this item).
-  - Status: **in progress, blocked** — see `feat/managed-mp3-encoder` (draft PR, WIP). The full
-    pipeline above is implemented (`Mp3PolyphaseFilter`, `Mp3AliasReduction`, `Mp3Quantizer`,
-    `Mp3HuffmanTables`, `Mp3FrameEncoder`), and several of its stages are independently proven
-    correct: the polyphase/MDCT/alias-reduction DSP chain matches fresh, independently-derived
-    reference formulas to 1e-6/1e-9 precision (differential tests); every one of this project's own
-    Huffman code/length table entries (all real `table_select` values 1-31 plus both quadruples
-    tables) was mechanically cross-checked, bit-for-bit, against NLayer's own decoder tables (used
-    read-only as a test oracle) with zero mismatches; and a from-scratch, independently-written
-    IMDCT+synthesis-filter decoder reconstructs a real encoded tone at 36dB SNR. Despite all of
-    that, real decoders (NLayer and ffmpeg, independently) still fail to decode most
-    content/configuration combinations correctly — output degrades into genuine noise (not a
-    clean amplitude/scale error) partway through longer content, and one previously-passing
-    structural test now throws inside NLayer's own bit reservoir. The remaining divergence is
-    real but not yet isolated; see the draft PR description for the full diagnostic trail and
-    remaining hypotheses (bit-reservoir/frame-boundary bookkeeping is the leading suspect, since
-    DSP correctness, bitstream self-consistency, and Huffman table content are now all
-    independently ruled out). Not ready to tick done.
+  - Status: **done** — see `feat/managed-mp3-encoder` (merged). The full pipeline
+    (`Mp3PolyphaseFilter`, `Mp3AliasReduction`, `Mp3Quantizer`, `Mp3HuffmanTables`,
+    `Mp3FrameEncoder`) is implemented and verified correct at every stage, isolated and
+    cross-checked directly against NLayer's own compiled decode methods via reflection (polyphase
+    analysis/synthesis alone; +MDCT/antialias/hybrid/frequency-inversion; quantizer/Huffman
+    round-trip) and against ffmpeg's own independent decoder. The root cause of the long-standing
+    real-decoder divergence (output degrading into exponentially-growing noise, not a bounded
+    scale error) was a PCM-scale convention mismatch, not a DSP/bitstream/Huffman bug: every real
+    MP3 decoder's own int16 output stage assumes the hybrid filterbank's reconstructed samples sit
+    in the standard normalized -1.0..+1.0 float range, but this project's own int16-native PCM
+    convention (used directly, unscaled, by every other codec here) fed the polyphase/MDCT/
+    quantizer chain a signal ~32768x too loud, which a real decoder's own unclamped int16 packing
+    then wrapped into noise as magnitude grew. Fixed with a single linear PCM-normalization scale
+    in `Mp3FrameEncoder.ComputeGranuleCoefficients` (mathematically equivalent to scaling the
+    source PCM before analysis, since the whole polyphase/MDCT/alias-reduction chain is linear).
+    All 7 SNR acceptance tests now pass (mono/stereo x 32/44.1/48kHz x multiple bitrates, 10dB
+    floor) against NLayer as the decode oracle; independently cross-verified against ffmpeg's own
+    decoder at 65-69dB SNR on a real encoded stereo file, with peak levels matching the
+    theoretical expected dB exactly. Scratch differential/self-decode test files (both predating
+    this fix, per their own "deleted once the encoder is fixed" doc comments) have been removed.
 
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
   - **Scope**: variable bit rate modes and whatever psychoacoustic/bit-allocation improvements prove

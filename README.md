@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, mostly pure C# alongside a native MP3 binding, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, entirely pure C#, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -12,11 +12,11 @@ Sponsored by [eggspot.app](https://eggspot.app)
 
 ## Overview
 
-EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertFile`, `CutFile` — implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations (AAC, WAV, AIFF, AU, ALAC, FLAC, TTA, WMA, Opus, Vorbis, WavPack) plus a native P/Invoke binding to `libmp3lame`. No external process, no ffmpeg install, no subprocess overhead.
+EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertFile`, `CutFile` — implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations for every supported format (AAC, WAV, AIFF, AU, ALAC, FLAC, MP3, TTA, WMA, Opus, Vorbis, WavPack). No external process, no ffmpeg install, no subprocess overhead.
 
 ### Why EggEncoder?
 
-- 🚀 **Mostly pure managed, fully in-process** — only MP3 (decode+encode) still shells out to native P/Invoke (LAME); no subprocess/shell-out overhead anywhere
+- 🚀 **Entirely pure managed, fully in-process** — no codec shells out to native P/Invoke any more (MP3 encode is now a clean-room managed implementation, same as every other format here); no subprocess/shell-out overhead anywhere
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
@@ -24,7 +24,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and `NLayer`
-- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec licenses (LGPL-2.1 LAME, BSD-style libFLAC)
+- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the bundled native codec license (BSD-style libFLAC)
 
 ## Installation
 
@@ -32,7 +32,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 dotnet add package EggEncoder
 ```
 
-Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`) ship inside the package for `win-x64` and are copied to your output directory automatically.
+A native codec binary (`libFLAC.dll`) ships inside the package for `win-x64` and is copied to your output directory automatically.
 
 ## Quick Start
 
@@ -143,6 +143,6 @@ WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). EggEncoder bundles pre-built `libmp3lame.dll` (LGPL-2.1) and
-`libFLAC.dll` (BSD-style) as separate, dynamically-loaded native binaries; see
+MIT — see [LICENSE](LICENSE). EggEncoder bundles a pre-built `libFLAC.dll` (BSD-style) as a
+separate, dynamically-loaded native binary; see
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
