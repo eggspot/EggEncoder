@@ -256,6 +256,30 @@ namespace EggEncoder.UnitTests.Pcm
             act.Should().Throw<ArgumentOutOfRangeException>();
         }
 
+        [Fact]
+        public void Constructor_WithChannelsAboveMax_Should_Throw()
+        {
+            // An accidental or pathological huge channel count would otherwise attempt to allocate
+            // _delayLine at that size, risking an OutOfMemoryException instead of a clean,
+            // immediate validation failure.
+            var act = () => new EchoTransform(sampleRate: 44100, channels: EchoTransform.MaxChannels + 1, delaySeconds: 0.1, feedback: 0.5, wetGain: 1.0);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("channels");
+        }
+
+        [Fact]
+        public void Constructor_WithSampleRateThatOverflowsDelayFrames_Should_Throw()
+        {
+            // delaySeconds=60 (the max allowed) x sampleRate=100,000,000 alone already computes a
+            // 6-billion-frame delay, overflowing int32 in the unchecked (int) cast before channels
+            // is even multiplied in -- sampleRate has no upper bound of its own (consistent with
+            // every other sampleRate-taking transform here), so this has to be caught by checking
+            // the actual delay-line size directly, not by bounding sampleRate.
+            var act = () => new EchoTransform(sampleRate: 100_000_000, channels: 1, delaySeconds: EchoTransform.MaxDelaySeconds, feedback: 0.5, wetGain: 1.0);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("delaySeconds");
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(-0.1)]

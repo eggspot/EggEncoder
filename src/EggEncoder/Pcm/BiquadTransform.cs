@@ -25,6 +25,13 @@ namespace EggEncoder.Pcm;
 /// </summary>
 public sealed class BiquadTransform : IPcmTransform
 {
+    // No real audio use case needs anywhere near this many channels; this exists purely so an
+    // accidental or pathological huge value (e.g. a stray extra zero, or overflow from unrelated
+    // arithmetic upstream) fails validation immediately with a clear exception instead of
+    // attempting to allocate _w1/_w2 at that size, which risks an OutOfMemoryException instead of
+    // a clean validation failure -- the same reasoning behind ButterworthTransform.MaxOrder.
+    public const int MaxChannels = 1024;
+
     private readonly int _channels;
     private readonly int _sampleRate;
     private readonly double _b0;
@@ -36,7 +43,7 @@ public sealed class BiquadTransform : IPcmTransform
     private readonly double[] _w2;
 
     /// <param name="filterType">Which of the eight standard biquad filter responses to apply.</param>
-    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input).</param>
+    /// <param name="channels">Number of interleaved channels this transform will process (must match actual input). Must be positive and no more than <see cref="MaxChannels"/>.</param>
     /// <param name="sampleRate">Sample rate in Hz this transform will process (must match actual input).</param>
     /// <param name="frequencyHz">Center frequency (band pass/notch/peaking) or cutoff frequency (low/high pass/shelf), in Hz. Must be in (0, Nyquist).</param>
     /// <param name="q">
@@ -47,8 +54,8 @@ public sealed class BiquadTransform : IPcmTransform
     /// <param name="gainDb">Boost/cut in decibels for PeakingEq/LowShelf/HighShelf; must be 0 for every other filter type, which don't have a gain concept.</param>
     public BiquadTransform(BiquadFilterType filterType, int channels, int sampleRate, double frequencyHz, double q = 0.7071067811865476, double gainDb = 0.0)
     {
-        if (channels <= 0)
-            throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channels must be positive");
+        if (channels <= 0 || channels > MaxChannels)
+            throw new ArgumentOutOfRangeException(nameof(channels), channels, $"Channels must be positive and no more than {MaxChannels}");
         if (sampleRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive");
         if (double.IsNaN(frequencyHz) || frequencyHz <= 0)
