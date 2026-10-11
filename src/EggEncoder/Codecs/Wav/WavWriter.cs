@@ -1,4 +1,5 @@
 using EggEncoder.Codecs;
+using System.Linq;
 using System.Text;
 
 namespace EggEncoder.Codecs.Wav
@@ -61,10 +62,12 @@ namespace EggEncoder.Codecs.Wav
         private bool _yamahaHasPendingNibble;
 
         private byte[] _rawBytes = [];
+        private readonly byte[] _listChunkBytes;
         private bool _disposed;
 
-        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock, bool isYamahaAdpcm)
+        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock, bool isYamahaAdpcm, byte[] listChunkBytes)
         {
+            _listChunkBytes = listChunkBytes;
             _stream = stream;
             _channels = channels;
             _bitsPerSample = bitsPerSample;
@@ -99,6 +102,71 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
+        // The exact inverse of WavReader's own TryParseListInfoTags: builds a complete 'LIST'/'INFO'
+        // chunk (its own 8-byte header, the 4-byte 'INFO' sub-type, then every tag as an id+size+
+        // null-terminated-UTF8-string sub-chunk, each individually padded to an even size) entirely
+        // from the tags themselves, independent of any audio data -- so this is computed once, up
+        // front in Create(), the same way every other header field here is. Returns an empty array
+        // for null or empty tags, so riffSize/Dispose() never need a separate "no tags" branch.
+        private static byte[] BuildListInfoChunk(IReadOnlyDictionary<string, string>? tags)
+        {
+            if (tags is null || tags.Count == 0)
+            {
+                return [];
+            }
+
+            // Enumerated exactly once into a materialized list: `tags` is a caller-supplied
+            // IReadOnlyDictionary<string, string>, and an arbitrary implementation of that
+            // interface isn't guaranteed to enumerate in the same order twice in a row the way the
+            // concrete Dictionary<TKey, TValue> most callers actually pass does -- computing the
+            // size in one pass over `tags` directly and writing in a second would risk the two
+            // passes disagreeing for such an implementation.
+            var entries = new List<(byte[] Id, byte[] Value)>(tags.Count);
+            var infoPayloadSize = 4; // the 'INFO' sub-type FourCC itself
+
+            foreach (var (id, value) in tags)
+            {
+                // Every size/offset computed below assumes a 4-byte sub-chunk id (RIFF's own FourCC
+                // convention, e.g. "INAM"/"IART") -- a wrong-length key would silently corrupt the
+                // chunk's own declared sizes rather than just writing a malformed tag value.
+                if (id.Length != 4 || !id.All(c => c <= 127))
+                {
+                    throw new ArgumentException($"Tag id '{id}' must be exactly 4 ASCII characters (RIFF's own FourCC convention, e.g. \"INAM\"/\"IART\")", nameof(tags));
+                }
+
+                var idBytes = Encoding.ASCII.GetBytes(id);
+                var valueBytes = Encoding.UTF8.GetBytes(value);
+                entries.Add((idBytes, valueBytes));
+
+                var subSize = valueBytes.Length + 1; // +1 for the null terminator
+                infoPayloadSize += 8 + subSize + (subSize % 2); // id(4) + size(4) + padded data
+            }
+
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+
+            writer.Write("LIST"u8);
+            writer.Write((uint)infoPayloadSize);
+            writer.Write("INFO"u8);
+
+            foreach (var (idBytes, valueBytes) in entries)
+            {
+                var subSize = valueBytes.Length + 1;
+
+                writer.Write(idBytes);
+                writer.Write((uint)subSize);
+                writer.Write(valueBytes);
+                writer.Write((byte)0); // null terminator
+                if (subSize % 2 != 0)
+                {
+                    writer.Write((byte)0); // pad to even, matching WavReader's own paddedSubSize convention
+                }
+            }
+
+            writer.Flush();
+            return stream.ToArray();
+        }
+
         /// <param name="filePath">Destination path.</param>
         /// <param name="channels">Number of interleaved channels.</param>
         /// <param name="sampleRate">Sample rate in Hz.</param>
@@ -122,8 +190,18 @@ namespace EggEncoder.Codecs.Wav
         /// structure at all -- two samples are written per byte continuously as they arrive, with at most
         /// one trailing nibble (mono, odd frame count) held pending until <see cref="Finish"/>.
         /// </param>
-        public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer)
+        /// <param name="tags">
+        /// Optional 'LIST'/'INFO' metadata sub-chunks to write (e.g. "INAM" for title, "IART" for
+        /// artist) -- the same keys <see cref="WavReader.Tags"/> reads back. Null or empty writes
+        /// no 'LIST' chunk at all, matching this type's own behavior before this parameter
+        /// existed. Written as a single trailing chunk after 'data' (and its pad byte, if any),
+        /// the same placement real encoders commonly use, so no two-pass header rewrite is needed
+        /// -- the chunk's own bytes are fully known up front from the tags alone, independent of
+        /// how much audio data follows.
+        /// </param>
+        public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null)
         {
+            var listChunkBytes = BuildListInfoChunk(tags);
             var isFloatFormat = sampleFormat == WavSampleFormat.Float32;
             var isALaw = sampleFormat == WavSampleFormat.ALaw;
             var isMuLaw = sampleFormat == WavSampleFormat.MuLaw;
@@ -181,17 +259,17 @@ namespace EggEncoder.Codecs.Wav
             {
                 if (isImaAdpcm)
                 {
-                    return CreateImaAdpcm(stream, filePath, channels, sampleRate, totalFrames);
+                    return CreateImaAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes);
                 }
 
                 if (isMsAdpcm)
                 {
-                    return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames);
+                    return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes);
                 }
 
                 if (isYamahaAdpcm)
                 {
-                    return CreateYamahaAdpcm(stream, channels, sampleRate, totalFrames);
+                    return CreateYamahaAdpcm(stream, channels, sampleRate, totalFrames, listChunkBytes);
                 }
 
                 // G.711 is always 1 byte/sample on disk regardless of the 16-bit input scale its
@@ -211,7 +289,7 @@ namespace EggEncoder.Codecs.Wav
                 // a 'fact' chunk giving the authoritative per-channel sample count.
                 var fmtChunkPayloadSize = isALaw || isMuLaw ? 18 : 16;
                 var factChunkSize = isALaw || isMuLaw ? 8 + 4 : 0;
-                var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+                var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0) + listChunkBytes.Length;
 
                 using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
 
@@ -238,7 +316,7 @@ namespace EggEncoder.Codecs.Wav
                 writer.Write("data"u8);
                 writer.Write((uint)dataSize);
 
-                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false);
+                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
             }
             catch
             {
@@ -252,7 +330,7 @@ namespace EggEncoder.Codecs.Wav
         // size is block-quantized rather than exactly totalFrames * bytesPerFrame) is different enough
         // from every other WavSampleFormat's simple per-sample-width math above that it gets its own
         // method rather than threading more conditionals through the shared one.
-        private static WavWriter CreateImaAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames)
+        private static WavWriter CreateImaAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
         {
             const int headerBytesPerChannel = 4;
             var samplesPerBlock = ((ImaAdpcmBlockAlignBytes - (headerBytesPerChannel * channels)) * 8 / (headerBytesPerChannel * channels)) + 1;
@@ -262,7 +340,7 @@ namespace EggEncoder.Codecs.Wav
 
             const int fmtChunkPayloadSize = 20; // base(16) + cbSize(2) + wSamplesPerBlock(2)
             const int factChunkSize = 8 + 4;
-            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0) + listChunkBytes.Length;
 
             using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
 
@@ -285,7 +363,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
         }
 
         // MS ADPCM's block structure mirrors IMA ADPCM's own CreateImaAdpcm above in shape (a
@@ -294,7 +372,7 @@ namespace EggEncoder.Codecs.Wav
         // channel (always 0 here, see MsAdpcmEncoder's own doc comment), plus the file-level 'fmt '
         // chunk extension additionally carries the full standard 7-pair coefficient table every real
         // MS ADPCM file includes, which IMA ADPCM's own extension has no equivalent of at all.
-        private static WavWriter CreateMsAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames)
+        private static WavWriter CreateMsAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
         {
             const int headerBytesPerChannel = 7;
             var coeffCount = MsAdpcmEncoder.Coeff1Table.Length;
@@ -314,7 +392,7 @@ namespace EggEncoder.Codecs.Wav
             // base(16) + cbSize(2) + wSamplesPerBlock(2) + wNumCoef(2) + coeffCount * (Coeff1(2) + Coeff2(2))
             var fmtChunkPayloadSize = 22 + (coeffCount * 4);
             const int factChunkSize = 8 + 4;
-            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0) + listChunkBytes.Length;
 
             using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
 
@@ -344,7 +422,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock, isYamahaAdpcm: false);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock, isYamahaAdpcm: false, listChunkBytes);
         }
 
         // Yamaha ADPCM has no block structure at all (see YamahaAdpcmDecoder's own doc comment), so --
@@ -354,7 +432,7 @@ namespace EggEncoder.Codecs.Wav
         // count (stereo always has an even total nibble count, one frame per byte, so it never pads).
         // No 'fmt' chunk extension is needed either -- confirmed directly from a real ffmpeg-produced
         // fixture's own bytes, whose 'fmt' chunk carries cbSize=0 with no further extension data.
-        private static WavWriter CreateYamahaAdpcm(FileStream stream, int channels, int sampleRate, long totalFrames)
+        private static WavWriter CreateYamahaAdpcm(FileStream stream, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
         {
             var totalNibbles = totalFrames * channels;
             var dataSize = (totalNibbles + 1) / 2; // ceiling division
@@ -362,7 +440,7 @@ namespace EggEncoder.Codecs.Wav
 
             const int fmtChunkPayloadSize = 18; // base(16) + cbSize(2)
             const int factChunkSize = 8 + 4;
-            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0);
+            var riffSize = 4 + (8 + fmtChunkPayloadSize) + factChunkSize + (8 + dataSize) + (needsPadByte ? 1 : 0) + listChunkBytes.Length;
 
             // Purely informational -- this format has no real block structure to align to, so no
             // decode logic depends on this value at all (unlike IMA/MS ADPCM's own nBlockAlign, which
@@ -392,7 +470,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: true);
+            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: true, listChunkBytes);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -631,6 +709,11 @@ namespace EggEncoder.Codecs.Wav
             if (_needsPadByte)
             {
                 _stream.WriteByte(0);
+            }
+
+            if (_listChunkBytes.Length > 0)
+            {
+                _stream.Write(_listChunkBytes, 0, _listChunkBytes.Length);
             }
 
             _stream.Dispose();
