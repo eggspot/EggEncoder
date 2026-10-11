@@ -1,10 +1,10 @@
 using EggEncoder;
 using Microsoft.Extensions.Logging.Abstractions;
 
-// Exercises EggEncoder's riskiest-for-AOT paths — LibraryImport P/Invoke into
-// libmp3lame/libFLAC, the UnmanagedCallersOnly + GCHandle FLAC decode callback, the
-// NLayer-backed MP3 decode, and the fully managed WavPack decode/encode (no native call at
-// all) — under a real `dotnet publish -p:PublishAot=true` binary, not just under the JIT.
+// Exercises EggEncoder's riskiest-for-AOT paths — LibraryImport P/Invoke into libFLAC, the
+// UnmanagedCallersOnly + GCHandle FLAC decode callback, the NLayer-backed MP3 decode, and the
+// fully managed MP3 encode and WavPack decode/encode (no native call at all) — under a real
+// `dotnet publish -p:PublishAot=true` binary, not just under the JIT.
 var sourceWav = Path.Combine(AppContext.BaseDirectory, "sample.wav");
 var workingDirectory = Path.Combine(Path.GetTempPath(), $"EggEncoderAotSmoke_{Guid.NewGuid():N}");
 Directory.CreateDirectory(workingDirectory);
@@ -19,7 +19,7 @@ try
     var cutPath = Path.Combine(workingDirectory, "cut.wav");
 
     await RunCheck("Probe source WAV", () => encoder.Probe(sourceWav));
-    await RunCheck("Convert WAV -> MP3 (libmp3lame P/Invoke encode)", () => encoder.ConvertFile(sourceWav, mp3Path));
+    await RunCheck("Convert WAV -> MP3 (pure managed encode, no native call)", () => encoder.ConvertFile(sourceWav, mp3Path));
     await RunCheck("Probe + decode produced MP3 (NLayer decode)", () => encoder.Probe(mp3Path));
     await RunCheck("Convert WAV -> FLAC (libFLAC P/Invoke encode)", () => encoder.ConvertFile(sourceWav, flacPath));
     await RunCheck("Probe + decode produced FLAC (UnmanagedCallersOnly callback)", () => encoder.Probe(flacPath));
