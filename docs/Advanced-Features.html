@@ -66,7 +66,11 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("INAM", out var tit
 {
     Console.WriteLine($"Title: {title}");
 }</code></pre>
-      <p><code>Tags</code> is <code>null</code> for every non-WAV format, and for a WAV file that simply doesn't carry a <code>'LIST'</code>/<code>'INFO'</code> chunk (most don't). A malformed or truncated tag list degrades gracefully — whatever sub-chunks parsed cleanly before the inconsistency are still returned — rather than failing the whole <code>Probe</code> call, since this metadata is decorative and unrelated to decoding the audio itself. Read-only: there's currently no way to write tags back out through <code>WavWriter</code>.</p>
+      <p><code>Tags</code> is <code>null</code> for every non-WAV format, and for a WAV file that simply doesn't carry a <code>'LIST'</code>/<code>'INFO'</code> chunk (most don't). A malformed or truncated tag list degrades gracefully — whatever sub-chunks parsed cleanly before the inconsistency are still returned — rather than failing the whole <code>Probe</code> call, since this metadata is decorative and unrelated to decoding the audio itself.</p>
+      <p><code>WavWriter.Create</code> can write tags back out too, via an optional <code>tags</code> parameter — the exact inverse of the read side, written as a single trailing chunk after the audio data:</p>
+      <pre><code class="language-csharp">using var writer = WavWriter.Create("tagged.wav", channels: 2, sampleRate: 44100, bitsPerSample: 16,
+    totalFrames: frameCount, tags: new Dictionary&lt;string, string&gt; { ["INAM"] = "Title", ["IART"] = "Artist" });</code></pre>
+      <p>Threads through every <code>WavSampleFormat</code>, including the block-structured ADPCM variants. Unlike the read side, write is strict: a tag id must be exactly 4 ASCII characters (RIFF's own FourCC convention, e.g. <code>"INAM"</code>) or <code>Create</code> throws <code>ArgumentException</code> immediately — writing a well-formed file is a hard requirement here, unlike reading an already-on-disk file's possibly-malformed metadata.</p>
 
       <h2>Sample-Accurate Cutting</h2>
       <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack, or MOV/MP4 with a mono AAC-LC audio track) and writes any supported destination format without re-encoding the untouched region where the format allows frame-boundary slicing:</p>

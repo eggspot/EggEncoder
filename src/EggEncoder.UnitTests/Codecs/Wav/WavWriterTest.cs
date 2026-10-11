@@ -1213,5 +1213,130 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
             return bytes[(dataIndex + 8)..(int)(dataIndex + 8 + dataSize)];
         }
+
+        // -------- 'LIST'/'INFO' tag writing --------
+
+        [Fact]
+        public void Create_WithTags_Should_Round_Trip_Through_WavReader()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new[] { 0, 127, -128, -64 };
+                var tags = new Dictionary<string, string> { ["INAM"] = "Test Title", ["IART"] = "Test Artist" };
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: samples.Length, tags: tags))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                buffer.Should().Equal(samples);
+                reader.Tags.Should().NotBeNull();
+                reader.Tags!["INAM"].Should().Be("Test Title");
+                reader.Tags!["IART"].Should().Be("Test Artist");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithoutTags_Should_Produce_NullTags_LikeBefore()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new[] { 0, 127, -128, -64 };
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: samples.Length))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithEmptyTags_Should_Produce_NullTags_LikeBefore()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new[] { 0, 127, -128, -64 };
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: samples.Length, tags: new Dictionary<string, string>()))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithTagIdNotFourCharacters_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var act = () => WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 8, totalFrames: 1,
+                    tags: new Dictionary<string, string> { ["TOO_LONG"] = "value" });
+
+                act.Should().Throw<ArgumentException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithTags_And_ImaAdpcm_Should_Round_Trip_Through_WavReader()
+        {
+            // Tags thread through every Create* path, not just the plain-PCM one -- this covers
+            // the block-structured ADPCM path specifically, since it builds its own independent
+            // header/riffSize rather than sharing the plain-PCM path's.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var samples = new int[100];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(8000 * Math.Sin(2 * Math.PI * 440 * i / 8000.0));
+                }
+
+                var tags = new Dictionary<string, string> { ["INAM"] = "ADPCM Tagged" };
+
+                using (var writer = WavWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: samples.Length, WavSampleFormat.ImaAdpcm, tags))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length);
+                    writer.Finish();
+                }
+
+                using var reader = WavReader.Open(filePath);
+                reader.Tags.Should().NotBeNull();
+                reader.Tags!["INAM"].Should().Be("ADPCM Tagged");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
     }
 }
