@@ -515,12 +515,13 @@ commitments.
 ### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
 
 - [ ] **8. Delete native infrastructure, expand CI**
-  - **Scope**: `WavPackNative.cs` and `Native/win-x64/wavpackdll.dll` are already gone (removed
-    early, alongside item 5, rather than held for this item — WavPack was fully managed in both
-    directions at that point, so there was no reason to keep shipping a now-unreferenced binary).
-    Remaining: delete `NativeLibraryLoader.cs`, `FlacNative.cs`, `Mp3Native.cs`,
-    `Native/win-x64/*.dll` (the rest); remove the remaining `<None>` packaging entries from
-    `EggEncoder.csproj`; remove the corresponding `THIRD-PARTY-NOTICES.md` sections; change
+  - **Scope**: `WavPackNative.cs`/`Native/win-x64/wavpackdll.dll` (removed early, alongside item 5)
+    and `Mp3Native.cs`/`Native/win-x64/libmp3lame.dll` (removed alongside item 6) are already gone
+    — both formats were fully managed in both directions at that point, so there was no reason to
+    keep shipping a now-unreferenced binary. Remaining: delete `NativeLibraryLoader.cs`,
+    `FlacNative.cs`, `Native/win-x64/libFLAC.dll` (the rest); remove the remaining `<None>`
+    packaging entries from `EggEncoder.csproj`; remove the corresponding `THIRD-PARTY-NOTICES.md`
+    sections; change
     `ci.yml`/`publish.yml` from
     `windows-latest`-only to a real `[windows-latest, ubuntu-latest, macos-latest]` matrix; update
     `EggEncoder.AotSmokeTest` to multi-RID and refresh its own doc comment (no more native-interop
