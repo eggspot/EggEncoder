@@ -53,11 +53,11 @@ public class ProbeResult
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
-    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata, keyed by raw chunk ID (e.g. "INAM"); null for every other format, or a WAV with none
+    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM") or MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"); null for every other format, or a WAV/MP3 with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` is read-only -- there's no way to write tags back out through `WavWriter`.
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3 (see each format's own section below).
 
 ## Dependency Injection
 
@@ -398,23 +398,33 @@ public static class Mp3Decoder // backed by the NLayer managed decoder -- no nat
 public static class Mp3Encoder // pure managed, clean-room from ISO/IEC 11172-3 -- no native call
 {
     public const int DefaultBitRateKbps = 320;
-    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
+    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a fresh ID3v2.4 tag (UTF-8 text) before the audio frames; see Id3v2Writer
 }
 
 public sealed class Mp3EncoderSession : IDisposable
 {
-    public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = Mp3Encoder.DefaultBitRateKbps);
+    public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = Mp3Encoder.DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 
 public static class Mp3Probe // manual MPEG frame-header parsing (Xing/Info/VBRI-aware), no native call
 {
     public static Mp3ProbeResult Probe(string mp3FilePath);
-    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate
+    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate, Tags
+}
+
+internal static class Id3v2Reader // read-only half of ID3v2 tag support -- text information frames only, see doc comment
+{
+    internal static IReadOnlyDictionary<string, string>? ReadTags(Stream stream);
+}
+
+internal static class Id3v2Writer // write-only half -- always emits a fresh ID3v2.4 tag, UTF-8 text
+{
+    internal static byte[] BuildTagBytes(IReadOnlyDictionary<string, string> tags); // throws ArgumentException for any id that isn't a 4-character text-frame id (starts with 'T', not "TXXX")
 }
 ```
 
-MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quantizer`/`Mp3HuffmanTables`) is a clean-room, CBR-only baseline implemented directly from the published ISO/IEC 11172-3 standard text -- no LAME/GroovyCodecs/ffmpeg encoder source consulted. Long blocks only (no block switching), independent (non-joint) stereo, no bit-reservoir borrowing across frames, no psychoacoustic model (`global_gain` alone is searched to fit each granule's fixed bit budget) -- a correctness-first baseline, not yet LAME-equivalent compression quality. Verified decodable, at a real SNR well above this project's own acceptance floor, by both `Mp3Decoder` (NLayer) and ffmpeg's own independent decoder, used read-only as test oracles.
+MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quantizer`/`Mp3HuffmanTables`) is a clean-room, CBR-only baseline implemented directly from the published ISO/IEC 11172-3 standard text -- no LAME/GroovyCodecs/ffmpeg encoder source consulted. Long blocks only (no block switching), independent (non-joint) stereo, no bit-reservoir borrowing across frames, no psychoacoustic model (`global_gain` alone is searched to fit each granule's fixed bit budget) -- a correctness-first baseline, not yet LAME-equivalent compression quality. Verified decodable, at a real SNR well above this project's own acceptance floor, by both `Mp3Decoder` (NLayer) and ffmpeg's own independent decoder, used read-only as test oracles. `Id3v2Reader`/`Id3v2Writer` (`Id3v2Tag.cs`) add ID3v2 metadata tag support, read and write -- see the "MP3 ID3v2 Tags" section of `llms.txt` for the full scope (text information frames only; ID3v2.3/2.4 read, ID3v2.4-only write).
 
 ### WAV — `EggEncoder.Codecs.Wav`
 

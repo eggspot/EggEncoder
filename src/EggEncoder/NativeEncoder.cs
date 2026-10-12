@@ -311,7 +311,8 @@ namespace EggEncoder
                 TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                Tags = mp3ProbeResult.Tags
             };
         }
 

@@ -23,6 +23,7 @@ namespace EggEncoder.Codecs.Mp3
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
 
+            var tags = Id3v2Reader.ReadTags(stream);
             stream.Position = SkipId3V2Tag(stream);
 
             var frame = FindFirstFrame(stream)
@@ -60,7 +61,8 @@ namespace EggEncoder.Codecs.Mp3
                 SampleRate = frame.Header.SampleRate,
                 Channels = frame.Header.Channels,
                 BitRate = bitRateKbps * 1000,
-                IsVariableBitRate = isVariableBitRate
+                IsVariableBitRate = isVariableBitRate,
+                Tags = tags
             };
         }
 
@@ -219,6 +221,8 @@ namespace EggEncoder.Codecs.Mp3
         public required int BitRate { get; init; }
 
         public required bool IsVariableBitRate { get; init; }
+
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 
     internal readonly record struct Mp3FrameHeader(int SampleRate, int BitRateKbps, int Channels, int FrameLengthBytes, int SideInfoSize, bool HasCrc, bool IsMpeg1);
