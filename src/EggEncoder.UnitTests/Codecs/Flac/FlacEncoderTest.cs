@@ -31,6 +31,97 @@ namespace EggEncoder.UnitTests.Codecs.Flac
             }
         }
 
+        [Fact]
+        public void Encode_WithTags_Should_Produce_Flac_Whose_VorbisCommentTag_RoundTrips_Through_Decode()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var flacPath = Path.Combine(tempDirectory, "dest.flac");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 44100, bitsPerSample: 16, [0, 1000, -1000, 500]);
+
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+                FlacEncoder.Encode(wavPath, flacPath, tags: tags);
+
+                var (streamInfo, decodedSamples) = FlacTestDecoder.DecodeAll(flacPath);
+
+                streamInfo.Channels.Should().Be(1);
+                decodedSamples.Should().Equal([0, 1000, -1000, 500]);
+                streamInfo.Tags.Should().NotBeNull();
+                streamInfo.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                streamInfo.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Encode_WithoutTags_Should_Produce_Flac_With_NullTags()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var flacPath = Path.Combine(tempDirectory, "dest.flac");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 44100, bitsPerSample: 16, [0, 1]);
+
+                FlacEncoder.Encode(wavPath, flacPath);
+
+                var (streamInfo, _) = FlacTestDecoder.DecodeAll(flacPath);
+                streamInfo.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_WithTagsExceedingMetadataBlockLengthLimit_Should_Throw_Before_Creating_DestFile()
+        {
+            // VORBIS_COMMENT's own metadata block length field is 24 bits wide (max 16,777,215
+            // bytes) -- a tag large enough to exceed it must fail loudly, not silently wrap into a
+            // different, wrong-but-valid-looking block length.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var flacPath = Path.Combine(tempDirectory, "toolarge.flac");
+                var tags = new Dictionary<string, string> { ["HUGE"] = new string('a', 17_000_000) };
+
+                var act = () => FlacEncoder.OpenSession(flacPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, tags: tags);
+
+                act.Should().Throw<NotSupportedException>();
+                File.Exists(flacPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_WithInvalidTagFieldName_Should_Throw_Before_Creating_DestFile()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var flacPath = Path.Combine(tempDirectory, "invalid.flac");
+                var tags = new Dictionary<string, string> { ["BAD=NAME"] = "value" };
+
+                var act = () => FlacEncoder.OpenSession(flacPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, tags: tags);
+
+                act.Should().Throw<ArgumentException>();
+                File.Exists(flacPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(33)]

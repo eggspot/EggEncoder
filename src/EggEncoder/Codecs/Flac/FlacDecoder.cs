@@ -10,6 +10,7 @@ namespace EggEncoder.Codecs.Flac
     public static class FlacDecoder
     {
         private const int MetadataTypeStreamInfo = 0;
+        private const int MetadataTypeVorbisComment = 4;
         private const int MetadataTypeInvalid = 127;
         private const int StreamInfoPayloadLength = 34;
 
@@ -58,7 +59,7 @@ namespace EggEncoder.Codecs.Flac
         {
             var reader = new BitReader(fileBytes);
 
-            var metadata = ReadMetadata(flacFilePath, reader);
+            var metadata = ReadMetadata(flacFilePath, fileBytes, reader);
             var frameDecoder = new FlacFrameDecoder(metadata.Channels, metadata.BitsPerSample, metadata.MaxBlockSize);
 
             using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
@@ -111,7 +112,8 @@ namespace EggEncoder.Codecs.Flac
                 Channels = metadata.Channels,
                 SampleRate = metadata.SampleRate,
                 BitsPerSample = metadata.BitsPerSample,
-                TotalSamples = metadata.TotalSamples
+                TotalSamples = metadata.TotalSamples,
+                Tags = metadata.Tags
             };
         }
 
@@ -127,7 +129,7 @@ namespace EggEncoder.Codecs.Flac
             }
         }
 
-        private static FlacMetadata ReadMetadata(string flacFilePath, BitReader reader)
+        private static FlacMetadata ReadMetadata(string flacFilePath, byte[] fileBytes, BitReader reader)
         {
             SkipOptionalId3v2Tag(flacFilePath, reader);
 
@@ -137,6 +139,7 @@ namespace EggEncoder.Codecs.Flac
             }
 
             FlacMetadata? streamInfo = null;
+            IReadOnlyDictionary<string, string>? tags = null;
             var isLastMetadataBlock = false;
             while (!isLastMetadataBlock)
             {
@@ -160,10 +163,22 @@ namespace EggEncoder.Codecs.Flac
                     throw new InvalidDataException($"'{flacFilePath}' has a disallowed metadata block type {blockType} (a second STREAMINFO, or the invalid value 127).");
                 }
 
+                if (blockType == MetadataTypeVorbisComment)
+                {
+                    // Metadata block headers/payloads before this point are always byte-aligned
+                    // (STREAMINFO is exactly 34 bytes, and every skipped block before this one
+                    // skipped a whole-byte length), so BitPosition / 8 is always an exact byte
+                    // offset here -- VorbisCommentReader works directly on the raw bytes rather
+                    // than through BitReader, the same convention Vorbis's own little-endian
+                    // length fields need regardless of which container embeds them.
+                    tags = VorbisCommentReader.ReadFrom(fileBytes, reader.BitPosition / 8, blockLength);
+                }
+
                 reader.SkipBits(blockLength * 8);
             }
 
-            return streamInfo!;
+            streamInfo!.Tags = tags;
+            return streamInfo;
         }
 
         private static void SkipOptionalId3v2Tag(string flacFilePath, BitReader reader)
@@ -253,6 +268,11 @@ namespace EggEncoder.Codecs.Flac
             public required int MaxBlockSize { get; init; }
 
             public required byte[] Md5Signature { get; init; }
+
+            // Set, not init -- a VORBIS_COMMENT block (if any) can arrive anywhere after
+            // STREAMINFO, so this is only known once the whole metadata loop finishes, well after
+            // this instance is first constructed inside ReadStreamInfoBlock.
+            public IReadOnlyDictionary<string, string>? Tags { get; set; }
         }
     }
 
@@ -265,5 +285,7 @@ namespace EggEncoder.Codecs.Flac
         public required int BitsPerSample { get; init; }
 
         public required long TotalSamples { get; init; }
+
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 }

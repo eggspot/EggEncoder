@@ -121,6 +121,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>Probe</code> surfaces an MP3 file's ID3v2.3/2.4 text frames (title, artist, album, etc.) as the same <code>ProbeResult.Tags</code>, keyed by raw frame ID — and <code>Mp3Encoder.Encode</code>/<code>OpenSession</code> can write a fresh ID3v2.4 tag back out too.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#128172;</div>
+          <div class="feature-title">FLAC Vorbis Comment Tags</div>
+          <p class="feature-desc"><code>Probe</code> surfaces a FLAC file's <code>VORBIS_COMMENT</code> metadata block (title, artist, album, etc.) as the same <code>ProbeResult.Tags</code>, keyed by raw field name — and <code>FlacEncoder.Encode</code>/<code>OpenSession</code> can write one back out too.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#127754;</div>
           <div class="feature-title">Stream-based Probe</div>
           <p class="feature-desc"><code>Probe(Stream, AudioFormat)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer. WAV and FLAC today, more formats landing incrementally.</p>

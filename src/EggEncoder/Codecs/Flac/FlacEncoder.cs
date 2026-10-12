@@ -15,10 +15,10 @@ namespace EggEncoder.Codecs.Flac
         private const int FramesPerBlock = 4096;
         public const uint DefaultCompressionLevel = 5;
 
-        public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel)
+        public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null)
         {
             using var wavReader = WavReader.Open(sourceWavFilePath);
-            using var session = OpenSession(destFlacFilePath, wavReader.Channels, wavReader.BitsPerSample, wavReader.SampleRate, compressionLevel);
+            using var session = OpenSession(destFlacFilePath, wavReader.Channels, wavReader.BitsPerSample, wavReader.SampleRate, compressionLevel, tags);
 
             var interleavedBuffer = new int[FramesPerBlock * wavReader.Channels];
 
@@ -35,7 +35,7 @@ namespace EggEncoder.Codecs.Flac
         // encoder this replaces) but currently unused -- this MVP has only one encoding strategy
         // (FIXED predictors, single Rice partition). It'll start meaning something once item 3
         // (LPC search) gives this encoder more than one quality/speed tradeoff to pick between.
-        public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = DefaultCompressionLevel)
+        public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null)
         {
             _ = compressionLevel;
 
@@ -52,10 +52,25 @@ namespace EggEncoder.Codecs.Flac
                 throw new NotSupportedException($"'{destFlacFilePath}' requests {bitsPerSample} bits per sample; FLAC's STREAMINFO can only represent 1-32.");
             }
 
+            // Validate (and build) the Vorbis comment bytes before creating the destination file at
+            // all -- an invalid tag field name should fail loudly up front, not after a partial file
+            // is already on disk (same precedent as Mp3Encoder.OpenSession's own tag validation).
+            var commentListBytes = tags is { Count: > 0 } ? VorbisCommentWriter.BuildCommentListBytes(tags) : null;
+
+            // The VORBIS_COMMENT metadata block's own length field is 24 bits wide, the same
+            // "silently wrapping into a different, wrong-but-valid-looking value instead of
+            // failing" risk the bits-per-sample check above guards against -- checked explicitly
+            // for the same reason.
+            const int MaxMetadataBlockLength = (1 << 24) - 1;
+            if (commentListBytes is { Length: > MaxMetadataBlockLength })
+            {
+                throw new NotSupportedException($"'{destFlacFilePath}' requests a VORBIS_COMMENT block of {commentListBytes.Length} bytes; FLAC's metadata block length field can only represent up to {MaxMetadataBlockLength}.");
+            }
+
             var destStream = File.Create(destFlacFilePath);
             try
             {
-                return FlacEncoderSession.Open(destStream, channels, bitsPerSample, sampleRate);
+                return FlacEncoderSession.Open(destStream, channels, bitsPerSample, sampleRate, commentListBytes);
             }
             catch
             {
@@ -99,14 +114,14 @@ namespace EggEncoder.Codecs.Flac
             _md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
         }
 
-        internal static FlacEncoderSession Open(FileStream destStream, int channels, int bitsPerSample, int sampleRate)
+        internal static FlacEncoderSession Open(FileStream destStream, int channels, int bitsPerSample, int sampleRate, byte[]? commentListBytes = null)
         {
             var writer = new BitWriter();
             writer.WriteBits('f', 8);
             writer.WriteBits('L', 8);
             writer.WriteBits('a', 8);
             writer.WriteBits('C', 8);
-            writer.WriteBits(1, 1); // isLast -- this encoder never writes a second metadata block
+            writer.WriteBits(commentListBytes is null ? 1u : 0u, 1); // isLast -- false only when a VORBIS_COMMENT block follows below
             writer.WriteBits(0, 7); // block type 0: STREAMINFO
             writer.WriteBits(34, 24); // STREAMINFO's payload is always exactly 34 bytes
 
@@ -116,6 +131,18 @@ namespace EggEncoder.Codecs.Flac
             // nothing reads this file while it's only partially written, so the provisional values
             // are never actually observed by a decoder.
             WriteStreamInfoPayload(writer, channels, bitsPerSample, sampleRate, BlockSize, BlockSize, totalSamples: 0, md5: new byte[16]);
+
+            if (commentListBytes is not null)
+            {
+                writer.WriteBits(1, 1); // isLast -- this encoder never writes any metadata block after this one
+                writer.WriteBits(4, 7); // block type 4: VORBIS_COMMENT
+                writer.WriteBits((uint)commentListBytes.Length, 24);
+                foreach (var b in commentListBytes)
+                {
+                    writer.WriteBits(b, 8);
+                }
+            }
+
             destStream.Write(writer.ToArray());
 
             return new FlacEncoderSession(destStream, channels, bitsPerSample, sampleRate);

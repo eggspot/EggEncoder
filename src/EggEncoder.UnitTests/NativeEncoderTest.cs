@@ -638,6 +638,30 @@ namespace EggEncoder.UnitTests
                 probeResult.SampleRate.Should().Be(44100);
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.ChannelLayout.Should().Be("stereo");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_FlacFile_WithVorbisCommentTag_Should_Surface_Tags()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var flacPath = Path.Combine(tempDirectory, "tagged.flac");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+                FlacEncoder.Encode(_wavFixturePath, flacPath, tags: tags);
+
+                var probeResult = await _nativeEncoder.Probe(flacPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {
