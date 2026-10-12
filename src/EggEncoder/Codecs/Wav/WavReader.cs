@@ -415,6 +415,18 @@ namespace EggEncoder.Codecs.Wav
 
                 return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
             }
+            catch (EndOfStreamException e)
+            {
+                // The chunk-walk loop above only checks `stream.Position < stream.Length` BETWEEN
+                // chunks; a chunk whose own declared size claims more bytes than the file actually
+                // has (e.g. a truncated 'fmt ' chunk) runs the raw BinaryReader.ReadInt16/
+                // ReadUInt32 calls reading that chunk's own fields past EOF, throwing the BCL's
+                // own EndOfStreamException rather than the InvalidDataException every other
+                // malformed-input case in this codebase throws (see AiffReader/AuReader's own
+                // identical fix).
+                stream.Dispose();
+                throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
+            }
             catch
             {
                 stream.Dispose();

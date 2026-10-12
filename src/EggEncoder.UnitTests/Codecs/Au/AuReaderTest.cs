@@ -159,6 +159,33 @@ namespace EggEncoder.UnitTests.Codecs.Au
         }
 
         [Fact]
+        public void Open_TruncatedWithinFixedHeader_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Cuts off right after the magic + headerSize fields (8 of the 24 fixed header bytes),
+            // before declaredDataSize/encoding/sampleRate/channels. The raw BinaryReader.ReadUInt32
+            // call for declaredDataSize then runs past EOF -- before this fix, that threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var magic = ".snd"u8.ToArray();
+                var headerSizeBytes = new byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(headerSizeBytes, 24);
+                File.WriteAllBytes(filePath, [.. magic, .. headerSizeBytes]);
+
+                var act = () => AuReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_WithMissingMagic_Should_Throw()
         {
             var filePath = Path.GetTempFileName();
