@@ -85,6 +85,18 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("TIT2", out var tit
     tags: new Dictionary&lt;string, string&gt; { ["TIT2"] = "Title", ["TPE1"] = "Artist" });</code></pre>
       <p>Unlike the read side, write is strict: a tag id must be exactly 4 ASCII characters identifying a text information frame (starts with <code>T</code>, not <code>TXXX</code>) or <code>OpenSession</code> throws <code>ArgumentException</code> before the destination file is even created.</p>
 
+      <h2>FLAC Vorbis Comment Tags</h2>
+      <p><code>Probe</code>-ing a FLAC file with a <code>VORBIS_COMMENT</code> metadata block populates the same <code>ProbeResult.Tags</code>, keyed by the raw field name exactly as stored (e.g. <code>"TITLE"</code>, <code>"ARTIST"</code>, <code>"ALBUM"</code>) rather than remapped to friendlier names or normalized to a particular case:</p>
+      <pre><code class="language-csharp">var probeResult = await mediaEncoder.Probe("tagged.flac");
+if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("TITLE", out var title))
+{
+    Console.WriteLine($"Title: {title}");
+}</code></pre>
+      <p><code>Tags</code> is <code>null</code> for every non-WAV/MP3/FLAC format, and for a FLAC file with no <code>VORBIS_COMMENT</code> block. A malformed or out-of-bounds field degrades gracefully (returns whatever parsed cleanly before that) rather than throwing, the same convention WAV's and MP3's own tag parsing established above. <code>FlacEncoder.Encode</code>/<code>OpenSession</code> can write a tag back out too, via an optional <code>tags</code> parameter — writes a <code>VORBIS_COMMENT</code> block immediately after STREAMINFO:</p>
+      <pre><code class="language-csharp">FlacEncoder.Encode("source.wav", "tagged.flac",
+    tags: new Dictionary&lt;string, string&gt; { ["TITLE"] = "Title", ["ARTIST"] = "Artist" });</code></pre>
+      <p>Unlike the read side, write is strict: a field name must be non-empty, printable ASCII, and must not contain <code>=</code>, or <code>OpenSession</code> throws <code>ArgumentException</code> before the destination file is even created.</p>
+
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
       <pre><code class="language-csharp">using var response = await httpClient.GetStreamAsync(audioUrl);

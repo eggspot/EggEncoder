@@ -127,6 +127,22 @@ Unlike read, write is strict: a tag id must be exactly 4 ASCII characters starti
 (`TXXX` unsupported) or `OpenSession` throws `ArgumentException` before the destination file is
 even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
 
+## FLAC Vorbis Comment Tags
+
+`Probe`-ing a FLAC file with a `VORBIS_COMMENT` metadata block populates the same
+`ProbeResult.Tags`, keyed by the raw field name exactly as stored (e.g. `"TITLE"`, `"ARTIST"`,
+not remapped to friendlier names or normalized to a particular case). The underlying
+vendor+comment-list structure (`Codecs.VorbisCommentReader`/`VorbisCommentWriter`, in the
+top-level `Codecs` namespace rather than `Codecs.Flac`) is shared with Opus/Vorbis's own
+`OpusTags`/Vorbis comment header packet, since it's a Vorbis-spec convention independent of which
+container embeds it -- only the outer framing differs per format. A malformed or out-of-bounds
+field degrades gracefully (returns whatever parsed cleanly) rather than throwing, the same
+convention WAV's own tag parsing and MP3's ID3v2 tag parsing already established.
+`FlacEncoder.Encode`/`OpenSession` can write a tag back out too, via an optional `tags` parameter
+-- writes a `VORBIS_COMMENT` block immediately after STREAMINFO. Unlike read, write is strict: a
+field name must be non-empty, printable ASCII, and must not contain `=`, or `OpenSession` throws
+`ArgumentException` before the destination file is even created.
+
 ## Constraints
 
 - EggEncoder is 100% pure managed C# with no native binaries at all — it's genuinely cross-platform, not just Windows x64

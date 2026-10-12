@@ -53,11 +53,11 @@ public class ProbeResult
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
-    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM") or MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"); null for every other format, or a WAV/MP3 with none
+    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM"), MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC VORBIS_COMMENT fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/MP3/FLAC with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3 (see each format's own section below).
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder.Encode`/`OpenSession`'s own `tags` parameter for FLAC (see each format's own section below).
 
 ## Dependency Injection
 
@@ -370,22 +370,33 @@ public static class FlacDecoder
 {
     public static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded);
     public static FlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
+    // FlacStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (VORBIS_COMMENT metadata block, or null)
 }
 
 public static class FlacEncoder
 {
     public const uint DefaultCompressionLevel = 5;
-    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel);
+    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a VORBIS_COMMENT block right after STREAMINFO
 }
 
 public sealed class FlacEncoderSession : IDisposable
 {
-    public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel);
+    public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+
+internal static class VorbisCommentReader // EggEncoder.Codecs -- shared with Opus/Vorbis's own comment header packet
+{
+    internal static IReadOnlyDictionary<string, string> ReadFrom(byte[] buffer, int offset, int length);
+}
+
+internal static class VorbisCommentWriter // EggEncoder.Codecs
+{
+    internal static byte[] BuildCommentListBytes(IReadOnlyDictionary<string, string> tags); // throws ArgumentException for a field name that's empty, non-ASCII, or contains '='
 }
 ```
 
-FLAC is fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). The former `EggEncoder.Native.FlacNative` P/Invoke declarations, `NativeLibraryLoader`, and the bundled `libFLAC.dll` binary have all been fully removed (docs/managed-codec-rewrite-plan.md item 8) now that every codec -- FLAC included -- is pure managed; this project no longer bundles or loads a native binary of any kind, and CI now builds and tests on Windows, Linux, and macOS.
+FLAC is fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). The former `EggEncoder.Native.FlacNative` P/Invoke declarations, `NativeLibraryLoader`, and the bundled `libFLAC.dll` binary have all been fully removed (docs/managed-codec-rewrite-plan.md item 8) now that every codec -- FLAC included -- is pure managed; this project no longer bundles or loads a native binary of any kind, and CI now builds and tests on Windows, Linux, and macOS. `VorbisCommentReader`/`VorbisCommentWriter` (`Codecs/VorbisComment.cs`) read and write the `VORBIS_COMMENT` metadata block, read via `FlacDecoder`/written via `FlacEncoder` -- see the "FLAC Vorbis Comment Tags" section of `llms.txt` for the full scope.
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
