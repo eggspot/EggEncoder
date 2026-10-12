@@ -26,7 +26,13 @@ namespace EggEncoder.Codecs
         public static IReadOnlyDictionary<string, string> ReadFrom(byte[] buffer, int offset, int length)
         {
             var tags = new Dictionary<string, string>();
-            var end = offset + length;
+
+            // Clamped to the buffer's own actual length, not just the caller-declared range -- a
+            // truncated file can declare a block length that reaches past the real end of the
+            // buffer, and every bounds check below only guards against `end`, so without this
+            // clamp a truncated file would throw IndexOutOfRangeException instead of degrading
+            // gracefully like every other malformed-input case this type handles.
+            var end = Math.Min(offset + length, buffer.Length);
             var position = offset;
 
             if (!TryReadUInt32LittleEndian(buffer, ref position, end, out var vendorLength) ||

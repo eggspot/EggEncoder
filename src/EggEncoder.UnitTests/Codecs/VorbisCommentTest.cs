@@ -134,6 +134,33 @@ namespace EggEncoder.UnitTests.Codecs
             readTags.Should().BeEmpty();
         }
 
+        [Fact]
+        public void ReadFrom_WithDeclaredLengthLongerThanActualBuffer_Should_ReturnEmpty_NotThrow()
+        {
+            // A truncated FLAC file can declare a VORBIS_COMMENT block length that reaches past the
+            // real end of the loaded file bytes -- every internal bounds check here only compares
+            // against the caller-declared range, so without an explicit clamp to the buffer's own
+            // actual length, this would throw IndexOutOfRangeException instead of degrading
+            // gracefully like every other malformed-input case this type handles.
+            var tags = new Dictionary<string, string> { ["TITLE"] = "Title" };
+            var commentBytes = VorbisCommentWriter.BuildCommentListBytes(tags);
+            var truncated = commentBytes[..(commentBytes.Length - 4)];
+
+            var act = () => VorbisCommentReader.ReadFrom(truncated, 0, commentBytes.Length);
+
+            act.Should().NotThrow();
+            act().Should().BeEmpty();
+        }
+
+        [Fact]
+        public void ReadFrom_WithOffsetPastEndOfBuffer_Should_ReturnEmpty_NotThrow()
+        {
+            var act = () => VorbisCommentReader.ReadFrom(new byte[4], offset: 100, length: 10);
+
+            act.Should().NotThrow();
+            act().Should().BeEmpty();
+        }
+
         private static void WriteUInt32LittleEndian(Stream stream, uint value)
         {
             stream.WriteByte((byte)value);
