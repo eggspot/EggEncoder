@@ -72,6 +72,19 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("INAM", out var tit
     totalFrames: frameCount, tags: new Dictionary&lt;string, string&gt; { ["INAM"] = "Title", ["IART"] = "Artist" });</code></pre>
       <p>Threads through every <code>WavSampleFormat</code>, including the block-structured ADPCM variants. Unlike the read side, write is strict: a tag id must be exactly 4 ASCII characters (RIFF's own FourCC convention, e.g. <code>"INAM"</code>) or <code>Create</code> throws <code>ArgumentException</code> immediately — writing a well-formed file is a hard requirement here, unlike reading an already-on-disk file's possibly-malformed metadata.</p>
 
+      <h2>MP3 ID3v2 Tags</h2>
+      <p><code>Probe</code>-ing an MP3 file with an ID3v2.3/2.4 tag populates the same <code>ProbeResult.Tags</code>, keyed by the raw four-character frame ID exactly as ID3v2 stores it (e.g. <code>"TIT2"</code> for title, <code>"TPE1"</code> for artist, <code>"TALB"</code> for album) rather than remapped to friendlier names — scoped to text information frames (any frame ID starting with <code>T</code>, except <code>TXXX</code>'s own user-defined description+value structure):</p>
+      <pre><code class="language-csharp">var probeResult = await mediaEncoder.Probe("tagged.mp3");
+if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("TIT2", out var title))
+{
+    Console.WriteLine($"Title: {title}");
+}</code></pre>
+      <p><code>Tags</code> is <code>null</code> for every non-WAV/MP3 format, and for an MP3 that simply doesn't carry an ID3v2 tag. A real but rare tag feature this reader doesn't decode (the extended header, whole-tag unsynchronization, a major version other than 2.3/2.4, or a per-frame compression/encryption/grouping/unsynchronization flag) degrades gracefully to an empty or partial tag rather than throwing — the same "decorative metadata" convention WAV's own tag parsing established above.</p>
+      <p><code>Mp3Encoder.Encode</code>/<code>OpenSession</code> can write a tag back out too, via an optional <code>tags</code> parameter — always emits a fresh ID3v2.4 tag (UTF-8 text) prepended before the audio frames:</p>
+      <pre><code class="language-csharp">Mp3Encoder.Encode("source.wav", "tagged.mp3",
+    tags: new Dictionary&lt;string, string&gt; { ["TIT2"] = "Title", ["TPE1"] = "Artist" });</code></pre>
+      <p>Unlike the read side, write is strict: a tag id must be exactly 4 ASCII characters identifying a text information frame (starts with <code>T</code>, not <code>TXXX</code>) or <code>OpenSession</code> throws <code>ArgumentException</code> before the destination file is even created.</p>
+
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
       <pre><code class="language-csharp">using var response = await httpClient.GetStreamAsync(audioUrl);

@@ -111,6 +111,22 @@ throughout, same as its path-based overload's own `FileStream` always provides),
 `FlacDecoder`'s needs no seek at all (it reads its whole source into memory before parsing
 anything, the same as its path-based overload already did).
 
+## MP3 ID3v2 Tags
+
+`Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own
+`'LIST'`/`'INFO'` chunk does, keyed by the raw four-character frame ID (e.g. `"TIT2"` for title,
+`"TPE1"` for artist) rather than remapped to friendlier names. Scoped to text information frames
+(any frame ID starting with `T`, except `TXXX`'s own user-defined description+value structure,
+out of scope) -- a real but rare tag feature (extended header, whole-tag unsynchronization, a
+major version other than 2.3/2.4, or a per-frame compression/encryption/grouping/unsynchronization
+flag) degrades gracefully to an empty or partial tag rather than throwing, the same "decorative
+metadata" convention WAV's own tag parsing already established. `Mp3Encoder.Encode`/`OpenSession`
+can write a tag back out too, via an optional `tags` parameter (mirroring `WavWriter.Create`'s
+own) -- always emits a fresh ID3v2.4 tag with UTF-8 text, prepended before any audio frame bytes.
+Unlike read, write is strict: a tag id must be exactly 4 ASCII characters starting with `T`
+(`TXXX` unsupported) or `OpenSession` throws `ArgumentException` before the destination file is
+even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
+
 ## Constraints
 
 - EggEncoder is 100% pure managed C# with no native binaries at all — it's genuinely cross-platform, not just Windows x64

@@ -21,10 +21,10 @@ namespace EggEncoder.Codecs.Mp3
         public const int DefaultBitRateKbps = 320;
         private const int FramesPerBlock = 4096;
 
-        public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps)
+        public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null)
         {
             using var wavReader = WavReader.Open(sourceWavFilePath);
-            using var session = OpenSession(destMp3FilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, bitRateKbps);
+            using var session = OpenSession(destMp3FilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, bitRateKbps, tags);
 
             var interleavedBuffer = new int[FramesPerBlock * wavReader.Channels];
 
@@ -37,9 +37,19 @@ namespace EggEncoder.Codecs.Mp3
             session.Finish();
         }
 
-        public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps)
+        public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null)
         {
+            // Validate (and build) the tag bytes before touching the destination file at all -- an
+            // invalid tag id should fail loudly up front, not after a partial file is already on
+            // disk.
+            var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
+
             var destStream = File.Create(destMp3FilePath);
+            if (tagBytes is not null)
+            {
+                destStream.Write(tagBytes);
+            }
+
             return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, bitRateKbps);
         }
     }

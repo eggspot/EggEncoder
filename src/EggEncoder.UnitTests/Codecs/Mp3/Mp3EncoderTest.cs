@@ -61,5 +61,77 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                 Directory.Delete(tempDirectory, recursive: true);
             }
         }
+
+        [Fact]
+        public void Encode_WithTags_Should_Produce_Mp3_Whose_Id3v2Tag_RoundTrips_Through_Probe()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var mp3Path = Path.Combine(tempDirectory, "tagged.mp3");
+                var tags = new Dictionary<string, string> { ["TIT2"] = "Title", ["TPE1"] = "Artist" };
+
+                Mp3Encoder.Encode(_wavFixturePath, mp3Path, tags: tags);
+
+                var probeResult = Mp3Probe.Probe(mp3Path);
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(2);
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TIT2").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("TPE1").WhoseValue.Should().Be("Artist");
+
+                var (streamInfo, samples) = Mp3TestDecoder.DecodeAll(mp3Path);
+                streamInfo.Channels.Should().Be(2);
+                samples.Should().NotBeEmpty();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Encode_WithoutTags_Should_Produce_Mp3_With_NullTags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var mp3Path = Path.Combine(tempDirectory, "untagged.mp3");
+                Mp3Encoder.Encode(_wavFixturePath, mp3Path);
+
+                var probeResult = Mp3Probe.Probe(mp3Path);
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void OpenSession_WithInvalidTagId_Should_Throw_Before_Creating_DestFile()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var mp3Path = Path.Combine(tempDirectory, "invalid.mp3");
+                var tags = new Dictionary<string, string> { ["BAD"] = "value" };
+
+                var act = () => Mp3Encoder.OpenSession(mp3Path, channels: 2, sampleRate: 44100, bitsPerSample: 16, tags: tags);
+
+                act.Should().Throw<ArgumentException>();
+                File.Exists(mp3Path).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
     }
 }
