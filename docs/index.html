@@ -116,6 +116,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>Probe</code> surfaces a WAV file's <code>'LIST'</code>/<code>'INFO'</code> chunk (title, artist, etc.) as <code>ProbeResult.Tags</code>, keyed by raw chunk ID — and <code>WavWriter.Create</code> can write them back out too.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#127754;</div>
+          <div class="feature-title">Stream-based Probe</div>
+          <p class="feature-desc"><code>Probe(Stream, AudioFormat)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer. WAV and FLAC today, more formats landing incrementally.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#9986;</div>
           <div class="feature-title">Sample-Accurate Cutting</div>
           <p class="feature-desc">Trim any supported source, into any supported destination format, without a full decode&rarr;encode round trip on the untouched region.</p>

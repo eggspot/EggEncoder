@@ -15,9 +15,34 @@ namespace EggEncoder.Codecs.Flac
 
         public static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded)
         {
+            var fileBytes = File.ReadAllBytes(flacFilePath);
+            return Decode(fileBytes, flacFilePath, onBlockDecoded);
+        }
+
+        /// <summary>
+        /// Decodes a FLAC source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). Unlike WAV's own Stream-based <c>Open</c>, this never needs
+        /// <see cref="Stream.CanSeek"/>: the decoder already reads its whole source into memory up
+        /// front (see this type's own doc comment), so any forward-readable stream works, seekable
+        /// or not. Does NOT take ownership of <paramref name="stream"/> -- the caller opened it, so
+        /// the caller is responsible for disposing it; this call never closes it.
+        /// </summary>
+        public static FlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Decode(memoryStream.ToArray(), "<stream>", onBlockDecoded);
+        }
+
+        private static FlacStreamInfo Decode(byte[] fileBytes, string flacFilePath, AudioBlockDecodedCallback onBlockDecoded)
+        {
             try
             {
-                return DecodeCore(flacFilePath, onBlockDecoded);
+                return DecodeCore(fileBytes, flacFilePath, onBlockDecoded);
             }
             catch (EndOfStreamException e)
             {
@@ -29,9 +54,8 @@ namespace EggEncoder.Codecs.Flac
             }
         }
 
-        private static FlacStreamInfo DecodeCore(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded)
+        private static FlacStreamInfo DecodeCore(byte[] fileBytes, string flacFilePath, AudioBlockDecodedCallback onBlockDecoded)
         {
-            var fileBytes = File.ReadAllBytes(flacFilePath);
             var reader = new BitReader(fileBytes);
 
             var metadata = ReadMetadata(flacFilePath, reader);

@@ -62,6 +62,56 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_Stream_WavFormat_Should_Return_Same_Metadata_As_Path_Based_Probe()
+        {
+            using var stream = File.OpenRead(_wavFixturePath);
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Wav);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_wavFixturePath).Length);
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(2);
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.Tags.Should().NotBeNull();
+            probeResult.Tags!.Should().ContainKey("ISFT");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_FlacFormat_Should_Return_Correct_Metadata()
+        {
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+            using var stream = new MemoryStream(bytes);
+
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Flac);
+
+            probeResult.FormatName.Should().Be("flac");
+            probeResult.CodecName.Should().Be("flac");
+            probeResult.SampleRate.Should().Be(8000);
+            probeResult.Channels.Should().Be(1);
+            probeResult.BitsPerSample.Should().Be(8);
+            probeResult.DurationInSamples.Should().Be(16);
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithNullSource_Should_Throw()
+        {
+            var act = async () => await _nativeEncoder.Probe((Stream)null!, AudioFormat.Wav);
+            await act.Should().ThrowAsync<ArgumentNullException>();
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithUnsupportedFormat_Should_ThrowNotSupportedException()
+        {
+            // Only Wav/Flac are wired up for the Stream-based overload so far -- see
+            // docs/feature-roadmap.md item 1 for status. Every other AudioFormat should fail
+            // clearly rather than silently misbehaving.
+            using var stream = new MemoryStream();
+            var act = async () => await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+            await act.Should().ThrowAsync<NotSupportedException>();
+        }
+
+        [Fact]
         public async Task Probe_WavFile_WithListInfoChunk_Should_Surface_Tags()
         {
             // End-to-end: confirms NativeEncoder.Probe actually wires WavReader.Tags through to

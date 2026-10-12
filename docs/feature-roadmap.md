@@ -72,8 +72,12 @@ external process" pitch doesn't really deliver on for that case.
   `DeferredWavSink` buffering trick) because it writes a fixed header with no patch-up; `FlacEncoder`
   patches STREAMINFO in place at `Finish()` by seeking back to a fixed byte offset. Both already
   work against a `FileStream` *because* `FileStream` is seekable — the new overloads should accept
-  any `Stream` for *reading* (decode only ever reads forward) but require `CanSeek` for any
-  *destination* that one of those two codecs backs, and throw a clear `ArgumentException` up
+  any `Stream` for *reading* **in principle**, but this needs checking per format, not assumed
+  uniformly: `WavReader`'s own chunk-walk parses by alternating `Stream.Position`/`Seek` calls
+  throughout (confirmed while implementing item 1's own first slice — see Status below), so its
+  own `Open(Stream)` requires `CanSeek` same as a destination would, while `FlacDecoder` genuinely
+  needs no seek at all (it reads its whole source into memory up front before parsing anything).
+  Require `CanSeek` for any *destination* that `WavWriter`/`FlacEncoder` backs, and throw a clear `ArgumentException` up
   front rather than failing confusingly mid-write against a non-seekable destination (e.g. an
   HTTP response body stream). Every other destination codec here already streams forward-only
   with no seek-back, so this restriction is narrower than "every destination must be seekable."
@@ -96,6 +100,18 @@ can expose `Task`-returning signatures (matching `IMediaEncoder`'s own existing 
 run synchronously against the given stream under the hood, same as how `Probe`/`ConvertFile`
 already work today — genuine async I/O is its own, later roadmap item if real usage shows it's
 needed.
+
+**Status: first slice done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
+enum, the interface method, and real `Stream` support for two formats chosen specifically to
+prove both of the adaptation shapes this item's own design called out: `WavReader.Open(Stream)`
+(the `FileStream`-field-widened-to-`Stream` shape, confirmed to need `CanSeek` after all — see the
+correction above) and `FlacDecoder.Decode(Stream, ...)` (the read-fully-into-`byte[]` shape,
+confirmed to need no seek at all). Every other `AudioFormat` still throws `NotSupportedException`
+from `Probe(Stream, AudioFormat)` with a message pointing back here. `ConvertFile`/`CutFile`'s own
+`Stream` overloads (the destination-seekability half) are not started. Next up for this item,
+in order: AIFF and AU (identical `FileStream`-widening shape to WAV, already touched by the
+truncation-exception fix so the pattern is fresh); AAC and WavPack decode (identical
+read-fully-into-`byte[]` shape to FLAC); then the harder `ConvertFile`/`CutFile` destination half.
 
 ## 2. Format-native metadata tags
 

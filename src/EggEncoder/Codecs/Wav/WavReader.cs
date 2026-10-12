@@ -13,7 +13,8 @@ namespace EggEncoder.Codecs.Wav
         private const int YamahaAdpcmFormatTag = 32;
         private const int WaveFormatExtensibleTag = 0xFFFE;
 
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly long _dataChunkLength;
         private readonly bool _isFloatFormat;
         private readonly bool _isALaw;
@@ -63,9 +64,10 @@ namespace EggEncoder.Codecs.Wav
 
         private readonly IReadOnlyDictionary<string, string>? _tags;
 
-        private WavReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2, bool isYamahaAdpcm, IReadOnlyDictionary<string, string>? tags)
+        private WavReader(Stream stream, int channels, int sampleRate, int bitsPerSample, bool isFloatFormat, long dataChunkStart, long dataChunkLength, long totalSamples, bool isAdpcm, int adpcmBlockAlign, int adpcmSamplesPerBlock, bool isALaw, bool isMuLaw, bool isMsAdpcm, int msAdpcmBlockAlign, int msAdpcmSamplesPerBlock, short[] msAdpcmCoeff1, short[] msAdpcmCoeff2, bool isYamahaAdpcm, IReadOnlyDictionary<string, string>? tags, bool leaveOpen)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _dataChunkLength = dataChunkLength;
             _isFloatFormat = isFloatFormat;
             _isALaw = isALaw;
@@ -138,6 +140,31 @@ namespace EggEncoder.Codecs.Wav
         public static WavReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return OpenCore(stream, filePath, leaveOpen: false);
+        }
+
+        /// <summary>
+        /// Opens a WAV source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). Must be seekable: the header parse below relies on <see cref="Stream.Position"/>/
+        /// <see cref="Stream.Seek"/> throughout, the same way the path-based overload's own
+        /// <see cref="FileStream"/> always is. Unlike the path-based overload, this does NOT take
+        /// ownership of <paramref name="stream"/> -- the caller opened it, so the caller is
+        /// responsible for disposing it; this type's own <see cref="Dispose"/> leaves it open.
+        /// </summary>
+        public static WavReader Open(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanSeek)
+            {
+                throw new ArgumentException("WavReader requires a seekable stream -- its header parse relies on Stream.Position/Seek throughout", nameof(stream));
+            }
+
+            return OpenCore(stream, "<stream>", leaveOpen: true);
+        }
+
+        private static WavReader OpenCore(Stream stream, string filePath, bool leaveOpen)
+        {
             try
             {
                 using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
@@ -320,7 +347,7 @@ namespace EggEncoder.Codecs.Wav
                     // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
                 }
 
                 if (isMsAdpcm)
@@ -356,7 +383,7 @@ namespace EggEncoder.Codecs.Wav
                     // back to the data chunk's own block count only if it's missing entirely.
                     var msAdpcmTotalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * msAdpcmSamplesPerBlock;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false, tags);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false, tags, leaveOpen);
                 }
 
                 if (isYamahaAdpcm)
@@ -378,7 +405,7 @@ namespace EggEncoder.Codecs.Wav
                     // is absent.
                     var yamahaTotalSamples = factChunkTotalSamples ?? (dataChunkLength * 2) / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true, tags);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true, tags, leaveOpen);
                 }
 
                 if (isALaw || isMuLaw)
@@ -396,7 +423,7 @@ namespace EggEncoder.Codecs.Wav
                     // byte count divided evenly across channels.
                     var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
 
-                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
+                    return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
                 }
 
                 if (isFloatFormat)
@@ -413,7 +440,7 @@ namespace EggEncoder.Codecs.Wav
 
                 var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
 
-                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags);
+                return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
             }
             catch (EndOfStreamException e)
             {
@@ -423,13 +450,23 @@ namespace EggEncoder.Codecs.Wav
                 // ReadUInt32 calls reading that chunk's own fields past EOF, throwing the BCL's
                 // own EndOfStreamException rather than the InvalidDataException every other
                 // malformed-input case in this codebase throws (see AiffReader/AuReader's own
-                // identical fix).
-                stream.Dispose();
+                // identical fix). Only disposes a stream this method itself owns -- the
+                // Stream-based Open(Stream) overload above never does, leaving the caller's own
+                // stream exactly as they gave it.
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -809,7 +846,10 @@ namespace EggEncoder.Codecs.Wav
 
         public void Dispose()
         {
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
     }
 }
