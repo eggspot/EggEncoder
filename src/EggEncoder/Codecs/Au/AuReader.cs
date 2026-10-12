@@ -129,6 +129,16 @@ namespace EggEncoder.Codecs.Au
 
                 return new AuReader(stream, channels, sampleRate, reportedBitsPerSample, totalSamples, sampleDataStart, sampleDataLength, encoding, bytesPerDiskSample);
             }
+            catch (EndOfStreamException e)
+            {
+                // A file truncated before all 24 bytes of AU's own fixed header are present runs
+                // the raw BinaryReader.ReadUInt32 calls above past EOF, throwing the BCL's own
+                // EndOfStreamException rather than the InvalidDataException every other
+                // malformed-input case in this codebase throws (see WavReader/AiffReader's own
+                // identical fix).
+                stream.Dispose();
+                throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
+            }
             catch
             {
                 stream.Dispose();

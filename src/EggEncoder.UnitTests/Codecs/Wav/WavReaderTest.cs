@@ -196,6 +196,42 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_TruncatedWithinFmtChunk_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Declares a normal, complete-looking 16-byte 'fmt ' chunk (chunkSize=16), but the file
+            // physically ends after only 4 of those 16 bytes (formatTag + channels), before
+            // sampleRate. The chunk-walk loop's own `stream.Position < stream.Length` check only
+            // runs BETWEEN chunks, so it never catches this -- the raw BinaryReader.ReadUInt32 call
+            // for sampleRate then runs past EOF. Before this fix, that threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws (see AiffReader/AuReader's own identical fix).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write("RIFF"u8);
+                    writer.Write((uint)36);
+                    writer.Write("WAVE"u8);
+                    writer.Write("fmt "u8);
+                    writer.Write((uint)16); // declares a full 16-byte PCM fmt chunk payload
+                    writer.Write((ushort)1); // formatTag = PCM
+                    writer.Write((ushort)1); // channels = 1
+                    // file ends here -- sampleRate/byteRate/blockAlign/bitsPerSample never written
+                }
+
+                var act = () => WavReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_ImaAdpcmMono_Should_Decode_BitExact_Against_FfmpegAndCoreAudio_GroundTruth()
         {
             // The ground-truth .pcm was generated once by decoding a real ffmpeg-produced IMA ADPCM

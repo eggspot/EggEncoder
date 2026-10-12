@@ -219,6 +219,18 @@ namespace EggEncoder.Codecs.Aiff
 
                 return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample);
             }
+            catch (EndOfStreamException e)
+            {
+                // The chunk-walk loop above only checks `stream.Position < stream.Length` BETWEEN
+                // chunks; a chunk whose own declared size claims more bytes than the file actually
+                // has (e.g. a truncated COMM chunk) runs the raw BinaryReader.ReadInt16/ReadUInt32
+                // calls reading that chunk's own fields past EOF, throwing the BCL's own
+                // EndOfStreamException rather than the InvalidDataException every other
+                // malformed-input case in this codebase throws (see WavReader/AuReader's own
+                // identical fix).
+                stream.Dispose();
+                throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
+            }
             catch
             {
                 stream.Dispose();

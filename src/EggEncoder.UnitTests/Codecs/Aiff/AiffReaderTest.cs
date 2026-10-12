@@ -304,6 +304,35 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
+        public void Open_TruncatedWithinCommChunk_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Unlike Open_Missing_SsndChunk_Should_Throw above (which truncates AFTER a complete
+            // chunk, so the chunk-walk loop's own `stream.Position < stream.Length` check simply
+            // exits cleanly before the next chunk), this truncates WITHIN the COMM chunk's own
+            // declared fields -- the loop has already committed to reading a chunk whose declared
+            // size claims more bytes than the file actually has. Before this fix, the inner
+            // `reader.ReadInt16()` call for bitsPerSample ran past EOF and threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws (see AsfContainerReader.EnsureBytesAvailable's own doc comment, which
+            // names this exact reader as already following that convention -- it wasn't, for this
+            // specific truncation shape).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, [1, 2]);
+                TruncateWithinCommChunk(filePath);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_OddSizedChunk_Should_Skip_The_Pad_Byte()
         {
             // 1 channel, 8-bit, 3 frames = 3 (odd) data bytes -- AiffFileBuilder writes the IFF pad byte.
@@ -949,6 +978,19 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
 
             var bytes = File.ReadAllBytes(filePath);
             File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkTotalSize)]);
+        }
+
+        // Cuts the file off partway through COMM's own declared 18-byte payload (after just
+        // channels + totalSampleFrames = 6 bytes, before bitsPerSample's own 2 bytes) -- unlike
+        // TruncateAfterCommChunk above, which cuts after a COMPLETE chunk.
+        private static void TruncateWithinCommChunk(string filePath)
+        {
+            const int formHeaderSize = 12;
+            const int commChunkHeaderSize = 8;
+            const int partialCommPayloadSize = 6;
+
+            var bytes = File.ReadAllBytes(filePath);
+            File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkHeaderSize + partialCommPayloadSize)]);
         }
     }
 }
