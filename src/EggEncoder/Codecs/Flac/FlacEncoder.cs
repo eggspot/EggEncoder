@@ -57,6 +57,16 @@ namespace EggEncoder.Codecs.Flac
             // is already on disk (same precedent as Mp3Encoder.OpenSession's own tag validation).
             var commentListBytes = tags is { Count: > 0 } ? VorbisCommentWriter.BuildCommentListBytes(tags) : null;
 
+            // The VORBIS_COMMENT metadata block's own length field is 24 bits wide, the same
+            // "silently wrapping into a different, wrong-but-valid-looking value instead of
+            // failing" risk the bits-per-sample check above guards against -- checked explicitly
+            // for the same reason.
+            const int MaxMetadataBlockLength = (1 << 24) - 1;
+            if (commentListBytes is { Length: > MaxMetadataBlockLength })
+            {
+                throw new NotSupportedException($"'{destFlacFilePath}' requests a VORBIS_COMMENT block of {commentListBytes.Length} bytes; FLAC's metadata block length field can only represent up to {MaxMetadataBlockLength}.");
+            }
+
             var destStream = File.Create(destFlacFilePath);
             try
             {

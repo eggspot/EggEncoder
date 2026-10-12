@@ -80,6 +80,29 @@ namespace EggEncoder.UnitTests.Codecs.Flac
         }
 
         [Fact]
+        public void OpenSession_WithTagsExceedingMetadataBlockLengthLimit_Should_Throw_Before_Creating_DestFile()
+        {
+            // VORBIS_COMMENT's own metadata block length field is 24 bits wide (max 16,777,215
+            // bytes) -- a tag large enough to exceed it must fail loudly, not silently wrap into a
+            // different, wrong-but-valid-looking block length.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var flacPath = Path.Combine(tempDirectory, "toolarge.flac");
+                var tags = new Dictionary<string, string> { ["HUGE"] = new string('a', 17_000_000) };
+
+                var act = () => FlacEncoder.OpenSession(flacPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, tags: tags);
+
+                act.Should().Throw<NotSupportedException>();
+                File.Exists(flacPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void OpenSession_WithInvalidTagFieldName_Should_Throw_Before_Creating_DestFile()
         {
             var tempDirectory = CreateTempDirectory();
