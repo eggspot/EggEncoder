@@ -22,9 +22,12 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Flac implemented so far -- see docs/feature-roadmap.md item 1
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }
+
+public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vorbis, WavPack, Mov } // mirrors AudioCutter's own extension-dispatch switch 1:1
 ```
 
 ```csharp
@@ -366,6 +369,7 @@ public sealed class AacEncoderSession : IDisposable
 public static class FlacDecoder
 {
     public static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static FlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
 }
 
 public static class FlacEncoder
@@ -418,6 +422,7 @@ MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quant
 public sealed class WavReader : IDisposable
 {
     public static WavReader Open(string filePath);
+    public static WavReader Open(Stream stream); // requires stream.CanSeek -- header chunk-walk relies on Position/Seek; does NOT dispose stream
     public int Channels { get; }
     public int SampleRate { get; }
     public int BitsPerSample { get; }

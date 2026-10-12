@@ -72,6 +72,12 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("INAM", out var tit
     totalFrames: frameCount, tags: new Dictionary&lt;string, string&gt; { ["INAM"] = "Title", ["IART"] = "Artist" });</code></pre>
       <p>Threads through every <code>WavSampleFormat</code>, including the block-structured ADPCM variants. Unlike the read side, write is strict: a tag id must be exactly 4 ASCII characters (RIFF's own FourCC convention, e.g. <code>"INAM"</code>) or <code>Create</code> throws <code>ArgumentException</code> immediately — writing a well-formed file is a hard requirement here, unlike reading an already-on-disk file's possibly-malformed metadata.</p>
 
+      <h2>Stream-based Probing</h2>
+      <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
+      <pre><code class="language-csharp">using var response = await httpClient.GetStreamAsync(audioUrl);
+var probeResult = await mediaEncoder.Probe(response, AudioFormat.Flac);</code></pre>
+      <p>Implemented so far for <code>AudioFormat.Wav</code> and <code>AudioFormat.Flac</code>, each with a different seek requirement: <code>WavReader.Open(Stream)</code> requires <code>source.CanSeek</code>, since WAV's chunk-walk header parse relies on <code>Stream.Position</code>/<code>Seek</code> throughout, while <code>FlacDecoder.Decode(Stream, ...)</code> needs no seek support at all (it reads the whole source into memory up front). Every other <code>AudioFormat</code> value throws <code>NotSupportedException</code> for now — use the path-based <code>Probe(string)</code> overload for those in the meantime. More formats land incrementally; see <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 1 for current status.</p>
+
       <h2>Sample-Accurate Cutting</h2>
       <p><code>NativeEncoder.CutFile</code> (backed by <code>AudioCutter.Cut</code>) decodes any supported source (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack, or MOV/MP4 with a mono AAC-LC audio track) and writes any supported destination format without re-encoding the untouched region where the format allows frame-boundary slicing:</p>
       <pre><code class="language-csharp">using EggEncoder.Codecs;

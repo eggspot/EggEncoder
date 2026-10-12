@@ -7,6 +7,90 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 {
     public class WavReaderTest
     {
+        // -------- Stream-based Open --------
+
+        [Fact]
+        public void Open_Stream_Should_Round_Trip_Header_And_Samples_Same_As_Path_Based_Open()
+        {
+            var samples = new[] { 0, 1000, -1000, 32767, -32768 };
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, samples);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream(bytes);
+                using var reader = WavReader.Open(memoryStream);
+
+                reader.Channels.Should().Be(1);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            // Unlike Open(string), which owns and disposes its own FileStream, Open(Stream) takes
+            // no ownership -- the caller opened it, so the caller is responsible for closing it.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                var memoryStream = new MemoryStream(bytes);
+                var reader = WavReader.Open(memoryStream);
+                reader.Dispose();
+
+                // A disposed MemoryStream throws ObjectDisposedException on any further access --
+                // this would throw if Dispose() above had disposed it.
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => WavReader.Open((Stream)null!);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Open_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var nonSeekable = new NonSeekableStream(bytes);
+                var act = () => WavReader.Open(nonSeekable);
+
+                act.Should().Throw<ArgumentException>().And.ParamName.Should().Be("stream");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Fact]
         public void Open_16Bit_Stereo_Should_Read_Header_And_Samples()
         {

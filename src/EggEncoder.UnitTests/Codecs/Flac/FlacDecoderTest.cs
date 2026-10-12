@@ -521,6 +521,72 @@ namespace EggEncoder.UnitTests.Codecs.Flac
 
         // ---------------------------------------------------------------- helpers
 
+        // -------- Stream-based Decode --------
+
+        [Fact]
+        public void Decode_Stream_Should_Round_Trip_Same_As_Path_Based_Decode()
+        {
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+
+            using var memoryStream = new MemoryStream(bytes);
+            var samples = new List<int>();
+            var info = FlacDecoder.Decode(memoryStream, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+            info.Channels.Should().Be(1);
+            info.BitsPerSample.Should().Be(8);
+            info.SampleRate.Should().Be(8000);
+            info.TotalSamples.Should().Be(16);
+            samples.Should().Equal(Enumerable.Repeat(42, 16));
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_NotDispose_TheCallersStream()
+        {
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+
+            var memoryStream = new MemoryStream(bytes);
+            FlacDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+            var act = () => memoryStream.Position;
+            act.Should().NotThrow();
+
+            memoryStream.Dispose();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_StillWork()
+        {
+            // Unlike WavReader.Open(Stream), FlacDecoder never needs CanSeek -- it reads its whole
+            // source into memory up front regardless of source type.
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+
+            using var nonSeekable = new NonSeekableStream(bytes);
+            var samples = new List<int>();
+            var info = FlacDecoder.Decode(nonSeekable, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+            info.TotalSamples.Should().Be(16);
+            samples.Should().Equal(Enumerable.Repeat(42, 16));
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => FlacDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithTruncatedStream_Should_ThrowInvalidDataException()
+        {
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+            var truncated = bytes[..(bytes.Length - 2)];
+
+            using var memoryStream = new MemoryStream(truncated);
+            var act = () => FlacDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
         private static (FlacStreamInfo Info, int[] Samples) DecodeTemp(byte[] bytes)
         {
             var path = Path.GetTempFileName();

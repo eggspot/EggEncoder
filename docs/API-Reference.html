@@ -47,9 +47,13 @@
       <pre><code class="language-csharp">public interface IMediaEncoder
 {
     Task&lt;ProbeResult&gt; Probe(string filePath);
+    Task&lt;ProbeResult&gt; Probe(Stream source, AudioFormat format);
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
-}</code></pre>
+}
+
+public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vorbis, WavPack, Mov }</code></pre>
+      <p>The <code>Stream</code> overload of <code>Probe</code> is for a source that isn't a local file (an HTTP response body, blob storage, an in-memory buffer) — it never disposes <code>source</code>. Implemented so far for <code>AudioFormat.Wav</code> (the stream must be seekable) and <code>AudioFormat.Flac</code> (no seek requirement); every other <code>AudioFormat</code> value throws <code>NotSupportedException</code> for now. See <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 1 for status.</p>
 
       <h2>ProbeResult</h2>
       <p>Only fields this library can genuinely compute are populated — no ffprobe-style placeholders (e.g. no <code>probe_score</code>, no disposition flags).</p>
