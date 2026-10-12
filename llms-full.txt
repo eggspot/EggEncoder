@@ -53,11 +53,11 @@ public class ProbeResult
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
-    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM"), MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC VORBIS_COMMENT fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/MP3/FLAC with none
+    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM"), MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC/Opus/Vorbis comment fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/MP3/FLAC/Opus/Vorbis with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder.Encode`/`OpenSession`'s own `tags` parameter for FLAC (see each format's own section below).
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `tags` parameter for FLAC/Opus/Vorbis (see each format's own section below).
 
 ## Dependency Injection
 
@@ -621,21 +621,22 @@ Lossless, in its own `.wv` container. Mono and stereo, 16-bit or 24-bit integer 
 public static class OpusDecoder
 {
     public static OpusStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    // OpusStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from the 'OpusTags' packet, or null)
 }
 
 public static class OpusEncoder
 {
-    public static void Encode(string sourceWavFilePath, string destOpusFilePath);
+    public static void Encode(string sourceWavFilePath, string destOpusFilePath, IReadOnlyDictionary<string, string>? tags = null);
 }
 
 public sealed class OpusEncoderSession : IDisposable
 {
-    public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, IReadOnlyDictionary<string, string>? tags = null); // tags: written into the 'OpusTags' packet via the shared VorbisCommentWriter
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 ```
 
-Lossy, in a from-scratch OggOpus container (`.opus`). Mono and stereo, 16-bit integer PCM, and fixed at 48kHz (Opus's native/highest internal rate) regardless of the source's own rate -- encoding at any other rate throws `NotSupportedException`; resample first with `ResamplingTransform`. The actual Opus codec (SILK+CELT) is delegated to Concentus, a pure managed C# port (NuGet package, the same "lean on an established pure-managed implementation" precedent `NLayer` sets for MP3 decode); EggEncoder implements the OggOpus container itself (page framing, CRC-32, the mandatory `OpusHead`/`OpusTags` packets) from scratch. Channel mapping family 0 only.
+Lossy, in a from-scratch OggOpus container (`.opus`). Mono and stereo, 16-bit integer PCM, and fixed at 48kHz (Opus's native/highest internal rate) regardless of the source's own rate -- encoding at any other rate throws `NotSupportedException`; resample first with `ResamplingTransform`. The actual Opus codec (SILK+CELT) is delegated to Concentus, a pure managed C# port (NuGet package, the same "lean on an established pure-managed implementation" precedent `NLayer` sets for MP3 decode); EggEncoder implements the OggOpus container itself (page framing, CRC-32, the mandatory `OpusHead`/`OpusTags` packets) from scratch. Channel mapping family 0 only. `OpusTags`'s own payload is the exact same Vorbis-spec vendor+comment-list structure FLAC's `VORBIS_COMMENT` block uses, read/written via the shared `Codecs.VorbisCommentReader`/`VorbisCommentWriter` rather than a duplicate implementation -- see the "FLAC/Opus/Vorbis Comment Tags" section of `llms.txt`.
 
 ### Vorbis — `EggEncoder.Codecs.Vorbis`
 
@@ -643,17 +644,18 @@ Lossy, in a from-scratch OggOpus container (`.opus`). Mono and stereo, 16-bit in
 public static class VorbisDecoder
 {
     public static VorbisStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    // VorbisStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from NVorbis's own VorbisReader.Tags.All, or null)
 }
 
 public static class VorbisEncoder
 {
     public const float DefaultQuality = 0.5f;
-    public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = DefaultQuality);
+    public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = DefaultQuality, IReadOnlyDictionary<string, string>? tags = null);
 }
 
 public sealed class VorbisEncoderSession : IDisposable
 {
-    public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality);
+    public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality, IReadOnlyDictionary<string, string>? tags = null); // tags: written via OggVorbisEncoder's own Comments.AddTag
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 ```

@@ -6,10 +6,10 @@ namespace EggEncoder.Codecs.Opus
     {
         private const int FramesPerBlock = 4096;
 
-        public static void Encode(string sourceWavFilePath, string destOpusFilePath)
+        public static void Encode(string sourceWavFilePath, string destOpusFilePath, IReadOnlyDictionary<string, string>? tags = null)
         {
             using var wavReader = WavReader.Open(sourceWavFilePath);
-            using var session = OpusEncoderSession.OpenSession(destOpusFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample);
+            using var session = OpusEncoderSession.OpenSession(destOpusFilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, tags);
 
             var interleavedBuffer = new int[FramesPerBlock * wavReader.Channels];
 

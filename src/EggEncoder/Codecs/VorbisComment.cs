@@ -118,10 +118,7 @@ namespace EggEncoder.Codecs
 
             foreach (var (key, value) in tags)
             {
-                if (!IsValidFieldName(key))
-                {
-                    throw new ArgumentException($"Invalid Vorbis comment field name '{key}' -- must be non-empty, printable ASCII, and must not contain '='", nameof(tags));
-                }
+                ValidateFieldName(key);
 
                 var commentBytes = Encoding.UTF8.GetBytes($"{key}={value}");
                 WriteUInt32LittleEndian(stream, (uint)commentBytes.Length);
@@ -129,6 +126,18 @@ namespace EggEncoder.Codecs
             }
 
             return stream.ToArray();
+        }
+
+        // Exposed so a container that doesn't build its comment-list bytes through
+        // BuildCommentListBytes itself -- VorbisEncoderSession hands tags to OggVorbisEncoder's
+        // own Comments.AddTag instead, since that library owns Vorbis's own container/header-packet
+        // framing -- can still validate against the exact same rule before writing anything.
+        public static void ValidateFieldName(string key)
+        {
+            if (!IsValidFieldName(key))
+            {
+                throw new ArgumentException($"Invalid Vorbis comment field name '{key}' -- must be non-empty, printable ASCII, and must not contain '='", nameof(key));
+            }
         }
 
         private static bool IsValidFieldName(string key)

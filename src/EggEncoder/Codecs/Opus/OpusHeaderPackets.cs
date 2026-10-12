@@ -1,19 +1,19 @@
 using System.Buffers.Binary;
 using System.Text;
+using EggEncoder.Codecs;
 
 namespace EggEncoder.Codecs.Opus
 {
     // Builds and parses the two mandatory header packets every OggOpus stream starts with
     // (RFC 7845): 'OpusHead' (channel count, pre-skip, original sample rate) and 'OpusTags' (a
-    // vendor string plus zero or more comments -- this always writes zero comments, and ignores
-    // whatever a file it reads actually contains, since EggEncoder has no metadata/tagging surface
-    // for any other format either). Channel mapping family is always written as 0 (mono/stereo,
-    // the "simple" mapping with no extra channel mapping table) -- anything else is out of scope,
-    // matching every other codec's mono/stereo-only convention here.
+    // vendor string plus zero or more comments -- the exact same vendor+comment-list structure
+    // Vorbis comments use everywhere else, via the shared Codecs.VorbisCommentReader/
+    // VorbisCommentWriter, since OpusTags's own payload past the 8-byte "OpusTags" magic is that
+    // structure verbatim, not an Opus-specific variant of it). Channel mapping family is always
+    // written as 0 (mono/stereo, the "simple" mapping with no extra channel mapping table) --
+    // anything else is out of scope, matching every other codec's mono/stereo-only convention here.
     internal static class OpusHeaderPackets
     {
-        private const string VendorString = "EggEncoder";
-
         public static byte[] BuildOpusHead(int channels, int preSkip, int inputSampleRate)
         {
             var packet = new byte[19];
@@ -61,26 +61,28 @@ namespace EggEncoder.Codecs.Opus
             };
         }
 
-        public static byte[] BuildOpusTags()
+        public static byte[] BuildOpusTags(IReadOnlyDictionary<string, string>? tags = null)
         {
-            var vendorBytes = Encoding.UTF8.GetBytes(VendorString);
-            var packet = new byte[8 + 4 + vendorBytes.Length + 4];
+            var commentListBytes = VorbisCommentWriter.BuildCommentListBytes(tags ?? EmptyTags);
+            var packet = new byte[8 + commentListBytes.Length];
 
             "OpusTags"u8.CopyTo(packet);
-            BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(8, 4), (uint)vendorBytes.Length);
-            vendorBytes.CopyTo(packet, 12);
-            BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(12 + vendorBytes.Length, 4), 0); // user comment list length
+            commentListBytes.CopyTo(packet, 8);
 
             return packet;
         }
 
-        public static void ValidateOpusTags(byte[] packet, string filePath)
+        public static IReadOnlyDictionary<string, string> ParseOpusTags(byte[] packet, string filePath)
         {
             if (packet.Length < 8 || Encoding.ASCII.GetString(packet, 0, 8) != "OpusTags")
             {
                 throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: missing 'OpusTags' packet");
             }
+
+            return VorbisCommentReader.ReadFrom(packet, offset: 8, packet.Length - 8);
         }
+
+        private static readonly Dictionary<string, string> EmptyTags = [];
     }
 
     internal sealed class OpusHead
