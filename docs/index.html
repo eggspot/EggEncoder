@@ -122,8 +122,8 @@ public class MediaService(IMediaEncoder mediaEncoder)
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128172;</div>
-          <div class="feature-title">FLAC Vorbis Comment Tags</div>
-          <p class="feature-desc"><code>Probe</code> surfaces a FLAC file's <code>VORBIS_COMMENT</code> metadata block (title, artist, album, etc.) as the same <code>ProbeResult.Tags</code>, keyed by raw field name — and <code>FlacEncoder.Encode</code>/<code>OpenSession</code> can write one back out too.</p>
+          <div class="feature-title">FLAC/Opus/Vorbis Comment Tags</div>
+          <p class="feature-desc"><code>Probe</code> surfaces a FLAC, Opus, or Vorbis file's comment tags (title, artist, album, etc.) as the same <code>ProbeResult.Tags</code>, keyed by raw field name — and each format's own <code>Encoder.Encode</code>/<code>OpenSession</code> can write them back out too.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#127754;</div>

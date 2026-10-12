@@ -525,6 +525,36 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_OpusFile_WithTags_Should_Surface_Tags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var opusPath = Path.Combine(tempDirectory, "tagged.opus");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+
+                using (var session = OpusEncoderSession.OpenSession(opusPath, channels: 1, sampleRate: 48000, bitsPerSample: 16, tags))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(opusPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {
@@ -569,6 +599,36 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_VorbisFile_WithTags_Should_Surface_Tags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var oggPath = Path.Combine(tempDirectory, "tagged.ogg");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+
+                using (var session = VorbisEncoderSession.OpenSession(oggPath, channels: 1, sampleRate: 44100, bitsPerSample: 16, tags: tags))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(oggPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {

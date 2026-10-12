@@ -21,7 +21,7 @@ namespace EggEncoder.Codecs.Opus
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
             using var reader = new OggPageReader(stream);
 
-            SkipHeaderPackets(reader, filePath);
+            var tags = SkipHeaderPackets(reader, filePath);
 
             var decoder = OpusCodecFactory.CreateDecoder(SampleRate, opusHead.Channels);
             try
@@ -55,7 +55,8 @@ namespace EggEncoder.Codecs.Opus
                     Channels = opusHead.Channels,
                     SampleRate = SampleRate,
                     BitsPerSample = 16,
-                    TotalSamples = totalSamples
+                    TotalSamples = totalSamples,
+                    Tags = tags.Count > 0 ? tags : null
                 };
             }
             finally
@@ -84,7 +85,7 @@ namespace EggEncoder.Codecs.Opus
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
             using var reader = new OggPageReader(stream);
 
-            SkipHeaderPackets(reader, filePath);
+            _ = SkipHeaderPackets(reader, filePath);
 
             var totalSamplesIncludingPreSkip = 0L;
             while (reader.ReadNextPacket() is { } packet)
@@ -101,13 +102,13 @@ namespace EggEncoder.Codecs.Opus
             return Math.Max(0, totalSamplesIncludingPreSkip - opusHead.PreSkip);
         }
 
-        private static void SkipHeaderPackets(OggPageReader reader, string filePath)
+        private static IReadOnlyDictionary<string, string> SkipHeaderPackets(OggPageReader reader, string filePath)
         {
             _ = reader.ReadNextPacket() ?? throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: missing 'OpusHead' packet");
 
             var tagsPacket = reader.ReadNextPacket()
                 ?? throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: missing 'OpusTags' packet");
-            OpusHeaderPackets.ValidateOpusTags(tagsPacket, filePath);
+            return OpusHeaderPackets.ParseOpusTags(tagsPacket, filePath);
         }
     }
 
@@ -120,5 +121,7 @@ namespace EggEncoder.Codecs.Opus
         public required int BitsPerSample { get; init; }
 
         public required long TotalSamples { get; init; }
+
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 }

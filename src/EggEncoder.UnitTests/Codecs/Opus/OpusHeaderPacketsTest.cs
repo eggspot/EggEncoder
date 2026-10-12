@@ -82,32 +82,64 @@ namespace EggEncoder.UnitTests.Codecs.Opus
         }
 
         [Fact]
-        public void BuildOpusTags_Then_ValidateOpusTags_Should_Not_Throw()
+        public void BuildOpusTags_Then_ParseOpusTags_Should_Not_Throw()
         {
             var packet = OpusHeaderPackets.BuildOpusTags();
 
-            var act = () => OpusHeaderPackets.ValidateOpusTags(packet, "test.opus");
+            var act = () => OpusHeaderPackets.ParseOpusTags(packet, "test.opus");
 
             act.Should().NotThrow();
         }
 
         [Fact]
-        public void ValidateOpusTags_WithMissingMagic_Should_Throw()
+        public void ParseOpusTags_WithMissingMagic_Should_Throw()
         {
             var packet = OpusHeaderPackets.BuildOpusTags();
             packet[0] = (byte)'X';
 
-            var act = () => OpusHeaderPackets.ValidateOpusTags(packet, "test.opus");
+            var act = () => OpusHeaderPackets.ParseOpusTags(packet, "test.opus");
 
             act.Should().ThrowExactly<InvalidDataException>().WithMessage("*OpusTags*");
         }
 
         [Fact]
-        public void ValidateOpusTags_WithTooShortPacket_Should_Throw()
+        public void ParseOpusTags_WithTooShortPacket_Should_Throw()
         {
-            var act = () => OpusHeaderPackets.ValidateOpusTags(new byte[3], "test.opus");
+            var act = () => OpusHeaderPackets.ParseOpusTags(new byte[3], "test.opus");
 
             act.Should().ThrowExactly<InvalidDataException>();
+        }
+
+        [Fact]
+        public void BuildOpusTags_Then_ParseOpusTags_Should_RoundTrip_Tags()
+        {
+            var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+            var packet = OpusHeaderPackets.BuildOpusTags(tags);
+
+            var parsedTags = OpusHeaderPackets.ParseOpusTags(packet, "test.opus");
+
+            parsedTags.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+            parsedTags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
+        }
+
+        [Fact]
+        public void BuildOpusTags_WithNullTags_Should_ProduceEmptyParsedResult()
+        {
+            var packet = OpusHeaderPackets.BuildOpusTags(tags: null);
+
+            var parsedTags = OpusHeaderPackets.ParseOpusTags(packet, "test.opus");
+
+            parsedTags.Should().BeEmpty();
+        }
+
+        [Fact]
+        public void BuildOpusTags_WithInvalidFieldName_Should_Throw()
+        {
+            var tags = new Dictionary<string, string> { ["BAD=NAME"] = "value" };
+
+            var act = () => OpusHeaderPackets.BuildOpusTags(tags);
+
+            act.Should().Throw<ArgumentException>();
         }
     }
 }

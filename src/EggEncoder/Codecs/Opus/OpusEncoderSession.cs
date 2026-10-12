@@ -36,7 +36,7 @@ namespace EggEncoder.Codecs.Opus
         private long _granulePosition;
         private bool _disposed;
 
-        private OpusEncoderSession(FileStream destStream, int channels)
+        private OpusEncoderSession(FileStream destStream, int channels, byte[] opusTagsPacket)
         {
             _destStream = destStream;
             _channels = channels;
@@ -45,10 +45,10 @@ namespace EggEncoder.Codecs.Opus
             _pendingSamples = new short[FrameLength * channels];
 
             _pageWriter.WritePacket(OpusHeaderPackets.BuildOpusHead(channels, _encoder.Lookahead, SampleRate), granulePosition: 0, isEndOfStream: false);
-            _pageWriter.WritePacket(OpusHeaderPackets.BuildOpusTags(), granulePosition: 0, isEndOfStream: false);
+            _pageWriter.WritePacket(opusTagsPacket, granulePosition: 0, isEndOfStream: false);
         }
 
-        public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample)
+        public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, IReadOnlyDictionary<string, string>? tags = null)
         {
             if (channels is not 1 and not 2)
             {
@@ -65,10 +65,16 @@ namespace EggEncoder.Codecs.Opus
                 throw new NotSupportedException($"'{destFilePath}' requests a {sampleRate}Hz source; Opus encoding here is fixed at {SampleRate}Hz -- resample first via ResamplingTransform");
             }
 
+            // Validate (and build) the 'OpusTags' packet before creating the destination file at
+            // all -- an invalid tag field name should fail loudly up front, not after a partial
+            // file is already on disk (same precedent as Mp3Encoder/FlacEncoder's own tag
+            // validation).
+            var opusTagsPacket = OpusHeaderPackets.BuildOpusTags(tags);
+
             var destStream = File.Create(destFilePath);
             try
             {
-                return new OpusEncoderSession(destStream, channels);
+                return new OpusEncoderSession(destStream, channels, opusTagsPacket);
             }
             catch
             {

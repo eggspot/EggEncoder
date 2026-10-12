@@ -449,7 +449,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                Tags = streamInfo.Tags
             };
         }
 
@@ -483,7 +484,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                Tags = streamInfo.Tags
             };
         }
 

@@ -127,21 +127,28 @@ Unlike read, write is strict: a tag id must be exactly 4 ASCII characters starti
 (`TXXX` unsupported) or `OpenSession` throws `ArgumentException` before the destination file is
 even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
 
-## FLAC Vorbis Comment Tags
+## FLAC/Opus/Vorbis Comment Tags
 
-`Probe`-ing a FLAC file with a `VORBIS_COMMENT` metadata block populates the same
-`ProbeResult.Tags`, keyed by the raw field name exactly as stored (e.g. `"TITLE"`, `"ARTIST"`,
-not remapped to friendlier names or normalized to a particular case). The underlying
-vendor+comment-list structure (`Codecs.VorbisCommentReader`/`VorbisCommentWriter`, in the
-top-level `Codecs` namespace rather than `Codecs.Flac`) is shared with Opus/Vorbis's own
-`OpusTags`/Vorbis comment header packet, since it's a Vorbis-spec convention independent of which
-container embeds it -- only the outer framing differs per format. A malformed or out-of-bounds
-field degrades gracefully (returns whatever parsed cleanly) rather than throwing, the same
-convention WAV's own tag parsing and MP3's ID3v2 tag parsing already established.
-`FlacEncoder.Encode`/`OpenSession` can write a tag back out too, via an optional `tags` parameter
--- writes a `VORBIS_COMMENT` block immediately after STREAMINFO. Unlike read, write is strict: a
-field name must be non-empty, printable ASCII, and must not contain `=`, or `OpenSession` throws
-`ArgumentException` before the destination file is even created.
+`Probe`-ing a FLAC, Opus, or Vorbis file with comment tags populates the same `ProbeResult.Tags`,
+keyed by the raw field name exactly as stored (e.g. `"TITLE"`, `"ARTIST"`, not remapped to
+friendlier names or normalized to a particular case) -- all three formats share the same
+Vorbis-spec vendor+comment-list convention, just embedded differently per container: FLAC's own
+`VORBIS_COMMENT` metadata block, Opus's `OpusTags` header packet, or Vorbis's own comment header
+packet (mandatory in the bitstream, unlike FLAC's optional block). FLAC and Opus both parse/build
+that structure via the shared `Codecs.VorbisCommentReader`/`VorbisCommentWriter` (top-level
+`Codecs` namespace, not `Codecs.Flac`/`Codecs.Opus`); Vorbis instead delegates entirely to its own
+decode/encode libraries (`NVorbis.VorbisReader.Tags.All`, flattened from multi-valued-per-field to
+this project's single-value convention by keeping the first value per field; `OggVorbisEncoder`'s
+own `Comments.AddTag`), since each already owns its container's comment header packet directly --
+field names written through `VorbisEncoderSession` are still validated against the same
+`VorbisCommentWriter.ValidateFieldName` rule, since `Comments.AddTag` itself validates nothing. A
+malformed or out-of-bounds field degrades gracefully (returns whatever parsed cleanly) rather than
+throwing, the same convention WAV's own tag parsing and MP3's ID3v2 tag parsing already
+established. `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `Encode`/`OpenSession` can write
+tags back out too, via an optional `tags` parameter (FLAC: a `VORBIS_COMMENT` block immediately
+after STREAMINFO; Opus: the `OpusTags` packet; Vorbis: via `Comments.AddTag`). Unlike read, write
+is strict: a field name must be non-empty, printable ASCII, and must not contain `=`, or
+`OpenSession` throws `ArgumentException` before the destination file is even created.
 
 ## Constraints
 
