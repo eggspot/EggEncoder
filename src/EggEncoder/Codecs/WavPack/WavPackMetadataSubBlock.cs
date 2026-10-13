@@ -48,6 +48,18 @@ namespace EggEncoder.Codecs.WavPack
                 }
 
                 var byteCount = (wordCount * 2) - (isOdd ? 1 : 0);
+
+                // The "odd" flag means "shave one padding byte off the word-based size" -- with a
+                // zero word count there's no padding byte to shave off at all, so this combination
+                // (reachable via the format's own bit layout, but semantically meaningless) would
+                // otherwise reach `new ArraySegment<byte>(data, dataStart, byteCount)` below with a
+                // negative byteCount and throw the BCL's own ArgumentOutOfRangeException rather
+                // than this codebase's usual InvalidDataException for corrupt/malformed input.
+                if (byteCount < 0)
+                {
+                    throw new InvalidDataException("A WavPack block's metadata sub-block declares an odd-byte-length flag with a zero word count, which is not a valid size -- the file is corrupt or truncated.");
+                }
+
                 if (dataStart + (wordCount * 2) > end)
                 {
                     throw new InvalidDataException("A WavPack block's metadata sub-block declares a size that extends past the block's own metadata region -- the file is corrupt or truncated.");

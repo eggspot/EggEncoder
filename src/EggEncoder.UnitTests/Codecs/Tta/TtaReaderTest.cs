@@ -70,6 +70,26 @@ namespace EggEncoder.UnitTests.Codecs.Tta
         }
 
         [Fact]
+        public void Open_With_TotalSamplesAndFrameLength_Overflowing_TotalFrames_Should_ThrowInvalidDataException()
+        {
+            // Before this fix: totalSamples (an untrusted uint) combined with a tiny sampleRate
+            // (giving frameLength == 1) overflowed the (int) cast computing totalFrames to a large
+            // negative value, which then slipped past ReadSeekTable's own truncation check (a
+            // negative count * 4 wraps back to 0, matching the actual 0-byte seek table read) and
+            // only failed much later as the BCL's own OverflowException from `new int[totalFrames]`.
+            var filePath = WriteBytes(BuildValidHeaderWithCrc(format: 1, channels: 1, bitsPerSample: 16, sampleRate: 1, totalSamples: 0x80000000));
+            try
+            {
+                var act = () => TtaReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*frame count*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_ZeroSampleRate_Should_Throw()
         {
             // frameLength = sampleRate*256/245 computes to 0 when sampleRate is 0, which Open must
