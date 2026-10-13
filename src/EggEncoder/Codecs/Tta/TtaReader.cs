@@ -80,7 +80,24 @@ namespace EggEncoder.Codecs.Tta
                     throw new InvalidDataException($"'{filePath}' has a sample rate too small to compute a valid TTA frame length");
                 }
 
-                var totalFrames = totalSamples == 0 ? 0 : (int)((totalSamples + frameLength - 1) / frameLength);
+                // Computed in long throughout (totalSamples is an untrusted uint straight from the
+                // header) and explicitly bounds-checked before narrowing to int -- without this,
+                // a large totalSamples combined with a small frameLength (reachable via a tiny
+                // sampleRate) silently wraps the (int) cast to a negative value, which then slips
+                // past ReadSeekTable's own length check (a negative count times 4 can itself wrap
+                // back to 0, a "truncation" check that passes vacuously) and only fails much later
+                // as the BCL's own OverflowException from `new int[totalFrames]` -- this validates
+                // up front instead, with a clear InvalidDataException, the same convention every
+                // other malformed-input case in this codebase uses. The int.MaxValue/4 bound (not
+                // just int.MaxValue) also keeps ReadSeekTable's own `totalFrames * 4` byte-length
+                // multiplication safely within int range.
+                var totalFramesLong = totalSamples == 0 ? 0L : ((long)totalSamples + frameLength - 1) / frameLength;
+                if (totalFramesLong < 0 || totalFramesLong > int.MaxValue / 4)
+                {
+                    throw new InvalidDataException($"'{filePath}' declares {totalSamples} total samples at frame length {frameLength}, which computes an invalid frame count ({totalFramesLong}).");
+                }
+
+                var totalFrames = (int)totalFramesLong;
                 var frameByteSizes = ReadSeekTable(reader, filePath, totalFrames);
 
                 return new TtaReader(stream, channels, bitsPerSample, sampleRate, totalSamples, frameLength, frameByteSizes);

@@ -236,6 +236,29 @@ namespace EggEncoder.UnitTests.Codecs.Alac
             }
         }
 
+        [Fact]
+        public void Open_With_NegativeNumberPackets_Should_ThrowInvalidDataException_NotOverflowException()
+        {
+            // numberPackets is a raw int64 straight from the file with no validation before this
+            // fix -- a negative value reached `new int[numberPackets]` and threw the BCL's own
+            // OverflowException rather than this codebase's usual InvalidDataException.
+            var filePath = WriteBytes(BuildFileHeader()
+                .Concat(BuildDescChunk("alac"))
+                .Concat(BuildKukiChunk())
+                .Concat(BuildPaktChunkWithRawNumberPackets(-1))
+                .ToArray());
+
+            try
+            {
+                var act = () => CafReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>().WithMessage("*pakt*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         private static string WriteBytes(byte[] bytes)
         {
             var filePath = Path.Combine(Path.GetTempPath(), $"caf_reader_{Guid.NewGuid():N}.caf");
@@ -305,6 +328,15 @@ namespace EggEncoder.UnitTests.Codecs.Alac
             BinaryPrimitives.WriteInt64BigEndian(payload.AsSpan(8), 0);
             sizeBytes.CopyTo(payload, 24);
 
+            return BuildChunk("pakt", payload);
+        }
+
+        /// <summary>Builds a 'pakt' chunk whose own numberPackets field is an arbitrary, possibly-invalid raw value -- for testing that value's own validation directly, independent of any real packet-size-list content.</summary>
+        private static byte[] BuildPaktChunkWithRawNumberPackets(long numberPackets)
+        {
+            var payload = new byte[24];
+            BinaryPrimitives.WriteInt64BigEndian(payload, numberPackets);
+            BinaryPrimitives.WriteInt64BigEndian(payload.AsSpan(8), 0);
             return BuildChunk("pakt", payload);
         }
 
