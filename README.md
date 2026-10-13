@@ -7,6 +7,7 @@ Sponsored by [eggspot.app](https://eggspot.app)
 [![CI](https://github.com/eggspot/EggEncoder/actions/workflows/ci.yml/badge.svg)](https://github.com/eggspot/EggEncoder/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/EggEncoder.svg)](https://www.nuget.org/packages/EggEncoder)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/eggspot)](https://github.com/sponsors/eggspot)
 
 📖 **[Full documentation →](https://eggspot.github.io/EggEncoder/)**
 
