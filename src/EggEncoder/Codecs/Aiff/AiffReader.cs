@@ -50,7 +50,8 @@ namespace EggEncoder.Codecs.Aiff
             Ima4
         }
 
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly long _sampleDataLength;
         private readonly Compression _compression;
         private readonly int _bytesPerDiskSample;
@@ -69,9 +70,10 @@ namespace EggEncoder.Codecs.Aiff
         private int _ima4PendingCount;
         private long _ima4FramesProduced;
 
-        private AiffReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, Compression compression, int bytesPerDiskSample)
+        private AiffReader(Stream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, Compression compression, int bytesPerDiskSample, bool leaveOpen)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _sampleDataLength = sampleDataLength;
             _compression = compression;
             _bytesPerDiskSample = bytesPerDiskSample;
@@ -120,6 +122,32 @@ namespace EggEncoder.Codecs.Aiff
         public static AiffReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return OpenCore(stream, filePath, leaveOpen: false);
+        }
+
+        /// <summary>
+        /// Opens an AIFF/AIFC source from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a source that isn't a local file (an HTTP response body, blob storage, an
+        /// in-memory buffer). Must be seekable: the header parse below relies on
+        /// <see cref="Stream.Position"/>/<see cref="Stream.Seek"/> throughout, the same way the
+        /// path-based overload's own <see cref="FileStream"/> always is. Unlike the path-based
+        /// overload, this does NOT take ownership of <paramref name="stream"/> -- the caller opened
+        /// it, so the caller is responsible for disposing it; this type's own <see cref="Dispose"/>
+        /// leaves it open.
+        /// </summary>
+        public static AiffReader Open(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanSeek)
+            {
+                throw new ArgumentException("AiffReader requires a seekable stream -- its header parse relies on Stream.Position/Seek throughout", nameof(stream));
+            }
+
+            return OpenCore(stream, "<stream>", leaveOpen: true);
+        }
+
+        private static AiffReader OpenCore(Stream stream, string filePath, bool leaveOpen)
+        {
             try
             {
                 using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
@@ -217,7 +245,7 @@ namespace EggEncoder.Codecs.Aiff
                     ? totalSampleFrames.Value * Ima4Decoder.SamplesPerChannelSubBlock
                     : totalSampleFrames.Value;
 
-                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample);
+                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample, leaveOpen);
             }
             catch (EndOfStreamException e)
             {
@@ -227,13 +255,23 @@ namespace EggEncoder.Codecs.Aiff
                 // calls reading that chunk's own fields past EOF, throwing the BCL's own
                 // EndOfStreamException rather than the InvalidDataException every other
                 // malformed-input case in this codebase throws (see WavReader/AuReader's own
-                // identical fix).
-                stream.Dispose();
+                // identical fix). Only disposes a stream this method itself owns -- the
+                // Stream-based Open(Stream) overload above never does, leaving the caller's own
+                // stream exactly as they gave it.
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -507,7 +545,10 @@ namespace EggEncoder.Codecs.Aiff
 
         public void Dispose()
         {
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
     }
 }

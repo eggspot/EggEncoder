@@ -101,17 +101,17 @@ run synchronously against the given stream under the hood, same as how `Probe`/`
 already work today — genuine async I/O is its own, later roadmap item if real usage shows it's
 needed.
 
-**Status: first slice done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
-enum, the interface method, and real `Stream` support for two formats chosen specifically to
-prove both of the adaptation shapes this item's own design called out: `WavReader.Open(Stream)`
-(the `FileStream`-field-widened-to-`Stream` shape, confirmed to need `CanSeek` after all — see the
-correction above) and `FlacDecoder.Decode(Stream, ...)` (the read-fully-into-`byte[]` shape,
-confirmed to need no seek at all). Every other `AudioFormat` still throws `NotSupportedException`
-from `Probe(Stream, AudioFormat)` with a message pointing back here. `ConvertFile`/`CutFile`'s own
-`Stream` overloads (the destination-seekability half) are not started. Next up for this item,
-in order: AIFF and AU (identical `FileStream`-widening shape to WAV, already touched by the
-truncation-exception fix so the pattern is fresh); AAC and WavPack decode (identical
-read-fully-into-`byte[]` shape to FLAC); then the harder `ConvertFile`/`CutFile` destination half.
+**Status: six formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
+enum, the interface method, and real `Stream` support for both adaptation shapes this item's own
+design called out: `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/`AuReader.Open(Stream)` (the
+`FileStream`-field-widened-to-`Stream` shape, each requiring `CanSeek` since their own header
+parse relies on `Stream.Position`/`Seek` throughout -- confirmed per format, not assumed
+uniformly, the correction the original design sketch above already flagged) and
+`FlacDecoder.Decode(Stream, ...)`/`AacDecoder.Decode(Stream, ...)`/`WavPackDecoder.Decode(Stream, ...)`
+(the read-fully-into-`byte[]` shape, confirmed to need no seek at all for any of the three). Every
+other `AudioFormat` still throws `NotSupportedException` from `Probe(Stream, AudioFormat)` with a
+message pointing back here. `ConvertFile`/`CutFile`'s own `Stream` overloads (the
+destination-seekability half) are not started -- that's the only piece of this item still open.
 
 ## 2. Format-native metadata tags
 

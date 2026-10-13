@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.WavPack;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.WavPack
@@ -14,6 +15,58 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         private static readonly string _monoFixturePath = Path.GetFullPath("Codecs/WavPack/sample_mono_ffmpeg.wv");
         private static readonly string _splitMonoBlocksFixturePath = Path.GetFullPath("Codecs/WavPack/sample_split_mono_blocks_wavpack.wv");
         private static readonly string _fullScaleFixturePath = Path.GetFullPath("Codecs/WavPack/sample_fullscale_wavpack.wv");
+
+        // -------- Stream-based Decode --------
+
+        [Fact]
+        public void Decode_Stream_Should_Round_Trip_Same_As_Path_Based_Decode()
+        {
+            var pathSamples = new List<int>();
+            var pathStreamInfo = WavPackDecoder.Decode(_stereoFixturePath, (block, _, _, _, _) => pathSamples.AddRange(block.ToArray()));
+
+            var bytes = File.ReadAllBytes(_stereoFixturePath);
+            var streamSamples = new List<int>();
+            using var memoryStream = new MemoryStream(bytes);
+            var streamStreamInfo = WavPackDecoder.Decode(memoryStream, (block, _, _, _, _) => streamSamples.AddRange(block.ToArray()));
+
+            streamStreamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+            streamStreamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+            streamSamples.Should().Equal(pathSamples);
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_NotDispose_TheCallersStream()
+        {
+            var bytes = File.ReadAllBytes(_stereoFixturePath);
+            var memoryStream = new MemoryStream(bytes);
+
+            WavPackDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+            var act = () => memoryStream.Position;
+            act.Should().NotThrow();
+
+            memoryStream.Dispose();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_StillWork()
+        {
+            var bytes = File.ReadAllBytes(_stereoFixturePath);
+            using var nonSeekable = new NonSeekableStream(bytes);
+
+            var samples = new List<int>();
+            var streamInfo = WavPackDecoder.Decode(nonSeekable, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+            streamInfo.Channels.Should().Be(2);
+            samples.Should().NotBeEmpty();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => WavPackDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().Throw<ArgumentNullException>();
+        }
 
         [Fact]
         public void Decode_StereoFile_Should_Invoke_The_Callback_With_InterleavedSamples()

@@ -10,7 +10,30 @@ namespace EggEncoder.Codecs.Aac
         public static AacStreamInfo Decode(string aacFilePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             var fileBytes = File.ReadAllBytes(aacFilePath);
+            return Decode(fileBytes, onBlockDecoded);
+        }
 
+        /// <summary>
+        /// Decodes an AAC (ADTS) source from an already-open <see cref="Stream"/> instead of a
+        /// file path -- for a source that isn't a local file (an HTTP response body, blob storage,
+        /// an in-memory buffer). No <see cref="Stream.CanSeek"/> requirement: like
+        /// <see cref="Flac.FlacDecoder"/>, this reads the whole source into memory up front, so
+        /// any forward-readable stream works, seekable or not. Does NOT take ownership of
+        /// <paramref name="stream"/> -- the caller opened it, so the caller is responsible for
+        /// disposing it; this call never closes it.
+        /// </summary>
+        public static AacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Decode(memoryStream.ToArray(), onBlockDecoded);
+        }
+
+        private static AacStreamInfo Decode(byte[] fileBytes, AudioBlockDecodedCallback onBlockDecoded)
+        {
             var totalSamples = CountTotalSamples(fileBytes);
 
             var reader = new BitReader(fileBytes);

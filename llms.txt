@@ -102,14 +102,17 @@ response body, blob storage, an in-memory buffer) -- the path-based `Probe(strin
 unaffected and unchanged. `AudioFormat` has to be given explicitly, since a `Stream` has no file
 extension to dispatch on the way the path-based overload uses. Does NOT take ownership of the
 stream -- the caller opened it, so the caller disposes it; `Probe` never closes it. Implemented so
-far for `AudioFormat.Wav` and `AudioFormat.Flac`; every other format throws
+far for `AudioFormat.Wav`/`Aiff`/`Au`/`Flac`/`Aac`/`WavPack`; every other format throws
 `NotSupportedException` with a message pointing at `docs/feature-roadmap.md` item 1, where the
-remaining formats are tracked. `WavReader.Open(Stream)`/`FlacDecoder.Decode(Stream, callback)` are
-also available directly if driving a codec yourself rather than through `Probe`; `WavReader`'s own
-Stream overload requires `Stream.CanSeek` (its header parse relies on `Position`/`Seek`
-throughout, same as its path-based overload's own `FileStream` always provides), while
-`FlacDecoder`'s needs no seek at all (it reads its whole source into memory before parsing
-anything, the same as its path-based overload already did).
+remaining formats are tracked. `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/
+`AuReader.Open(Stream)`/`FlacDecoder.Decode(Stream, callback)`/`AacDecoder.Decode(Stream, callback)`/
+`WavPackDecoder.Decode(Stream, callback)` are also available directly if driving a codec yourself
+rather than through `Probe` -- two adaptation shapes, split by whether the underlying reader needs
+to seek: `WavReader`/`AiffReader`/`AuReader` all require `Stream.CanSeek` (each one's own header
+parse relies on `Position`/`Seek`, or -- for AU's own unknown-data-size sentinel -- `Length`,
+throughout, same as each path-based overload's own `FileStream` always provides), while
+`FlacDecoder`/`AacDecoder`/`WavPackDecoder` need no seek at all (each reads its whole source into
+memory before parsing anything, the same as its own path-based overload already did).
 
 ## MP3 ID3v2 Tags
 

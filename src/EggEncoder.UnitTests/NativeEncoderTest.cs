@@ -103,12 +103,100 @@ namespace EggEncoder.UnitTests
         [Fact]
         public async Task Probe_Stream_WithUnsupportedFormat_Should_ThrowNotSupportedException()
         {
-            // Only Wav/Flac are wired up for the Stream-based overload so far -- see
-            // docs/feature-roadmap.md item 1 for status. Every other AudioFormat should fail
+            // Wav/Aiff/Au/Flac/Aac/WavPack are wired up for the Stream-based overload so far --
+            // see docs/feature-roadmap.md item 1 for status. Every other AudioFormat should fail
             // clearly rather than silently misbehaving.
             using var stream = new MemoryStream();
             var act = async () => await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
             await act.Should().ThrowAsync<NotSupportedException>();
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AiffFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var aiffPath = Path.Combine(tempDirectory, "source.aiff");
+                AiffFileBuilder.Create(aiffPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(aiffPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Aiff);
+
+                probeResult.FormatName.Should().Be("aiff");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+                probeResult.BitsPerSample.Should().Be(16);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AuFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var auPath = Path.Combine(tempDirectory, "source.au");
+                AuFileBuilder.Create(auPath, channels: 1, sampleRate: 8000, encoding: 3, [0, 0, 3, 232]);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(auPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Au);
+
+                probeResult.FormatName.Should().Be("au");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AacFormat_Should_Return_Correct_Metadata()
+        {
+            using var stream = new MemoryStream(File.ReadAllBytes(_aacFixturePath));
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Aac);
+
+            probeResult.FormatName.Should().Be("aac");
+            probeResult.CodecName.Should().Be("aac");
+            probeResult.SampleRate.Should().BePositive();
+            probeResult.ChannelLayout.Should().Be("mono");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WavPackFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var wvPath = Path.Combine(tempDirectory, "source.wv");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                WavPackEncoder.Encode(wavPath, wvPath);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(wvPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.WavPack);
+
+                probeResult.FormatName.Should().Be("wv");
+                probeResult.CodecName.Should().Be("wavpack");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
 
         [Fact]

@@ -22,7 +22,7 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
-    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Flac implemented so far -- see docs/feature-roadmap.md item 1
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Flac/Aac/WavPack implemented so far -- see docs/feature-roadmap.md item 1
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }
@@ -348,6 +348,7 @@ public delegate void AudioBlockDecodedCallback(ReadOnlySpan<int> block, int chan
 public static class AacDecoder
 {
     public static AacStreamInfo Decode(string aacFilePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static AacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
 }
 
 public static class AacEncoder
@@ -498,6 +499,7 @@ Container parsing/writing via the internal `AsfContainerReader`/`AsfContainerWri
 public sealed class AiffReader : IDisposable
 {
     public static AiffReader Open(string filePath);
+    public static AiffReader Open(Stream stream); // requires stream.CanSeek -- header chunk-walk relies on Position/Seek; does NOT dispose stream
     public int Channels { get; }
     public int SampleRate { get; }
     public int BitsPerSample { get; }
@@ -527,6 +529,7 @@ Plain AIFF (FORM/AIFF, 8/16/24/32-bit signed integer PCM -- 8-bit is signed, unl
 public sealed class AuReader : IDisposable
 {
     public static AuReader Open(string filePath);
+    public static AuReader Open(Stream stream); // requires stream.CanSeek -- unknown-data-size files need Stream.Length; does NOT dispose stream
     public int Channels { get; }
     public int SampleRate { get; }
     public int BitsPerSample { get; }
@@ -599,6 +602,7 @@ True Audio, a lossless codec (`.tta`). Mono and stereo, 16-bit integer PCM only 
 public static class WavPackDecoder
 {
     public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static WavPackStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
 }
 
 public static class WavPackEncoder

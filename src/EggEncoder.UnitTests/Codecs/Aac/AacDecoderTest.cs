@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Aac;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Aac
@@ -7,6 +8,58 @@ namespace EggEncoder.UnitTests.Codecs.Aac
     {
         private static readonly string _fixturePath = Path.GetFullPath("Codecs/Aac/tone_mono.aac");
         private static readonly string _groundTruthPath = Path.GetFullPath("Codecs/Aac/tone_mono_groundtruth.pcm");
+
+        // -------- Stream-based Decode --------
+
+        [Fact]
+        public void Decode_Stream_Should_Round_Trip_Same_As_Path_Based_Decode()
+        {
+            var pathSamples = new List<int>();
+            var pathStreamInfo = AacDecoder.Decode(_fixturePath, (block, _, _, _, _) => pathSamples.AddRange(block.ToArray()));
+
+            var bytes = File.ReadAllBytes(_fixturePath);
+            var streamSamples = new List<int>();
+            using var memoryStream = new MemoryStream(bytes);
+            var streamStreamInfo = AacDecoder.Decode(memoryStream, (block, _, _, _, _) => streamSamples.AddRange(block.ToArray()));
+
+            streamStreamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+            streamStreamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+            streamSamples.Should().Equal(pathSamples);
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_NotDispose_TheCallersStream()
+        {
+            var bytes = File.ReadAllBytes(_fixturePath);
+            var memoryStream = new MemoryStream(bytes);
+
+            AacDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+            var act = () => memoryStream.Position;
+            act.Should().NotThrow();
+
+            memoryStream.Dispose();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_StillWork()
+        {
+            var bytes = File.ReadAllBytes(_fixturePath);
+            using var nonSeekable = new NonSeekableStream(bytes);
+
+            var samples = new List<int>();
+            var streamInfo = AacDecoder.Decode(nonSeekable, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+            streamInfo.Channels.Should().Be(1);
+            samples.Should().NotBeEmpty();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => AacDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().Throw<ArgumentNullException>();
+        }
 
         [Fact]
         public void Decode_ToneMono_Should_Return_Correct_Format()

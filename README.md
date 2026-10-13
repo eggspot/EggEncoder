@@ -21,7 +21,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono AAC-LC audio decode
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
-- 🌊 **Stream-based `Probe`** — `Probe(Stream, AudioFormat)` probes a source that isn't a local file (an HTTP response body, blob storage, an in-memory buffer); WAV and FLAC today, more formats landing incrementally (see [docs/feature-roadmap.md](docs/feature-roadmap.md))
+- 🌊 **Stream-based `Probe`** — `Probe(Stream, AudioFormat)` probes a source that isn't a local file (an HTTP response body, blob storage, an in-memory buffer); WAV/AIFF/AU/FLAC/AAC/WavPack today, more formats landing incrementally (see [docs/feature-roadmap.md](docs/feature-roadmap.md))
 - 🏷️ **WAV metadata tags** — `Probe` surfaces a WAV file's `'LIST'`/`'INFO'` chunk (title, artist, etc.) via `ProbeResult.Tags`, and `WavWriter.Create` can write them back out too
 - 🎙️ **MP3 ID3v2 tags** — `Probe` surfaces an MP3 file's ID3v2.3/2.4 text frames (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `Mp3Encoder.Encode`/`OpenSession` can write a fresh ID3v2.4 tag back out too
 - 💬 **FLAC/Opus/Vorbis comment tags** — `Probe` surfaces a FLAC/Opus/Vorbis file's Vorbis comments (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `Encode`/`OpenSession` can write them back out too
