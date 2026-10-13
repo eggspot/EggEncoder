@@ -37,5 +37,31 @@ namespace EggEncoder.Results
         public int? Height { get; init; }
 
         public IReadOnlyList<double>? Waveform { get; init; }
+
+        /// <summary>
+        /// The single loudest absolute sample value across the whole decoded audio, normalized to
+        /// 0.0..1.0 (1.0 = the bit depth's own full-scale maximum). Null for a file this probe
+        /// couldn't decode audio from (e.g. MOV/MP4 with no matching audio track).
+        /// </summary>
+        public double? PeakAmplitude { get; init; }
+
+        /// <summary>
+        /// Root-mean-square level across every individual sample of the whole decoded audio,
+        /// normalized the same way <see cref="PeakAmplitude"/> is. A rough loudness indicator --
+        /// not a perceptual/ITU-R BS.1770 loudness measurement. Null for a file this probe
+        /// couldn't decode audio from.
+        /// </summary>
+        public double? RmsLevel { get; init; }
+
+        /// <summary>
+        /// Metadata tags, keyed by their raw format-native id exactly as the container stores them
+        /// (e.g. "INAM" for WAV's own title chunk, "TIT2" for MP3's own ID3v2 title frame) -- not
+        /// remapped to friendlier names, the same way <see cref="CodecName"/> exposes "pcm_s16le"
+        /// rather than a human label. Populated for WAV files with a 'LIST'/'INFO' chunk, and for
+        /// MP3 files with an ID3v2.3/2.4 tag (text information frames only -- see
+        /// <c>Codecs.Mp3.Id3v2Reader</c>'s own doc comment for the exact scope); null for every
+        /// other format, and for a WAV/MP3 file that simply doesn't carry one.
+        /// </summary>
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 }

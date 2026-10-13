@@ -8,12 +8,12 @@
     <Authors>Eggspot</Authors>
     <Company>Eggspot</Company>
     <Product>EggEncoder</Product>
-    <Description>Audio encoding/decoding toolkit for .NET — native MP3 (LAME) and FLAC codec bindings, managed AAC and WMA decode/encode, waveform generation, and audio probing/cutting, fully in-process. Built for high-throughput music distribution pipelines.</Description>
+    <Description>Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF/AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, entirely pure C# (no native dependency of any kind), built-in waveform/peak/RMS generation, WAV metadata tag reading, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), fully in-process behind one IMediaEncoder interface. No ffmpeg, no subprocess, no platform restriction. Built for high-throughput music distribution pipelines.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/eggspot/EggEncoder</PackageProjectUrl>
     <RepositoryUrl>https://github.com/eggspot/EggEncoder</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;codec;waveform;audio-processing;transcoding;lame;native;csharp;dotnet</PackageTags>
+    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;alac;aiff;au;opus;vorbis;tta;wavpack;adpcm;pcm;codec;waveform;audio-processing;transcoding;csharp;dotnet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Copyright>Copyright © Eggspot</Copyright>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -40,26 +40,6 @@
     <PackageReference Include="NLayer" Version="2.0.1" />
     <PackageReference Include="NVorbis" Version="1.0.0-rc.2" />
     <PackageReference Include="OggVorbisEncoder" Version="1.2.2" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!--
-      PackageCopyToOutput is what actually makes NuGet copy these into a consuming project's
-      output directory on restore (emits copyToOutput="true" in the packed .nuspec's contentFiles
-      element). Without it, the DLLs land in the package but only ever get copied via MSBuild's own
-      CopyToOutputDirectory item propagation, which only fires for in-repo ProjectReference
-      consumers (e.g. EggEncoder.UnitTests), not for real PackageReference consumers, who would get
-      a DllNotFoundException at P/Invoke time instead.
-    -->
-    <None Include="Native\win-x64\libmp3lame.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libmp3lame.dll" PackageCopyToOutput="true">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="Native\win-x64\libFLAC.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\libFLAC.dll" PackageCopyToOutput="true">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="Native\win-x64\wavpackdll.dll" Pack="true" PackagePath="contentFiles\any\any\Native\win-x64\wavpackdll.dll" PackageCopyToOutput="true">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
 </Project>

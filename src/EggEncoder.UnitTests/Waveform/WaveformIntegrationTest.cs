@@ -28,6 +28,12 @@ namespace EggEncoder.UnitTests.Waveform
             windows.Should().NotBeEmpty();
             windows.TrueForAll(window => window is >= 0 and <= 1).Should().BeTrue();
             windows.Exists(window => window > 0).Should().BeTrue();
+
+            var peak = calculator.GetNormalizedPeakAmplitude();
+            var rms = calculator.GetNormalizedRmsLevel();
+            peak.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+            rms.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+            rms.Should().BeLessThanOrEqualTo(peak, "RMS can never exceed the peak for any real signal");
         }
 
         [Fact]
@@ -47,6 +53,12 @@ namespace EggEncoder.UnitTests.Waveform
             windows.Should().NotBeEmpty();
             windows.TrueForAll(window => window is >= 0 and <= 1).Should().BeTrue();
             windows.Exists(window => window > 0).Should().BeTrue();
+
+            var peak = calculator.GetNormalizedPeakAmplitude();
+            var rms = calculator.GetNormalizedRmsLevel();
+            peak.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+            rms.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+            rms.Should().BeLessThanOrEqualTo(peak, "RMS can never exceed the peak for any real signal");
         }
     }
 }

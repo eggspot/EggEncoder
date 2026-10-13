@@ -38,6 +38,17 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Constructor_ChannelsAboveMax_Should_Throw()
+        {
+            // An accidental or pathological huge channel count would otherwise attempt to allocate
+            // _w1/_w2 at that size, risking an OutOfMemoryException instead of a clean, immediate
+            // validation failure.
+            var act = () => new BiquadTransform(BiquadFilterType.LowPass, channels: BiquadTransform.MaxChannels + 1, SampleRate, frequencyHz: 1000);
+
+            act.Should().Throw<ArgumentOutOfRangeException>().And.ParamName.Should().Be("channels");
+        }
+
+        [Fact]
         public void Constructor_SampleRateNonPositive_Should_Throw()
         {
             var act = () => new BiquadTransform(BiquadFilterType.LowPass, channels: 1, sampleRate: 0, frequencyHz: 1000);

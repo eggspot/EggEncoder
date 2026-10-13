@@ -26,6 +26,18 @@ namespace EggEncoder.Transform
             }
         }
 
+        public void WriteSignedBits(int value, int bitCount)
+        {
+            var mask = bitCount == 32 ? 0xFFFFFFFFu : (1u << bitCount) - 1;
+            WriteBits((uint)value & mask, bitCount);
+        }
+
+        public void WriteUnary(uint zeros)
+        {
+            WriteBits(0, (int)zeros);
+            WriteBits(1, 1);
+        }
+
         public void ByteAlign()
         {
             if (_bitsInCurrentByte == 0)

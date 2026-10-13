@@ -1,50 +1,67 @@
 # Third-Party Notices
 
 EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
-The package also redistributes three pre-built native codec libraries as separate, unmodified
-binary files under `Native/win-x64/`. Their licenses apply to those files independently.
+As of the managed codec rewrite (`docs/managed-codec-rewrite-plan.md`), EggEncoder no longer
+bundles or loads any pre-built native binary of any kind — every codec is pure managed C#,
+either implemented directly in this project or via a permissively-licensed managed NuGet
+dependency (acknowledged individually below). FLAC, MP3, and WavPack were all previously
+backed by bundled native libraries (`libFLAC.dll`, `libmp3lame.dll`, `wavpackdll.dll`
+respectively); none of them ship any more.
 
-## libmp3lame.dll — LAME MP3 encoder
+## WavPack algorithm (decode and encode) — clean-room acknowledgment (no code copied)
 
-- **Project**: [LAME](https://lame.sourceforge.io/)
-- **License**: GNU Lesser General Public License v2.1 (LGPL-2.1) — full text at
-  https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
-- **How it's used**: EggEncoder loads `libmp3lame.dll` dynamically at runtime via
-  `NativeLibrary.Load` / P/Invoke (see `Native/Mp3Native.cs`, `Native/NativeLibraryLoader.cs`).
-  It is shipped as a separate, unmodified binary file alongside the managed assembly, not
-  statically linked or embedded — consumers of this package may replace the DLL with their own
-  LGPL-compliant build without recompiling EggEncoder, satisfying LGPL-2.1's relinking
-  requirement.
-- **Source availability**: LAME source code is available at https://lame.sourceforge.io/download.php
+WavPack (`.wv`) decode and encode are both now pure managed EggEncoder code (`Codecs/WavPack/`) —
+no native binary is bundled or loaded for this codec any more (the previous `wavpackdll.dll` /
+`Native/WavPackNative.cs` native decode+encode path, the official WavPack project's own prebuilt
+library under a BSD-style license, has been fully removed now that neither direction needs it).
+The block/decorrelation/entropy-coding algorithm itself was derived with the owner's explicit
+sign-off from two sources beyond the official (and, for the codec itself, intentionally
+incomplete) WavPack 4/5 file format specification:
 
-## libFLAC.dll — FLAC reference codec
+- **General familiarity with the WavPack project's own reference implementation**
+  ([github.com/dbry/WavPack](https://github.com/dbry/WavPack), BSD-style license) informed the
+  overall shape of the algorithm (cascaded decorrelation passes, an adaptive median-based entropy
+  coder). No source from that project was read or copied during this implementation; this is a
+  standard "prior exposure informs a from-scratch rewrite" acknowledgment, not a derived-work
+  claim.
+- **FFmpeg's independently-written WavPack decoder**
+  (`libavcodec/wavpack.c`/`wavpack.h`, part of [FFmpeg](https://ffmpeg.org/), GNU Lesser General
+  Public License v2.1 or later) was studied at arm's length to extract the precise formulas needed
+  for bit-exact decode (exact weight-update/restore math, the entropy coder's class/tail/carry
+  state machine, joint-stereo and "false stereo" reconstruction, etc.) — read only to understand
+  and describe the algorithm in this project's own words, never to copy code or structure. No
+  FFmpeg source is vendored, linked, or reproduced; only the underlying facts/formulas (which are
+  not themselves copyrightable) were carried over into an independent C# implementation.
 
-- **Project**: [FLAC](https://xiph.org/flac/) (Xiph.Org Foundation)
-- **License**: BSD-style Xiph.Org license (permissive) — full text at
-  https://xiph.org/flac/license.html
-- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
-  `Native/FlacNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
-  binary file under `Native/win-x64/`.
-- **Source availability**: FLAC source code is available at https://github.com/xiph/flac
-
-## wavpackdll.dll — WavPack reference library
-
-- **Project**: [WavPack](https://github.com/dbry/WavPack) (David Bryant)
-- **License**: BSD-style license — full text at
-  https://github.com/dbry/WavPack/blob/master/COPYING
-- **How it's used**: Loaded dynamically at runtime via `NativeLibrary.Load` / P/Invoke (see
-  `Native/WavPackNative.cs`, `Native/NativeLibraryLoader.cs`), shipped as a separate unmodified
-  binary file under `Native/win-x64/`. The bundled DLL is the official project's own prebuilt
-  binary from its GitHub release (`wavpack-5.9.0-dll.zip`, `x64/wavpackdll.dll`), checksum-verified
-  against that release's own published `sums.txt` before being committed here.
-- **Source availability**: WavPack source code is available at https://github.com/dbry/WavPack
+The managed **encoder**'s own formulas were not a second, separate study of either source above —
+every one of them (decorrelation weight update, the entropy coder's class/tail/carry write logic)
+is the direct mathematical inverse of this same already-documented decode-side knowledge, derived
+by this project itself rather than by consulting any encoder implementation.
 
 ## NLayer — managed MP3 decoder
 
 - **Project**: [NLayer](https://github.com/naudio/NLayer)
 - **License**: MIT / LGPL dual-licensed (used here under MIT)
 - **How it's used**: Referenced as a standard NuGet `PackageReference` for MP3 decoding
-  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored.
+  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored. Its own decoder source
+  (`NLayer/Decoder/*.cs`) was also read at arm's length, read-only, as a test oracle while
+  debugging the managed MP3 **encoder** below (`git log`-visible under `feat/managed-mp3-encoder`)
+  — to cross-check this project's own Huffman table transcription and understand decode-side
+  framing expectations (bit reservoir, `part2_3_length`/`part3end`, region boundaries). No NLayer
+  source was copied; only independently-rederived facts (confirmed correct by mechanical,
+  bit-for-bit comparison, not by inspection) fed back into the encoder's own, separately-written
+  code.
+
+## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
+
+The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke
+path) was implemented from the published ISO/IEC 11172-3 standard text and this project's own
+derivations only. No source from any MP3 **encoder** (LAME, GroovyCodecs, shine, FFmpeg's own
+encoder, or any other) was read or copied. Real `lame`/`ffmpeg` CLI builds were used, black-box
+only (as independent binaries, never their source), to cross-validate bitstream structure during
+development — the same arm's-length methodology already established for WavPack above. NLayer's
+own **decoder** source was read as a test oracle per the note above; this is explicitly a
+decode-side-only exception load-bearing for verification, not an encoder-algorithm source.
 
 ## Concentus — managed Opus encoder/decoder
 

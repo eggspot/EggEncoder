@@ -153,5 +153,76 @@ namespace EggEncoder.UnitTests.Codecs.Vorbis
                 File.Delete(destOggPath);
             }
         }
+
+        [Fact]
+        public void Encode_WithTags_Should_Produce_Ogg_Whose_TagsRoundTrip_Through_Decode()
+        {
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_tags_{Guid.NewGuid():N}.wav");
+            var destOggPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_tags_dest_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, SampleRate, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+
+                VorbisEncoder.Encode(sourceWavPath, destOggPath, tags: tags);
+
+                var streamInfo = VorbisDecoder.Decode(destOggPath, (_, _, _, _, _) => { });
+
+                streamInfo.Tags.Should().NotBeNull();
+                streamInfo.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                streamInfo.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(destOggPath);
+            }
+        }
+
+        [Fact]
+        public void Encode_WithoutTags_Should_Produce_Ogg_With_NullTags()
+        {
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_notags_{Guid.NewGuid():N}.wav");
+            var destOggPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_notags_dest_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, SampleRate, bitsPerSample: 16, [0, 1]);
+
+                VorbisEncoder.Encode(sourceWavPath, destOggPath);
+
+                var streamInfo = VorbisDecoder.Decode(destOggPath, (_, _, _, _, _) => { });
+                streamInfo.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                File.Delete(destOggPath);
+            }
+        }
+
+        [Fact]
+        public void Encode_WithInvalidTagFieldName_Should_Throw_Before_Creating_DestFile()
+        {
+            var sourceWavPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_badtag_{Guid.NewGuid():N}.wav");
+            var destOggPath = Path.Combine(Path.GetTempPath(), $"vorbis_encoder_badtag_dest_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                WavFileBuilder.Create(sourceWavPath, channels: 1, SampleRate, bitsPerSample: 16, [0, 1]);
+                var tags = new Dictionary<string, string> { ["BAD=NAME"] = "value" };
+
+                var act = () => VorbisEncoder.Encode(sourceWavPath, destOggPath, tags: tags);
+
+                act.Should().Throw<ArgumentException>();
+                File.Exists(destOggPath).Should().BeFalse();
+            }
+            finally
+            {
+                File.Delete(sourceWavPath);
+                if (File.Exists(destOggPath))
+                {
+                    File.Delete(destOggPath);
+                }
+            }
+        }
     }
 }

@@ -11,7 +11,11 @@ public sealed class VolumeTransform : IPcmTransform
 
     public VolumeTransform(double gain)
     {
-        if (gain < 0) throw new ArgumentOutOfRangeException(nameof(gain), "Gain must be >= 0");
+        // double.IsFinite rejects NaN (which `gain < 0` alone lets through unnoticed -- NaN < 0 is
+        // false under IEEE 754) and +Infinity (which, applied to a silent/zero sample, computes
+        // 0 * Infinity == NaN -- a loud sample alone would just clip cleanly, but a silent one
+        // wouldn't, so this can't be caught by testing only non-zero inputs).
+        if (!double.IsFinite(gain) || gain < 0) throw new ArgumentOutOfRangeException(nameof(gain), gain, "Gain must be a finite number >= 0");
         _gain = gain;
     }
 
@@ -70,7 +74,11 @@ public sealed class PeakNormalizationTransform : IPcmTransform
     /// <param name="targetDb">Target peak in dBFS, e.g. -1.0 (≈0.891 of the native range). Must be ≤ 0.</param>
     public PeakNormalizationTransform(double targetDb)
     {
-        if (targetDb > 0) throw new ArgumentOutOfRangeException(nameof(targetDb), targetDb, "Target dBFS must be ≤ 0");
+        // double.IsFinite rejects NaN (which `targetDb > 0` alone lets through unnoticed -- NaN > 0
+        // is false under IEEE 754 -- and which Math.Pow(10, NaN / 20.0) would then turn into a NaN
+        // _targetLin, silently corrupting every gain this transform ever computes) as well as
+        // -Infinity (a "target" of negative infinity dBFS is not a meaningful request).
+        if (!double.IsFinite(targetDb) || targetDb > 0) throw new ArgumentOutOfRangeException(nameof(targetDb), targetDb, "Target dBFS must be a finite number ≤ 0");
         _targetLin = Math.Pow(10, targetDb / 20.0);
     }
 

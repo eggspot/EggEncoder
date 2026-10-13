@@ -7,6 +7,86 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
 {
     public class AiffReaderTest
     {
+        // -------- Stream-based Open --------
+
+        [Fact]
+        public void Open_Stream_Should_Round_Trip_Header_And_Samples_Same_As_Path_Based_Open()
+        {
+            var samples = new[] { 0, 1000, -1000, 32767, -32768 };
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, samples);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream(bytes);
+                using var reader = AiffReader.Open(memoryStream);
+
+                reader.Channels.Should().Be(1);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                var memoryStream = new MemoryStream(bytes);
+                var reader = AiffReader.Open(memoryStream);
+                reader.Dispose();
+
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => AiffReader.Open((Stream)null!);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Open_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var nonSeekable = new NonSeekableStream(bytes);
+                var act = () => AiffReader.Open(nonSeekable);
+
+                act.Should().Throw<ArgumentException>().And.ParamName.Should().Be("stream");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Fact]
         public void Open_16Bit_Stereo_Should_Read_Header_And_Samples()
         {
@@ -304,6 +384,35 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
+        public void Open_TruncatedWithinCommChunk_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Unlike Open_Missing_SsndChunk_Should_Throw above (which truncates AFTER a complete
+            // chunk, so the chunk-walk loop's own `stream.Position < stream.Length` check simply
+            // exits cleanly before the next chunk), this truncates WITHIN the COMM chunk's own
+            // declared fields -- the loop has already committed to reading a chunk whose declared
+            // size claims more bytes than the file actually has. Before this fix, the inner
+            // `reader.ReadInt16()` call for bitsPerSample ran past EOF and threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws (see AsfContainerReader.EnsureBytesAvailable's own doc comment, which
+            // names this exact reader as already following that convention -- it wasn't, for this
+            // specific truncation shape).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, [1, 2]);
+                TruncateWithinCommChunk(filePath);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_OddSizedChunk_Should_Skip_The_Pad_Byte()
         {
             // 1 channel, 8-bit, 3 frames = 3 (odd) data bytes -- AiffFileBuilder writes the IFF pad byte.
@@ -506,6 +615,195 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
+        public void Open_Aifc_Ima4_Mono_Should_Decode_BitExact_Against_RealFixture()
+        {
+            // Ground truth generated via ffmpeg's own decode of this same real file, independently
+            // cross-checked bit-exact against macOS's own afconvert/CoreAudio decode of the same file
+            // during this feature's own research (not re-asserted per test run) -- see Ima4Decoder's
+            // own doc comment for the full verification writeup, including why the block-group
+            // preamble is never read.
+            var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+            var expectedPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono_expected.pcm");
+
+            using var aiffReader = AiffReader.Open(fixturePath);
+            aiffReader.Channels.Should().Be(1);
+            aiffReader.SampleRate.Should().Be(44100);
+            aiffReader.BitsPerSample.Should().Be(16, "ima4 decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            aiffReader.TotalSamples.Should().Be(8832, "COMM's numSampleFrames (138) reports the IMA4 block count for this compressionType, not the raw sample count -- the true total is 138 * 64");
+            aiffReader.IsIma4.Should().BeTrue();
+            aiffReader.IsFloatFormat.Should().BeFalse();
+            aiffReader.IsALaw.Should().BeFalse();
+            aiffReader.IsMuLaw.Should().BeFalse();
+
+            var buffer = new int[aiffReader.TotalSamples];
+            aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples).Should().Be((int)aiffReader.TotalSamples);
+
+            buffer.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_Stereo_Should_Decode_BitExact_Against_RealFixture()
+        {
+            // Exercises the overall stereo decode path (block-group count, total-sample accounting,
+            // no crash/mismatch across a real 2-channel ima4 stream) against a real fixture. Note: this
+            // fixture's own left/right channels happen to be byte-identical throughout (confirmed by
+            // inspecting its raw SSND bytes directly), so it can NOT by itself distinguish a correct
+            // channel-0-then-channel-1 block-group layout from a swapped-channel or shared-state bug --
+            // see Open_Aifc_Ima4_Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent below
+            // for the test that actually proves that.
+            var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo.aifc");
+            var expectedPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_stereo_expected.pcm");
+
+            using var aiffReader = AiffReader.Open(fixturePath);
+            aiffReader.Channels.Should().Be(2);
+            aiffReader.SampleRate.Should().Be(44100);
+            aiffReader.BitsPerSample.Should().Be(16);
+            aiffReader.TotalSamples.Should().Be(8832, "numSampleFrames reports the block count for ima4 regardless of channel count -- true per-channel frame total is still 138 * 64");
+            aiffReader.IsIma4.Should().BeTrue();
+
+            var buffer = new int[aiffReader.TotalSamples * aiffReader.Channels];
+            aiffReader.ReadInterleavedSamples(buffer, (int)aiffReader.TotalSamples).Should().Be((int)aiffReader.TotalSamples);
+
+            buffer.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_Stereo_WithDistinctChannelContent_Should_Keep_Channels_Independent()
+        {
+            // The real stereo fixture above has byte-identical left/right channels throughout, so it
+            // can't catch a swapped-channel-order or shared-adaptive-state bug -- a broken
+            // implementation that mixed the two channels up would still match it. This test builds one
+            // block group (channel 0's 34-byte sub-block, all-0x00 nibble bytes, immediately followed by
+            // channel 1's, all-0xFF nibble bytes -- genuinely different adaptive-decode trajectories)
+            // and confirms the stereo decode of the combined file matches two independent mono decodes
+            // of each half, which is only true if the block-group layout and per-channel state really
+            // are independent, channel 0 first then channel 1, with no cross-talk between them.
+            var ch0Bytes = new byte[34]; // preamble (never read) + all-zero nibbles
+            var ch1Bytes = new byte[34];
+            Array.Fill(ch1Bytes, (byte)0xFF, 2, 32); // preamble left zero; nibble bytes all 0xFF
+
+            var mono0Path = Path.GetTempFileName();
+            var mono1Path = Path.GetTempFileName();
+            var stereoPath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.CreateWithExplicitFrameCount(mono0Path, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", ch0Bytes, totalFrames: 1);
+                AifcFileBuilder.CreateWithExplicitFrameCount(mono1Path, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", ch1Bytes, totalFrames: 1);
+                AifcFileBuilder.CreateWithExplicitFrameCount(stereoPath, channels: 2, sampleRate: 44100, sampleSize: 4, "ima4", [..ch0Bytes, ..ch1Bytes], totalFrames: 1);
+
+                var expectedCh0 = DecodeAllMono(mono0Path);
+                var expectedCh1 = DecodeAllMono(mono1Path);
+                expectedCh0.Should().NotEqual(expectedCh1, "the two channels' nibble bytes are deliberately different, so a correct decode must diverge too");
+
+                using var stereoReader = AiffReader.Open(stereoPath);
+                var stereoBuffer = new int[stereoReader.TotalSamples * stereoReader.Channels];
+                stereoReader.ReadInterleavedSamples(stereoBuffer, (int)stereoReader.TotalSamples);
+
+                stereoBuffer.Where((_, i) => i % 2 == 0).Should().Equal(expectedCh0);
+                stereoBuffer.Where((_, i) => i % 2 == 1).Should().Equal(expectedCh1);
+            }
+            finally
+            {
+                File.Delete(mono0Path);
+                File.Delete(mono1Path);
+                File.Delete(stereoPath);
+            }
+
+            static int[] DecodeAllMono(string path)
+            {
+                using var reader = AiffReader.Open(path);
+                var buffer = new int[reader.TotalSamples];
+                reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+                return buffer;
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_WithWrongBitsPerSample_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.CreateWithExplicitFrameCount(filePath, channels: 1, sampleRate: 44100, sampleSize: 8, "ima4", new byte[34], totalFrames: 1);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>().WithMessage("*ima4*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_WithUnsupportedChannelCount_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.CreateWithExplicitFrameCount(filePath, channels: 3, sampleRate: 44100, sampleSize: 4, "ima4", new byte[34 * 3], totalFrames: 1);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>().WithMessage("*only mono and stereo*");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_WithTruncatedFinalBlockGroup_Should_StopWithoutThrowing()
+        {
+            // DecodeNextIma4BlockGroup's own truncation guard: a COMM chunk claiming more blocks than
+            // the SSND chunk actually has bytes for (totalFrames: 2 declared, but only one full 34-byte
+            // block's worth of data is actually present) should decode the one full block it can and
+            // then stop cleanly, not throw or read past the end of the data it was given.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.CreateWithExplicitFrameCount(filePath, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", new byte[34], totalFrames: 2);
+
+                using var aiffReader = AiffReader.Open(filePath);
+                aiffReader.TotalSamples.Should().Be(128, "numSampleFrames (2) * 64 samples/block, even though only one full block of data actually exists");
+
+                var buffer = new int[128];
+                var framesRead = aiffReader.ReadInterleavedSamples(buffer, 128);
+
+                framesRead.Should().Be(64, "only one full 34-byte block was actually present in SSND; the second is truncated and stops decode cleanly rather than throwing");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_Ima4_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            // Deliberately not a divisor of 64 (ima4's own block-group frame size) or the fixture's own
+            // 8832 total samples -- exercises ReadIma4InterleavedSamples's pending-buffer copy-out loop
+            // across multiple calls, including calls that span a partial pending buffer into the next
+            // decoded block group.
+            var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+            var expectedPath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono_expected.pcm");
+
+            using var aiffReader = AiffReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37];
+            int framesRead;
+            while ((framesRead = aiffReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath));
+        }
+
+        [Fact]
         public void Open_Aifc_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
         {
             var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_fl32_mono.aifc");
@@ -576,26 +874,46 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
-        public void Open_Aifc_WithIma4CompressionType_Should_Throw_WithDistinctMessage()
+        public void Open_Aifc_WithIma4CompressionType_Should_Be_Accepted_Not_Rejected()
         {
-            // ima4 (QuickTime IMA4 ADPCM) is a real, commonly-produced AIFC compressionType -- confirmed
-            // via a real ffmpeg-produced fixture during this feature's own research -- but is deliberately
-            // not decoded here (see AiffReader's own doc comment for why). It must fail with its own
-            // distinct message naming it, not the generic "unsupported compressionType" one, so a caller
-            // can tell "known but unsupported" apart from "genuinely unrecognized".
+            // ima4 used to be rejected outright (see the git history of this test, formerly
+            // Open_Aifc_WithIma4CompressionType_Should_Throw_WithDistinctMessage) -- it's now decoded.
+            // Open_Ima4_Should_Decode_BitExact_Against_RealFixture (below) covers the real decode path
+            // against real fixtures; this just confirms Open() itself no longer rejects the
+            // compressionType at all -- the same "confirms X is genuinely accepted now" check this
+            // project's own AIFC and MS ADPCM ticks each added when a former rejection test's format
+            // became supported.
             var filePath = Path.GetTempFileName();
             try
             {
-                // sampleSize: 4 matches ima4's own real coded width (confirmed via ffprobe against a real
-                // ffmpeg-produced fixture), which CreateWithExplicitFrameCount is needed for -- the plain
-                // Create overload derives totalFrames via sampleSize / 8, which truncates to 0 (and would
-                // divide by zero) for any coded width under 8 bits; moot here anyway since Open() throws
-                // before totalFrames is ever read.
-                AifcFileBuilder.CreateWithExplicitFrameCount(filePath, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", [0, 0], totalFrames: 1);
+                AifcFileBuilder.CreateWithExplicitFrameCount(filePath, channels: 1, sampleRate: 44100, sampleSize: 4, "ima4", new byte[34], totalFrames: 1);
 
                 var act = () => AiffReader.Open(filePath).Dispose();
 
-                act.Should().ThrowExactly<NotSupportedException>().WithMessage("*ima4*");
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Aifc_WithGenuinelyUnsupportedCompressionType_Should_Throw_WithDistinctMessage()
+        {
+            // 'MAC3' (MACE 3:1) is a real AIFC compressionType -- confirmed via macOS's own afconvert,
+            // which lists it among AIFC's documented data_formats -- that is genuinely still not
+            // decoded here (ima4 was this test's own example before ima4 support landed). Confirms the
+            // "known but unsupported" message path a caller can use to tell that apart from "genuinely
+            // unrecognized" still works now that ima4 has been removed from it.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AifcFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, sampleSize: 8, "MAC3", [0, 0]);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>().WithMessage("*MAC3*");
             }
             finally
             {
@@ -740,6 +1058,19 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
 
             var bytes = File.ReadAllBytes(filePath);
             File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkTotalSize)]);
+        }
+
+        // Cuts the file off partway through COMM's own declared 18-byte payload (after just
+        // channels + totalSampleFrames = 6 bytes, before bitsPerSample's own 2 bytes) -- unlike
+        // TruncateAfterCommChunk above, which cuts after a COMPLETE chunk.
+        private static void TruncateWithinCommChunk(string filePath)
+        {
+            const int formHeaderSize = 12;
+            const int commChunkHeaderSize = 8;
+            const int partialCommPayloadSize = 6;
+
+            var bytes = File.ReadAllBytes(filePath);
+            File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkHeaderSize + partialCommPayloadSize)]);
         }
     }
 }

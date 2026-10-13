@@ -48,7 +48,8 @@ namespace EggEncoder.Codecs.Au
         // AiffWriter already have), but a real-world AU file using it must still be read correctly.
         private const uint UnknownDataSize = 0xFFFFFFFF;
 
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly long _sampleDataLength;
         private readonly SampleEncoding _encoding;
         private readonly int _bytesPerDiskSample;
@@ -56,9 +57,10 @@ namespace EggEncoder.Codecs.Au
         private long _bytesRead;
         private byte[] _rawBytes = [];
 
-        private AuReader(FileStream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, SampleEncoding encoding, int bytesPerDiskSample)
+        private AuReader(Stream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, SampleEncoding encoding, int bytesPerDiskSample, bool leaveOpen)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _sampleDataLength = sampleDataLength;
             _encoding = encoding;
             _bytesPerDiskSample = bytesPerDiskSample;
@@ -94,6 +96,32 @@ namespace EggEncoder.Codecs.Au
         public static AuReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return OpenCore(stream, filePath, leaveOpen: false);
+        }
+
+        /// <summary>
+        /// Opens an AU source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). Must be seekable: an AU file with the "unknown data size" sentinel needs
+        /// <see cref="Stream.Length"/> to compute the real sample data length, the same way the
+        /// path-based overload's own <see cref="FileStream"/> always provides it. Unlike the
+        /// path-based overload, this does NOT take ownership of <paramref name="stream"/> -- the
+        /// caller opened it, so the caller is responsible for disposing it; this type's own
+        /// <see cref="Dispose"/> leaves it open.
+        /// </summary>
+        public static AuReader Open(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanSeek)
+            {
+                throw new ArgumentException("AuReader requires a seekable stream -- an unknown-data-size file needs Stream.Length, and the fixed header parse relies on Stream.Position throughout", nameof(stream));
+            }
+
+            return OpenCore(stream, "<stream>", leaveOpen: true);
+        }
+
+        private static AuReader OpenCore(Stream stream, string filePath, bool leaveOpen)
+        {
             try
             {
                 using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
@@ -127,11 +155,31 @@ namespace EggEncoder.Codecs.Au
                 var bytesPerFrame = bytesPerDiskSample * channels;
                 var totalSamples = sampleDataLength / bytesPerFrame;
 
-                return new AuReader(stream, channels, sampleRate, reportedBitsPerSample, totalSamples, sampleDataStart, sampleDataLength, encoding, bytesPerDiskSample);
+                return new AuReader(stream, channels, sampleRate, reportedBitsPerSample, totalSamples, sampleDataStart, sampleDataLength, encoding, bytesPerDiskSample, leaveOpen);
+            }
+            catch (EndOfStreamException e)
+            {
+                // A file truncated before all 24 bytes of AU's own fixed header are present runs
+                // the raw BinaryReader.ReadUInt32 calls above past EOF, throwing the BCL's own
+                // EndOfStreamException rather than the InvalidDataException every other
+                // malformed-input case in this codebase throws (see WavReader/AiffReader's own
+                // identical fix). Only disposes a stream this method itself owns -- the
+                // Stream-based Open(Stream) overload above never does, leaving the caller's own
+                // stream exactly as they gave it.
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
+                throw new InvalidDataException($"'{filePath}' is truncated or corrupted: {e.Message}", e);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -235,7 +283,10 @@ namespace EggEncoder.Codecs.Au
 
         public void Dispose()
         {
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
     }
 }

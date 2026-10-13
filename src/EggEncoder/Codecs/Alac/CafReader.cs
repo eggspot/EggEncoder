@@ -76,7 +76,7 @@ namespace EggEncoder.Codecs.Alac
                             config = AlacSpecificConfig.Parse(cookie);
                             break;
                         case "pakt":
-                            (packetByteSizes, totalValidFrames) = ParsePaktChunk(reader);
+                            (packetByteSizes, totalValidFrames) = ParsePaktChunk(reader, filePath);
                             break;
                         case "data":
                             reader.ReadBytes(4); // mEditCount -- not needed, skipped raw (avoids an endianness question for an unused field)
@@ -161,11 +161,20 @@ namespace EggEncoder.Codecs.Alac
             return formatId;
         }
 
-        private static (int[] PacketByteSizes, long TotalValidFrames) ParsePaktChunk(BinaryReader reader)
+        private static (int[] PacketByteSizes, long TotalValidFrames) ParsePaktChunk(BinaryReader reader, string filePath)
         {
             var numberPackets = BinaryPrimitives.ReverseEndianness(reader.ReadInt64());
             var numberValidFrames = BinaryPrimitives.ReverseEndianness(reader.ReadInt64());
             reader.ReadBytes(8); // mPrimingFrames + mRemainderFrames -- not needed, skipped raw
+
+            // A negative or implausibly large count would otherwise reach `new int[numberPackets]`
+            // below and throw the BCL's own OverflowException rather than this codebase's usual
+            // InvalidDataException for corrupt/malformed input (see WavReader/AiffReader/AuReader's
+            // own identical truncation fixes).
+            if (numberPackets < 0 || numberPackets > int.MaxValue)
+            {
+                throw new InvalidDataException($"'{filePath}' has a CAF 'pakt' chunk declaring {numberPackets} packets, which is not a valid count.");
+            }
 
             var packetByteSizes = new int[numberPackets];
             for (var i = 0; i < numberPackets; i++)

@@ -6,19 +6,27 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
-    # windows-latest — EggEncoder.UnitTests exercises NativeEncoder, which P/Invokes into
-    # win-x64 native binaries (libmp3lame.dll, libFLAC.dll) that won't load on Linux/macOS runners.
-    runs-on: windows-latest
+    # Every codec is now pure managed C# (no native binary, no P/Invoke, anywhere in this
+    # project — see docs/managed-codec-rewrite-plan.md item 8), so this runs on every major OS
+    # rather than being pinned to windows-latest.
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
         dotnet-version: ['8.0.x', '9.0.x', '10.0.x']
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       # Install all required SDKs so every TFM (including net10.0) can be compiled
       # regardless of which runtime version the matrix is currently testing.
@@ -29,6 +37,8 @@ jobs:
             8.0.x
             9.0.x
             10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
 
       - name: Restore dependencies
         run: dotnet restore
@@ -42,15 +52,28 @@ jobs:
           MAJOR=$(echo "${{ matrix.dotnet-version }}" | cut -d. -f1)
           dotnet test --configuration Release --no-build --framework "net${MAJOR}.0" --verbosity normal
 
-      # EggEncoder.AotSmokeTest only targets net10.0, so this only needs to run once regardless
-      # of which SDK the matrix leg is testing. A real `PublishAot=true` publish (not just a
-      # build) is required to catch trimming/AOT issues the Roslyn analyzer alone would miss —
-      # e.g. in the NLayer MP3 decoder dependency, which ships no AOT/trim metadata of its own.
+      # EggEncoder.AotSmokeTest only targets net10.0, so this only needs to run once per OS
+      # regardless of which SDK the matrix leg is testing. A real `PublishAot=true` publish (not
+      # just a build) is required to catch trimming/AOT issues the Roslyn analyzer alone would
+      # miss — e.g. in the NLayer MP3 decoder dependency, which ships no AOT/trim metadata of its
+      # own. Each OS AOT-compiles and runs its own native RID (EggEncoder.AotSmokeTest's
+      # RuntimeIdentifiers covers all three: win-x64, linux-x64, osx-arm64).
+      - name: Determine AOT RID and executable name
+        if: matrix.dotnet-version == '10.0.x'
+        id: aot
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Windows) echo "rid=win-x64" >> "$GITHUB_OUTPUT"; echo "exe=EggEncoder.AotSmokeTest.exe" >> "$GITHUB_OUTPUT" ;;
+            Linux)   echo "rid=linux-x64" >> "$GITHUB_OUTPUT"; echo "exe=EggEncoder.AotSmokeTest" >> "$GITHUB_OUTPUT" ;;
+            macOS)   echo "rid=osx-arm64" >> "$GITHUB_OUTPUT"; echo "exe=EggEncoder.AotSmokeTest" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Publish Native AOT smoke test (.NET 10)
         if: matrix.dotnet-version == '10.0.x'
-        run: dotnet publish src/EggEncoder.AotSmokeTest/EggEncoder.AotSmokeTest.csproj --configuration Release --runtime win-x64
+        run: dotnet publish src/EggEncoder.AotSmokeTest/EggEncoder.AotSmokeTest.csproj --configuration Release --runtime ${{ steps.aot.outputs.rid }}
 
       - name: Run Native AOT smoke test (.NET 10)
         if: matrix.dotnet-version == '10.0.x'
         shell: bash
-        run: ./src/EggEncoder.AotSmokeTest/bin/Release/net10.0/win-x64/publish/EggEncoder.AotSmokeTest.exe
+        run: ./src/EggEncoder.AotSmokeTest/bin/Release/net10.0/${{ steps.aot.outputs.rid }}/publish/${{ steps.aot.outputs.exe }}

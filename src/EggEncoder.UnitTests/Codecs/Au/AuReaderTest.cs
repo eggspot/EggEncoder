@@ -7,6 +7,97 @@ namespace EggEncoder.UnitTests.Codecs.Au
 {
     public class AuReaderTest
     {
+        // -------- Stream-based Open --------
+
+        private static byte[] BuildSigned16MonoSampleBytes(short[] samples)
+        {
+            var bytes = new byte[samples.Length * 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                BinaryPrimitives.WriteInt16BigEndian(bytes.AsSpan(i * 2, 2), samples[i]);
+            }
+
+            return bytes;
+        }
+
+        [Fact]
+        public void Open_Stream_Should_Round_Trip_Header_And_Samples_Same_As_Path_Based_Open()
+        {
+            short[] samples = [0, 1000, -1000, 32767, -32768];
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AuFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, encoding: 3, BuildSigned16MonoSampleBytes(samples));
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream(bytes);
+                using var reader = AuReader.Open(memoryStream);
+
+                reader.Channels.Should().Be(1);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+                buffer.Should().Equal(samples.Select(s => (int)s));
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AuFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, encoding: 3, BuildSigned16MonoSampleBytes([0, 1]));
+                var bytes = File.ReadAllBytes(filePath);
+
+                var memoryStream = new MemoryStream(bytes);
+                var reader = AuReader.Open(memoryStream);
+                reader.Dispose();
+
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => AuReader.Open((Stream)null!);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Open_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AuFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, encoding: 3, BuildSigned16MonoSampleBytes([0, 1]));
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var nonSeekable = new NonSeekableStream(bytes);
+                var act = () => AuReader.Open(nonSeekable);
+
+                act.Should().Throw<ArgumentException>().And.ParamName.Should().Be("stream");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Theory]
         [InlineData("fixture_s16be_mono.au", "fixture_s16be_mono_expected.pcm", 16, false, false, false, false)]
         [InlineData("fixture_s8_mono.au", "fixture_s8_mono_expected.pcm", 8, false, false, false, false)]
@@ -147,6 +238,33 @@ namespace EggEncoder.UnitTests.Codecs.Au
             try
             {
                 AuFileBuilder.CreateWithTooSmallHeaderSize(filePath);
+
+                var act = () => AuReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_TruncatedWithinFixedHeader_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Cuts off right after the magic + headerSize fields (8 of the 24 fixed header bytes),
+            // before declaredDataSize/encoding/sampleRate/channels. The raw BinaryReader.ReadUInt32
+            // call for declaredDataSize then runs past EOF -- before this fix, that threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var magic = ".snd"u8.ToArray();
+                var headerSizeBytes = new byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(headerSizeBytes, 24);
+                File.WriteAllBytes(filePath, [.. magic, .. headerSizeBytes]);
 
                 var act = () => AuReader.Open(filePath).Dispose();
 

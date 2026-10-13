@@ -222,12 +222,12 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         [Fact]
         public void OpenSession_With_InvalidDestinationPath_Should_Throw()
         {
-            // An invalid destination path fails at File.Create, before the try/catch that cleans up
-            // the native context and GCHandle even starts -- this confirms that early failure
+            // An invalid destination path fails at File.Create itself -- this confirms that failure
             // propagates as the real underlying exception, not wrapped or masked by anything else.
-            // It does NOT exercise that try/catch's own cleanup logic at all (there's nothing yet to
-            // clean up at this point) -- no test currently forces WavpackSetConfiguration64 or
-            // WavpackPackInit to fail on an otherwise-valid config to exercise that path for real.
+            // OpenSession has no other failure mode to exercise beyond its own up-front validation
+            // (channels/bitsPerSample/sampleRate/totalSamples, covered by the other OpenSession
+            // tests below) and this File.Create call -- the managed encoder has no native context
+            // or config step that could fail separately the way the old native-backed one did.
             var invalidPath = Path.Combine(Path.GetTempPath(), $"wavpack_missing_dir_{Guid.NewGuid():N}", "dest.wv");
 
             var act = () => WavPackEncoderSession.OpenSession(invalidPath, channels: 1, bitsPerSample: 16, sampleRate: 44100, totalSamples: 1);

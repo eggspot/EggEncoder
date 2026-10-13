@@ -37,6 +37,7 @@ namespace EggEncoder.Codecs.Vorbis
             var channels = reader.Channels;
             var sampleRate = reader.SampleRate;
             var totalSamples = reader.TotalSamples;
+            var tags = FlattenTags(reader.Tags.All);
 
             var floatBuffer = new float[ReadBufferFrames * channels];
 
@@ -57,8 +58,37 @@ namespace EggEncoder.Codecs.Vorbis
                 Channels = channels,
                 SampleRate = sampleRate,
                 BitsPerSample = 16,
-                TotalSamples = totalSamples
+                TotalSamples = totalSamples,
+                Tags = tags
             };
+        }
+
+        // NVorbis's own ITagData.All is multi-valued per field (Vorbis comments allow a field
+        // name to repeat, e.g. multiple ARTIST entries) -- flattened to this project's usual
+        // single-value-per-key Tags convention by keeping just the first value per field, the
+        // same simplification Id3v2Reader/VorbisCommentReader apply for a duplicate key elsewhere.
+        // An entirely comment-free Vorbis stream still always has this header packet (it's
+        // mandatory per the bitstream spec, unlike FLAC's own optional VORBIS_COMMENT block), so
+        // null is reported for "zero actual comments" rather than an always-present empty
+        // dictionary, matching WavReader.Tags/Id3v2Reader/VorbisCommentReader's own "null means no
+        // tags" convention for every other format.
+        private static IReadOnlyDictionary<string, string>? FlattenTags(IReadOnlyDictionary<string, IReadOnlyList<string>> allTags)
+        {
+            if (allTags.Count == 0)
+            {
+                return null;
+            }
+
+            var flattened = new Dictionary<string, string>();
+            foreach (var (key, values) in allTags)
+            {
+                if (values.Count > 0)
+                {
+                    flattened[key] = values[0];
+                }
+            }
+
+            return flattened.Count > 0 ? flattened : null;
         }
 
         // Mirrors EggEncoder.Pcm.FloatSampleConverter.ClampToNativeInt32's exact convention (NaN ->
@@ -88,5 +118,7 @@ namespace EggEncoder.Codecs.Vorbis
         public required int BitsPerSample { get; init; }
 
         public required long TotalSamples { get; init; }
+
+        public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 }

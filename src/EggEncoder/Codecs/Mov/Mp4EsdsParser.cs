@@ -26,7 +26,7 @@ namespace EggEncoder.Codecs.Mov
             var esDescriptorEnd = position + size;
 
             position += 2; // ES_ID
-            var flags = esdsBoxContent[position];
+            var flags = ReadByte(esdsBoxContent, position);
             position += 1;
 
             if ((flags & 0x80) != 0)
@@ -36,7 +36,7 @@ namespace EggEncoder.Codecs.Mov
 
             if ((flags & 0x40) != 0)
             {
-                var urlLength = esdsBoxContent[position];
+                var urlLength = ReadByte(esdsBoxContent, position);
                 position += 1 + urlLength;
             }
 
@@ -95,8 +95,11 @@ namespace EggEncoder.Codecs.Mov
 
         private static Mp4AudioConfig ParseAudioSpecificConfigBytes(byte[] data, int offset)
         {
-            var b0 = data[offset];
-            var b1 = data[offset + 1];
+            // ParseDecoderConfigDescriptor's own `size >= 2` check only validates the descriptor's
+            // own DECLARED size field -- it doesn't guarantee the backing array actually has 2 real
+            // bytes at this offset for a truncated/corrupted file, so this still needs its own check.
+            var b0 = ReadByte(data, offset);
+            var b1 = ReadByte(data, offset + 1);
 
             var audioObjectType = (b0 >> 3) & 0x1F;
             var samplingFrequencyIndex = ((b0 & 0x07) << 1) | (b1 >> 7);
@@ -117,6 +120,22 @@ namespace EggEncoder.Codecs.Mov
                 SampleRate = AacTables.SampleRates[samplingFrequencyIndex],
                 Channels = channelConfiguration
             };
+        }
+
+        // Every raw byte read in this file outside TryReadDescriptorHeader's own already-guarded
+        // loop funnels through here -- confirmed by a truncated/corrupted 'esds' box previously
+        // throwing an unchecked IndexOutOfRangeException instead of the clear, typed
+        // InvalidDataException every other container reader in this codebase gives for the same
+        // class of malformed input (structurally the same bug AsfContainerReader had on truncated
+        // WMA files, just here in MOV/MP4's own AAC audio-config parsing).
+        private static byte ReadByte(byte[] data, int position)
+        {
+            if (position < 0 || position >= data.Length)
+            {
+                throw new InvalidDataException($"'esds' box is truncated or corrupted: expected a byte at position {position}, but the box is only {data.Length} byte(s) long");
+            }
+
+            return data[position];
         }
 
         private static bool TryReadDescriptorHeader(byte[] data, ref int position, out int tag, out int size)

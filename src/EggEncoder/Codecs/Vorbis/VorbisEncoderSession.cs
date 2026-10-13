@@ -1,3 +1,4 @@
+using EggEncoder.Codecs;
 using OggVorbisEncoder;
 
 namespace EggEncoder.Codecs.Vorbis
@@ -28,7 +29,7 @@ namespace EggEncoder.Codecs.Vorbis
 
         private bool _disposed;
 
-        private VorbisEncoderSession(FileStream destStream, int channels, int sampleRate, float quality)
+        private VorbisEncoderSession(FileStream destStream, int channels, int sampleRate, float quality, IReadOnlyDictionary<string, string>? tags)
         {
             _destStream = destStream;
             _channels = channels;
@@ -42,6 +43,14 @@ namespace EggEncoder.Codecs.Vorbis
             _processingState = ProcessingState.Create(info);
 
             var comments = new Comments();
+            if (tags is not null)
+            {
+                foreach (var (key, value) in tags)
+                {
+                    comments.AddTag(key, value);
+                }
+            }
+
             var infoPacket = HeaderPacketBuilder.BuildInfoPacket(info);
             var commentsPacket = HeaderPacketBuilder.BuildCommentsPacket(comments);
             var booksPacket = HeaderPacketBuilder.BuildBooksPacket(info);
@@ -56,7 +65,7 @@ namespace EggEncoder.Codecs.Vorbis
             FlushPages(force: true);
         }
 
-        public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality)
+        public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality, IReadOnlyDictionary<string, string>? tags = null)
         {
             if (channels is not 1 and not 2)
             {
@@ -73,10 +82,22 @@ namespace EggEncoder.Codecs.Vorbis
                 throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; only positive sample rates are supported for Vorbis encoding");
             }
 
+            // Validate tag field names before creating the destination file at all -- same
+            // precedent as Mp3Encoder/FlacEncoder/OpusEncoderSession's own tag validation.
+            // OggVorbisEncoder's own Comments.AddTag does no validation of its own, so this is
+            // the only place a malformed field name would ever be rejected.
+            if (tags is not null)
+            {
+                foreach (var key in tags.Keys)
+                {
+                    VorbisCommentWriter.ValidateFieldName(key);
+                }
+            }
+
             var destStream = File.Create(destFilePath);
             try
             {
-                return new VorbisEncoderSession(destStream, channels, sampleRate, quality);
+                return new VorbisEncoderSession(destStream, channels, sampleRate, quality, tags);
             }
             catch
             {

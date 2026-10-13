@@ -15,6 +15,18 @@ namespace EggEncoder.Codecs.Wav
     // decoders (ffmpeg's own decode and macOS's afconvert/CoreAudio) before this file was written,
     // applying the lesson IMA ADPCM's own nibble-formula bug taught: verify against real output,
     // don't trust a read-through of the spec or a hand-derived formula alone.
+    //
+    // CompressSample below backs MsAdpcmEncoder's own encode direction. Unlike IMA ADPCM's own
+    // QuantizeNibble (an 8-candidate search, because FFmpeg's real IMA encoder's nibble-picking
+    // heuristic turned out to track state via a formula that genuinely disagrees with its own
+    // decoder's), FFmpeg's real adpcm_ms_compress_sample updates its internal state via the exact
+    // same structural formula adpcm_ms_expand_nibble (this file's own ExpandNibble) decodes with --
+    // confirmed directly from FFmpeg's adpcmenc.c source, not assumed -- just against its own
+    // pre-divided-by-4 coefficient convention (divide by 64) rather than this file's real,
+    // non-pre-divided one (divide by 256), the same scale difference ExpandNibble's own doc comment
+    // already accounts for. So CompressSample computes the nibble directly via MS ADPCM's own
+    // closed-form quantization formula (no search needed), then commits it via ExpandNibble itself,
+    // the same "compute, then commit through the shared, already-verified decode path" pattern.
     internal static class MsAdpcmDecoder
     {
         private static readonly int[] _adaptationTable =
@@ -52,6 +64,30 @@ namespace EggEncoder.Codecs.Wav
             state.Delta = Math.Max(delta, 16);
 
             return state.Sample1;
+        }
+
+        // Computes the nibble that best reconstructs sample under this channel's current predictor
+        // and delta, via MS ADPCM's own direct quantization formula (ported from FFmpeg's real
+        // adpcm_ms_compress_sample -- see this file's own top-of-file doc comment for why a direct
+        // formula, not a search, is correct here), then commits it via ExpandNibble itself --
+        // guaranteeing the encoder's running Sample1/Sample2/Delta track any standards-compliant
+        // decoder (this file's own ExpandNibble-based WavReader decode included) in lockstep by
+        // construction.
+        internal static int CompressSample(ref ChannelState state, int sample)
+        {
+            // Clamped defensively to this format's own documented 16-bit input contract, the same
+            // precedent ImaAdpcmDecoder.QuantizeNibble and G711Codec.ClampToTableIndex already
+            // establish at their own encode entry points.
+            sample = Math.Clamp(sample, short.MinValue, short.MaxValue);
+
+            var predictor = ((state.Sample1 * state.Coeff1) + (state.Sample2 * state.Coeff2)) / 256;
+            var diff = sample - predictor;
+            var bias = diff >= 0 ? state.Delta / 2 : -(state.Delta / 2);
+            var nibble = Math.Clamp((diff + bias) / state.Delta, -8, 7) & 0x0F;
+
+            ExpandNibble(ref state, nibble);
+
+            return nibble;
         }
 
         // Decodes exactly one block's worth of samples into interleavedOutput (sized to

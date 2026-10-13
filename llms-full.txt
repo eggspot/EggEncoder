@@ -1,10 +1,10 @@
 # EggEncoder — Full Reference
 
-> Audio encoding/decoding toolkit for .NET — native MP3/FLAC codec bindings, managed AAC/WMA encode/decode, and built-in waveform generation, behind one IMediaEncoder interface.
+> Audio encoding/decoding toolkit for .NET — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, 100% pure C# (no native binaries at all, genuinely cross-platform), built-in waveform/peak/RMS generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, bit-depth/float conversion, fades, parametric EQ, FIR filtering, mixing, concatenation), behind one IMediaEncoder interface.
 
 ## Overview
 
-EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations (AAC, FLAC, MP3, WAV, WMA) plus native P/Invoke bindings to `libmp3lame` and `libFLAC`. No external process, no ffmpeg install, no subprocess overhead. Windows x64 only.
+EggEncoder gives you a single `IMediaEncoder` abstraction for probing, converting, and cutting audio files, implemented entirely in-process by `NativeEncoder`: pure .NET codec implementations for every supported format (AAC, AIFF/AIFC, ALAC, AU, FLAC, MP3 — decode delegates to the NLayer NuGet package, encode is clean-room from the ISO/IEC 11172-3 spec — TTA, Opus, Vorbis, WAV incl. all its ADPCM/G.711 variants, WMA, WavPack decode *and* encode). No external process, no ffmpeg install, no subprocess overhead, and no native binary of any kind — this library is genuinely cross-platform (Windows, Linux, macOS) and is built and tested on all three in CI.
 
 ## Installation
 
@@ -12,7 +12,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction for probing, convertin
 dotnet add package EggEncoder
 ```
 
-Targets `net8.0`, `net9.0`, `net10.0`. Native codec binaries (`libmp3lame.dll`, `libFLAC.dll`) for `win-x64` ship inside the package via the NuGet `contentFiles` convention and are copied to your output directory at `Native/win-x64/*.dll` automatically — no separate install step.
+Targets `net8.0`, `net9.0`, `net10.0`. No native binaries, no extra install steps — just the package. EggEncoder runs anywhere .NET 8/9/10 runs.
 
 ## Core Interface
 
@@ -22,9 +22,12 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Flac/Aac/WavPack implemented so far -- see docs/feature-roadmap.md item 1
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }
+
+public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vorbis, WavPack, Mov } // mirrors AudioCutter's own extension-dispatch switch 1:1
 ```
 
 ```csharp
@@ -35,7 +38,7 @@ public class ProbeResult
     public long SizeBytes { get; init; }
     public double DurationSeconds { get; init; }
     public string CodecType { get; init; }          // "audio" or "video"
-    public string? CodecName { get; init; }         // e.g. "pcm_s16le", "flac", "mp3", "aac", "wmav2"
+    public string? CodecName { get; init; }         // e.g. "pcm_s16le", "adpcm_yamaha", "flac", "mp3", "aac", "wmav2"
     public string? CodecLongName { get; init; }
     public int? SampleRate { get; init; }
     public int? Channels { get; init; }
@@ -48,10 +51,13 @@ public class ProbeResult
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
+    public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
+    public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
+    public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV 'LIST'/'INFO' metadata (keyed by raw chunk id, e.g. "INAM"), MP3 ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC/Opus/Vorbis comment fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/MP3/FLAC/Opus/Vorbis with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags).
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `tags` parameter for FLAC/Opus/Vorbis (see each format's own section below).
 
 ## Dependency Injection
 
@@ -61,6 +67,8 @@ using EggEncoder;
 builder.Services.AddEggEncoder(); // registers IMediaEncoder -> NativeEncoder (scoped)
 // optional: AddEggEncoder(enableLogging: false) to silence Start/Completed/Failed logging entirely
 ```
+
+`AddEggEncoder` also maps `IPcmTransformEncoder` (the PCM transform pipeline's own DI-friendly entry point — see "PCM Transform Pipeline" below) to resolve that same scoped `NativeEncoder` instance; inject whichever interface fits the call site.
 
 ### Consuming IMediaEncoder
 
@@ -103,6 +111,13 @@ public class TranscodeWorker(IServiceProvider serviceProvider)
 | Format | Probe | Decode | Encode |
 |--------|:---:|:---:|:---:|
 | WAV    | yes | yes | yes |
+| AIFF / AIFC | yes | yes | yes |
+| AU (.au) | yes | yes | yes |
+| ALAC (.caf) | yes | yes | yes |
+| TTA    | yes | yes | yes |
+| WavPack (.wv) | yes | yes | yes |
+| Opus (.opus) | yes | yes | yes |
+| Vorbis (.ogg) | yes | yes | yes |
 | FLAC   | yes | yes | yes |
 | MP3    | yes | yes | yes |
 | AAC    | yes | yes | yes |
@@ -111,15 +126,221 @@ public class TranscodeWorker(IServiceProvider serviceProvider)
 
 ¹ MOV/MP4 decode is audio-only (mono AAC-LC tracks); video frames are never decoded. Files without a matching audio track still probe fine (metadata only) -- `NativeEncoder.Probe` falls back gracefully rather than failing the whole probe.
 
-`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format (WAV, FLAC, MP3, AAC, WMA, MOV/MP4 with a mono AAC-LC track) and writes to any supported destination format, including WAV, FLAC, MP3, AAC, or WMA — it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region. `WmaDecoder` supports mono and independently-coded stereo; real-world WMAv2 stereo encoders (including ffmpeg's) default to mid/side stereo coding, which is unsupported and throws `NotSupportedException`. `WmaEncoder` always writes independently-coded channels, so its own output is always decodable by `WmaDecoder`.
+`AudioCutter.Cut` (used by `NativeEncoder.CutFile`) decodes any supported source format and writes to any supported destination format -- it can transcode while trimming; source and destination extensions no longer need to match. Sample-accurate, no re-encode of the untouched region.
+
+### WAV's own format-tag variants
+
+WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float PCM, both read and write (`WavSampleFormat.Integer`/`Float32`). Beyond plain PCM, `WavReader`/`WavWriter` also cover, all picked up automatically from the file's own `fmt` chunk on read (no opt-in needed) and selectable as a `WavSampleFormat` destination on write:
+
+- **IMA ADPCM** (format tag 17) -- mono/stereo only, reports/requires 16-bit PCM at the boundary regardless of the 4-bit coded width. Block-structured: `WavWriter` buffers samples internally into fixed-size blocks (1024-byte block align, matching FFmpeg's own real `adpcm_ima_wav` encoder default) and only physically writes once a block fills or `Finish()` is called, which also flushes and pads any final short block. Each nibble is chosen by an 8-candidate brute-force search (`ImaAdpcmDecoder.QuantizeNibble`) against the same per-bit-term diff formula `ExpandNibble` itself decodes with -- confirmed, not assumed, that FFmpeg's own real encoder's nibble-picking heuristic optimizes for a formula that genuinely disagrees with its own decoder's, so a search (not a closed-form computation) is what keeps this encoder's running state in lockstep with any standards-compliant decoder.
+- **MS ADPCM** (format tag 2) -- mono/stereo only, same 16-bit-boundary/4-bit-coded-width story. A genuinely different algorithm from IMA ADPCM: linear prediction via a per-file coefficient table carried in the `fmt` chunk extension itself, not IMA ADPCM's universal fixed step table -- its own decoder/encoder (`MsAdpcmDecoder`/`MsAdpcmEncoder`), not a variant of the IMA ADPCM types. Unlike IMA ADPCM, the nibble is computed via a direct closed-form formula (confirmed FFmpeg's own real encoder's internal state-tracking formula structurally matches its own decoder's, so no search is needed); the encoder always selects the standard coefficient table's simplest pair for every block, matching FFmpeg's own real encoder exactly.
+- **Yamaha ADPCM** (format tag 32) -- mono/stereo only, same 16-bit-boundary/4-bit-coded-width story. Structurally simpler than IMA/MS ADPCM: confirmed directly from FFmpeg's real source and a real ffmpeg-produced fixture's own bytes, it has **no block structure at all** -- no per-block header, no `wSamplesPerBlock` `fmt` chunk extension (`cbSize` is 0) -- each channel's predictor/step state just carries continuously for the whole stream, lazily initializing only the first time a channel's own step is still its default 0. Like MS ADPCM, the nibble is a direct closed-form formula, not a search. Because there's no block padding, the data chunk size is exactly `ceil(totalFrames * channels / 2)` bytes, with at most one trailing zero-pad nibble (mono, odd frame count) flushed by `Finish()`.
+- **G.711 mu-law/A-law** (format tags 7/6) -- any channel count (no mono/stereo restriction, unlike every ADPCM variant above), reports/requires 16-bit PCM at the boundary regardless of the 8-bit coded width. No block structure or adaptive state at all, so encode is a simple one-sample-at-a-time companding formula, selected via `WavSampleFormat.MuLaw`/`ALaw` the same way `Float32` is.
+
+All three ADPCM variants and G.711 are verified bit-exact against a real, independent ffmpeg decode of files this library's own encoders produced. Samples are always exchanged as `int[]`, at this codebase's native-range convention for whatever bit depth is in play (see "PCM Transform Pipeline" below).
+
+### WAV metadata tags ('LIST'/'INFO')
+
+`WavReader` also reads a WAV file's `'LIST'` chunk when its own sub-type is `'INFO'` -- the standard RIFF metadata convention (title, artist, date, comment, etc., each its own four-character-ID sub-chunk, e.g. `INAM`/`IART`/`ICRD`/`ICMT`). Surfaced through `IMediaEncoder.Probe` as `ProbeResult.Tags`: a dictionary keyed by the raw chunk ID exactly as RIFF stores it, not remapped to friendlier names, the same way `CodecName` exposes `"pcm_s16le"` rather than a human label. `null` for every non-WAV format, and for a WAV file that simply doesn't carry a `'LIST'`/`'INFO'` chunk (most don't) -- real-world ffmpeg-encoded WAV files commonly do, carrying at least an `ISFT` ("software") tag. `WavWriter.Create` can also write tags back out, via an optional `tags` parameter (`IReadOnlyDictionary<string, string>?`, default `null`) -- the exact inverse of `WavReader`'s own parsing, written as a single trailing chunk after `'data'` (and its pad byte, if any) since the chunk's own bytes are fully known from the tags alone, independent of how much audio data follows. Threads through every `WavSampleFormat`, including the block-structured ADPCM variants, which each build their own independent header. A tag id must be exactly 4 ASCII characters (RIFF's own FourCC convention) or `Create` throws `ArgumentException`. A malformed or truncated tag list on read degrades gracefully rather than throwing -- see "Constraints and Gotchas" below.
+
+## PCM Transform Pipeline
+
+A `PcmTransformPipeline` runs a list of `IPcmTransform`s over every decoded block between decode and the destination write. It's opt-in -- the plain `Convert`/`Cut` above are untouched and still fully streaming.
+
+```csharp
+using EggEncoder.Codecs;
+using EggEncoder.Pcm;
+
+var pipeline = new PcmTransformPipeline(
+    new ResamplingTransform(sourceRate: 44100, targetRate: 48000, channels: 2),
+    new CompressorTransform(sampleRate: 48000, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 150),
+    new NoiseGateTransform(sampleRate: 48000, thresholdDb: -40, ratio: 10, attackMs: 5, releaseMs: 100),
+    new VolumeTransform(gain: 1.5),
+    new LimiterTransform(sampleRate: 48000, ceilingDb: -0.3, releaseMs: 50),
+    new EchoTransform(sampleRate: 48000, channels: 2, delaySeconds: 0.3, feedback: 0.4, wetGain: 0.5));
+
+AudioCutter.Convert(sourcePath, destPath, pipeline);
+```
+
+Transforms run in the order given; each receives the previous one's output. **A pipeline instance carries cross-block state and is meant for exactly one `Convert`/`Cut`/`Mix` call -- build a fresh `PcmTransformPipeline` per call, never reuse one across calls.**
+
+```csharp
+public interface IPcmTransform
+{
+    int OutputSampleRate { get; }      // 0 = passthrough
+    int OutputChannels { get; }        // 0 = passthrough
+    int OutputBitsPerSample { get; }   // 0 = passthrough
+    bool CanChangeFrameCount { get; }
+    (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample);
+
+    // Default interface method -- existing implementers don't need to change. Drains output this
+    // transform is still holding back (e.g. a resampler's pending tail); call once, after the last
+    // Apply() call for a stream. Most transforms hold no such state and keep the default (no output).
+    (int[] buffer, int frameCount) Flush() => (Array.Empty<int>(), 0);
+}
+```
+
+### The fourteen built-in transforms
+
+```csharp
+public sealed class ResamplingTransform : IPcmTransform
+{
+    public const int DefaultFilterHalfWidth = 32;
+    public ResamplingTransform(int sourceRate, int targetRate, int channels, int filterHalfWidth = DefaultFilterHalfWidth);
+    public int FilterHalfWidth { get; }
+    public void Reset();
+}
+
+public sealed class VolumeTransform : IPcmTransform
+{
+    public VolumeTransform(double gain); // 1.0 = no change, 0.0 = silence
+}
+
+public sealed class PeakNormalizationTransform : IPcmTransform
+{
+    public PeakNormalizationTransform(double targetDb); // e.g. -1.0; must be <= 0
+    public void MeasurePeak(int[] buffer, int frameCount, int channels, int bitsPerSample);
+    public void MeasurePeak(long maxAbsoluteSample, int bitsPerSample);
+    public static long ComputeMaxAbsoluteSample(ReadOnlySpan<int> samples);
+}
+
+public sealed class CompressorTransform : IPcmTransform
+{
+    public CompressorTransform(int sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs, double makeupGainDb = 0.0);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
+public sealed class NoiseGateTransform : IPcmTransform
+{
+    // The mirror image of CompressorTransform: gain reduction below threshold instead of above.
+    public NoiseGateTransform(int sampleRate, double thresholdDb, double ratio, double attackMs, double releaseMs);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
+public sealed class LimiterTransform : IPcmTransform
+{
+    // Infinite-ratio compression (envelope clamped AT the ceiling) plus a final per-sample hard
+    // clip, so the output is GUARANTEED never to exceed the ceiling even during a nonzero attack.
+    public LimiterTransform(int sampleRate, double ceilingDb, double releaseMs, double attackMs = 0.0);
+    public void Reset(); // clear the envelope follower back to silence
+}
+
+public sealed class EchoTransform : IPcmTransform
+{
+    public const double MaxDelaySeconds = 60.0;
+    public const double MaxTailSeconds = 30.0;
+    public const int MaxChannels = 1024;
+
+    // A feedback delay line, one per channel (channels/sampleRate fixed at construction, like
+    // BiquadTransform/FirFilterTransform). feedback controls how much of each repeat feeds the
+    // next, quieter one; wetGain scales the echo independently of the dry signal. The second
+    // built-in transform (after ResamplingTransform) to implement Flush() -- here to drain the
+    // decaying repeat tail rather than withheld lookahead. CanChangeFrameCount is true whenever
+    // feedback > 0.
+    public EchoTransform(int sampleRate, int channels, double delaySeconds, double feedback, double wetGain);
+    public void Reset(); // clear the delay line back to silence
+}
+
+public sealed class PanTransform : IPcmTransform
+{
+    public PanTransform(double pan, PanLaw law = PanLaw.Linear); // pan: -1.0 (full left) .. +1.0 (full right)
+    public double Pan { get; }
+    public PanLaw Law { get; }
+}
+public enum PanLaw { Linear, EqualPower }
+
+public sealed class ChannelRemixTransform : IPcmTransform
+{
+    public ChannelRemixTransform(int inputChannels, int outputChannels, ChannelRemixMode mixMode = ChannelRemixMode.Auto);
+}
+public enum ChannelRemixMode { Auto, PassThrough, Downmix, UpMix }
+
+public sealed class BitDepthFormatTransform : IPcmTransform
+{
+    public BitDepthFormatTransform(int fromBits, int toBits); // each 8, 16, 24, or 32
+    public static (long Min, long Max) GetNativeRange(int bits);
+}
+
+public sealed class FadeTransform : IPcmTransform
+{
+    public FadeTransform(long totalFrames, long fadeInFrames = 0, long fadeOutFrames = 0, FadeCurve curve = FadeCurve.Linear);
+    public void Reset();
+}
+public enum FadeCurve { Linear, EqualPower }
+
+public sealed class BiquadTransform : IPcmTransform
+{
+    public const int MaxChannels = 1024;
+
+    public BiquadTransform(BiquadFilterType filterType, int channels, int sampleRate, double frequencyHz, double q = 0.7071067811865476, double gainDb = 0.0);
+    public void Reset();
+}
+public enum BiquadFilterType { LowPass, HighPass, BandPass, Notch, AllPass, PeakingEq, LowShelf, HighShelf }
+
+public sealed class ButterworthTransform : IPcmTransform
+{
+    public ButterworthTransform(BiquadFilterType filterType, int order, int channels, int sampleRate, double frequencyHz);
+    public void Reset();
+}
+
+public sealed class FirFilterTransform : IPcmTransform
+{
+    public const int MaxChannels = 1024;
+
+    public FirFilterTransform(int channels, double[] taps);
+    public void Reset();
+}
+```
+
+- **Gain / peak normalization**: `VolumeTransform` is a flat linear multiplier. `PeakNormalizationTransform` measures the peak `|sample|` then applies `gain = targetPeakLinear * bitDepthMax / peak`; dropped into a pipeline without pre-measuring, it self-measures from whatever block `Apply` first sees -- driven by `AudioCutter.Convert`/`Cut`, that's one ~4096-frame decode block, **not the whole file**. For a true whole-file measurement: call `AudioCutter.MeasurePeakAmplitude(sourcePath)` first, then `peakTransform.MeasurePeak(peak, bitsPerSample)` before running the pipeline.
+- **Dynamics compression**: `CompressorTransform` is a standard feedforward design (threshold dBFS / ratio / attack / release / makeup gain). Its envelope follower is **stereo-linked** -- one scalar tracking the loudest channel per frame, not independent per-channel envelopes, so a transient in one channel doesn't shift the stereo image. Tracked in linear scale via a one-pole filter with separate attack/release coefficients, converted to dB once per frame for the reduction computation. Channel-count-agnostic (no per-channel state, derives `channels` fresh from each `Apply` call, the same way `FadeTransform` does), but fixes `sampleRate` at construction (the attack/release coefficients depend on it) the same way `BiquadTransform` does.
+- **Noise gating**: `NoiseGateTransform` is the mirror image of `CompressorTransform` -- gain reduction below threshold instead of above, via the same stereo-linked envelope follower, one-pole attack/release tracking, and `ratio` convention (`>= 1.0`, where `1.0` is an explicit no-op at every level). Unlike the compressor, true digital silence (`envelopeDb == -Infinity`) is this transform's own common case rather than a boundary condition, so `ratio == 1.0` combined with silence is handled as its own branch rather than falling through the general `(threshold - envelopeDb) * (1 - 1/ratio)` formula -- that combination would otherwise compute `Infinity * 0`, which is `NaN` under IEEE 754, not 0.
+- **Peak limiting**: `LimiterTransform` is an infinite-ratio compressor against a `ceilingDb` -- the same stereo-linked envelope follower as `CompressorTransform`/`NoiseGateTransform`, but once the envelope exceeds the ceiling the gain applied brings it exactly down to the ceiling, not some ratio-scaled fraction of the way there. It then also applies a final per-sample hard clip to the ceiling, which is what makes this a true peak limiter rather than just "`CompressorTransform` with a very high ratio": a nonzero attack time lets a fast transient slip past the smoothed envelope follower before gain reduction has caught up, so the envelope-derived gain alone can only reduce toward the ceiling, not guarantee it. `attackMs` defaults to `0` (instant), the classic brick-wall-limiter default.
+- **Echo / delay**: `EchoTransform` is a classic feedback comb-filter delay line, one per channel -- unlike the channel-count-agnostic compressor/gate/limiter family, it fixes `channels` (and `sampleRate`, to convert `delaySeconds` into a frame count) at construction, the same way `BiquadTransform`/`FirFilterTransform` do, since the delay line itself is per-channel state sized up front. Each output sample is the dry input plus `wetGain` times the input from `delaySeconds` ago; `feedback` (must be `< 1.0`) controls how much of each repeat feeds back into the delay line to produce the next, quieter one. It's the second built-in transform (after `ResamplingTransform`) to implement `Flush()`, for a different reason: not withheld lookahead, but draining the decaying repeat tail that continues for a while after the real input ends -- a deterministic, bounded number of frames (enough repeats to decay below -60dB, capped at `EchoTransform.MaxTailSeconds`). Its `CanChangeFrameCount` reports `true` whenever `feedback > 0`, since the tail means total output (`Apply` plus `Flush` combined) genuinely exceeds total input.
+- **Pan/balance**: `PanTransform` scales left/right gain independently from a single `pan` value. Stereo (2-channel) input only -- throws `ArgumentException` for any other channel count. `PanLaw.Linear` is balance-style (only the opposite channel attenuates; no volume dip at center). `PanLaw.EqualPower` is constant-power (`left^2 + right^2 == 1` everywhere, including a -3dB-per-channel center) -- how a true pan pot behaves in most DAWs.
+- **Channel remix**: `ChannelRemixTransform` handles mono<->stereo and general N<->M (equal-weight downmix, cyclic upmix).
+- **Bit-depth / float conversion**: `BitDepthFormatTransform` rescales between the native ranges of 8/16/24/32-bit samples -- this codebase has no separate "normalized" scale; every bit depth is signed and sign-extended to its own native range (e.g. 8-bit is -128..127).
+- **Fades**: `FadeTransform` applies a fade-in/out (linear or equal-power) over a fixed total frame count, tracked across blocks the same way `ResamplingTransform` tracks its own state. Reachable directly, or via `CutOptions.FadeInSeconds`/`FadeOutSeconds`/`FadeCurve` on a `Cut` call.
+- **Parametric EQ**: `BiquadTransform` is a single second-order IIR filter section using the RBJ Audio EQ Cookbook formulas (Direct Form II Transposed, two state values per channel) -- low/high pass, band pass, notch, all pass, peaking EQ, low/high shelf. `ButterworthTransform` cascades `order / 2` `BiquadTransform` stages sharing one cutoff, each at a different Q from the standard Butterworth pole-pair formula, for a steeper, maximally-flat-passband low/high pass than one biquad section alone.
+- **General FIR convolution**: `FirFilterTransform` applies a caller-supplied tap array identically to every channel (parity with ffmpeg's `afir`/general-FIR filters) -- no filter-design code of its own, since accepting arbitrary taps is the whole point. Keeps each channel's last `taps.Length - 1` samples as history across blocks.
+- **Mixing/concatenation**: `AudioCutter.Mix` (2+ same-format sources, per-input gain, silence-padded to the longest, decodes every input fully into memory concurrently -- clip-length material, not multi-hour streams) and `AudioCutter.Concatenate` (2+ same-format sources, fully streaming for non-WAV destinations) are separate, non-transform capabilities reachable through the same opt-in API, not `IPcmTransform` implementations.
+
+### Important limits an LLM should surface when recommending this
+
+- A `PcmTransformPipeline` instance carries cross-block state (resampler history, fade frame position, measured peak gain, compressor/gate/limiter envelope, echo delay line, biquad/Butterworth/FIR filter history) -- build a fresh instance per `Convert`/`Cut`/`Mix` call, never reuse one across calls.
+- Any transform implementing `IPcmTransform.Flush` (`ResamplingTransform` for withheld lookahead, `EchoTransform` for a decaying repeat tail) holds output back until it's ready, and needs `pipeline.Flush(channels, sampleRate, bitsPerSample)` called once after the last block to drain its tail. `AudioCutter.Convert(pipeline)`/`Cut(options)` call this automatically; only code driving `PcmTransformPipeline` directly needs to call it itself. `EchoTransform.CanChangeFrameCount` reports `true` whenever `feedback > 0`, since its total output (including the `Flush`-drained tail) then genuinely exceeds total input -- getting this wrong would silently truncate the tail out of a destination sink that was sized from the input count alone.
+- `Mix`/`Concatenate` require every source to share channels/sample rate/bit depth (mismatches throw `NotSupportedException`).
+- `ResamplingTransform` is a Kaiser-windowed-sinc polyphase filter (anti-aliasing on downsample, band-limited reconstruction on upsample), not linear interpolation. It tracks a cumulative `floor(sourceFrames * ratio)` target so total output frame count is exact regardless of block splits; downsampling scales the filter's half-width up to preserve anti-aliasing quality, capped at 256 taps for extreme ratios.
+- Float PCM: the pipeline itself is `int[]`-only; `FloatSampleConverter`/`AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` convert at the application boundary. A float WAV *source* always decodes transparently into int PCM. For a float WAV *destination*, pass `WavSampleFormat.Float32` to `Convert`/`Cut`(`CutOptions.DestinationWavFormat`)/`Mix`/`Concatenate` -- it requires the destination's bit depth to already be 32-bit and throws `NotSupportedException` against a non-WAV destination. NaN samples convert to silence (0); Infinity clamps to +/-1.0.
+
+```csharp
+public sealed class CutOptions
+{
+    public PcmTransformPipeline? Pipeline { get; init; }
+    public double FadeInSeconds { get; init; }
+    public double FadeOutSeconds { get; init; }
+    public FadeCurve FadeCurve { get; init; } = FadeCurve.Linear;
+    public WavSampleFormat DestinationWavFormat { get; init; } = WavSampleFormat.Integer;
+    public AiffSampleFormat DestinationAiffFormat { get; init; } = AiffSampleFormat.Integer;
+    public AuSampleFormat DestinationAuFormat { get; init; } = AuSampleFormat.Integer;
+}
+
+public readonly record struct MixInput(string FilePath, double Gain = 1.0);
+
+public enum WavSampleFormat { Integer, Float32, MuLaw, ALaw, ImaAdpcm, MsAdpcm, YamahaAdpcm }
+public enum AiffSampleFormat { Integer, LittleEndianInteger, Float32, Float64, MuLaw, ALaw }
+public enum AuSampleFormat { Integer, Float32, Float64, MuLaw, ALaw }
+```
 
 ## Codec Reference
 
-Every codec's `Decode` method takes an `AudioBlockDecodedCallback` (`EggEncoder.Codecs` namespace) instead of a generic `Action<>` — `ReadOnlySpan<int>` can't be used as a generic type argument on `net8.0`, so this is a plain delegate:
+Every codec's `Decode` method takes an `AudioBlockDecodedCallback` (`EggEncoder.Codecs` namespace) instead of a generic `Action<>` -- `ReadOnlySpan<int>` can't be used as a generic type argument on `net8.0`, so this is a plain delegate:
 
 ```csharp
 public delegate void AudioBlockDecodedCallback(ReadOnlySpan<int> block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel);
 ```
+
+`block` is interleaved samples for whatever chunk the decoder just produced. Accumulate it yourself (into a `List<int>`, a `WaveformCalculator`, an internal `IAudioSink` implementation) as needed -- this keeps memory bounded for large files and lets `NativeEncoder`/`AudioCutter` pipe decode output directly into an encoder session without buffering the whole track.
 
 ### AAC — `EggEncoder.Codecs.Aac`
 
@@ -127,12 +348,19 @@ public delegate void AudioBlockDecodedCallback(ReadOnlySpan<int> block, int chan
 public static class AacDecoder
 {
     public static AacStreamInfo Decode(string aacFilePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static AacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
 }
 
 public static class AacEncoder
 {
     public static void Encode(string destFilePath, short[] samples, int channels, int sampleRate);
     // throws NotSupportedException for channels != 1 or unsupported sample rates
+}
+
+public sealed class AacEncoderSession : IDisposable
+{
+    public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 ```
 
@@ -142,37 +370,73 @@ public static class AacEncoder
 public static class FlacDecoder
 {
     public static FlacStreamInfo Decode(string flacFilePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static FlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
+    // FlacStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (VORBIS_COMMENT metadata block, or null)
 }
 
 public static class FlacEncoder
 {
     public const uint DefaultCompressionLevel = 5;
-    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel);
+    public static void Encode(string sourceWavFilePath, string destFlacFilePath, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a VORBIS_COMMENT block right after STREAMINFO
+}
+
+public sealed class FlacEncoderSession : IDisposable
+{
+    public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+
+internal static class VorbisCommentReader // EggEncoder.Codecs -- shared with Opus/Vorbis's own comment header packet
+{
+    internal static IReadOnlyDictionary<string, string> ReadFrom(byte[] buffer, int offset, int length);
+}
+
+internal static class VorbisCommentWriter // EggEncoder.Codecs
+{
+    internal static byte[] BuildCommentListBytes(IReadOnlyDictionary<string, string> tags); // throws ArgumentException for a field name that's empty, non-ASCII, or contains '='
 }
 ```
 
-Both wrap native `libFLAC` P/Invoke bindings (`EggEncoder.Native.FlacNative`).
+FLAC is fully pure managed, decode and encode (RFC 9639, no native call) -- `FlacEncoder` tries CONSTANT, FIXED (orders 0-4), and LPC (orders 1-8, Levinson-Durbin + quantization) for every subframe and picks whichever has the smallest *exact* bit cost, always fully spec-compliant and fully decodable, though still not quite as compact as libFLAC's own encoder (no windowed/precision search beyond a fixed Welch window and 14-bit coefficient precision, no partitioned Rice coding). The former `EggEncoder.Native.FlacNative` P/Invoke declarations, `NativeLibraryLoader`, and the bundled `libFLAC.dll` binary have all been fully removed (docs/managed-codec-rewrite-plan.md item 8) now that every codec -- FLAC included -- is pure managed; this project no longer bundles or loads a native binary of any kind, and CI now builds and tests on Windows, Linux, and macOS. `VorbisCommentReader`/`VorbisCommentWriter` (`Codecs/VorbisComment.cs`) read and write the `VORBIS_COMMENT` metadata block, read via `FlacDecoder`/written via `FlacEncoder` -- see the "FLAC Vorbis Comment Tags" section of `llms.txt` for the full scope.
 
 ### MP3 — `EggEncoder.Codecs.Mp3`
 
 ```csharp
-public static class Mp3Decoder // backed by the NLayer managed decoder — no native call
+public static class Mp3Decoder // backed by the NLayer managed decoder -- no native call
 {
     public static Mp3StreamInfo Decode(string mp3FilePath, AudioBlockDecodedCallback onBlockDecoded);
 }
 
-public static class Mp3Encoder // native libmp3lame P/Invoke
+public static class Mp3Encoder // pure managed, clean-room from ISO/IEC 11172-3 -- no native call
 {
     public const int DefaultBitRateKbps = 320;
-    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps);
+    public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a fresh ID3v2.4 tag (UTF-8 text) before the audio frames; see Id3v2Writer
+}
+
+public sealed class Mp3EncoderSession : IDisposable
+{
+    public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = Mp3Encoder.DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 
 public static class Mp3Probe // manual MPEG frame-header parsing (Xing/Info/VBRI-aware), no native call
 {
     public static Mp3ProbeResult Probe(string mp3FilePath);
-    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate
+    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate, Tags
+}
+
+internal static class Id3v2Reader // read-only half of ID3v2 tag support -- text information frames only, see doc comment
+{
+    internal static IReadOnlyDictionary<string, string>? ReadTags(Stream stream);
+}
+
+internal static class Id3v2Writer // write-only half -- always emits a fresh ID3v2.4 tag, UTF-8 text
+{
+    internal static byte[] BuildTagBytes(IReadOnlyDictionary<string, string> tags); // throws ArgumentException for any id that isn't a 4-character text-frame id (starts with 'T', not "TXXX")
 }
 ```
+
+MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quantizer`/`Mp3HuffmanTables`) is a clean-room, CBR-only baseline implemented directly from the published ISO/IEC 11172-3 standard text -- no LAME/GroovyCodecs/ffmpeg encoder source consulted. Long blocks only (no block switching), independent (non-joint) stereo, no bit-reservoir borrowing across frames, no psychoacoustic model (`global_gain` alone is searched to fit each granule's fixed bit budget) -- a correctness-first baseline, not yet LAME-equivalent compression quality. Verified decodable, at a real SNR well above this project's own acceptance floor, by both `Mp3Decoder` (NLayer) and ffmpeg's own independent decoder, used read-only as test oracles. `Id3v2Reader`/`Id3v2Writer` (`Id3v2Tag.cs`) add ID3v2 metadata tag support, read and write -- see the "MP3 ID3v2 Tags" section of `llms.txt` for the full scope (text information frames only; ID3v2.3/2.4 read, ID3v2.4-only write).
 
 ### WAV — `EggEncoder.Codecs.Wav`
 
@@ -180,25 +444,30 @@ public static class Mp3Probe // manual MPEG frame-header parsing (Xing/Info/VBRI
 public sealed class WavReader : IDisposable
 {
     public static WavReader Open(string filePath);
+    public static WavReader Open(Stream stream); // requires stream.CanSeek -- header chunk-walk relies on Position/Seek; does NOT dispose stream
     public int Channels { get; }
     public int SampleRate { get; }
     public int BitsPerSample { get; }
     public long TotalSamples { get; }
     public bool IsFloatFormat { get; }
+    public bool IsALaw { get; }
+    public bool IsMuLaw { get; }
+    public bool IsImaAdpcm { get; }
+    public bool IsMsAdpcm { get; }
+    public bool IsYamahaAdpcm { get; }
+    public IReadOnlyDictionary<string, string>? Tags { get; }  // 'LIST'/'INFO' metadata, or null if the file has none
     public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
-    // 8-bit unsigned, 16/24/32-bit signed, and 32-bit IEEE float PCM are supported;
-    // throws NotSupportedException for anything else
 }
 
-public sealed class WavWriter : IAudioSink, IDisposable
+public sealed class WavWriter : IDisposable
 {
-    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
-    // writes 8-bit unsigned or 16/24/32-bit signed integer PCM
+    public void Finish(); // flushes/pads a pending ADPCM block or trailing Yamaha ADPCM nibble
 }
 ```
 
-Every other codec's `Convert`/`Cut` path reads from or writes to WAV as the common interchange format.
+See "WAV's own format-tag variants" above for the full ADPCM/G.711 story. Every other codec's `Convert`/`Cut` path reads from or writes to WAV as the common interchange format.
 
 ### WMA — `EggEncoder.Codecs.Wma`
 
@@ -214,9 +483,188 @@ public static class WmaEncoder
     public static void Encode(string destFilePath, IReadOnlyList<short> interleavedSamples, int channels, int sampleRate);
     // mono or stereo only; always writes independently-coded channels (no mid/side stereo)
 }
+
+public sealed class WmaEncoderSession : IDisposable
+{
+    public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
 ```
 
-Container parsing/writing via the internal `AsfContainerReader`/`AsfContainerWriter`. `WmaEncoderSession` implements the same streaming `IAudioSink` used by the other codecs' `AudioCutter` integration.
+Container parsing/writing via the internal `AsfContainerReader`/`AsfContainerWriter`. Mono or independently-coded stereo only -- genuine mid/side-coded stereo WMA files (the real-world default for most third-party encoders, including ffmpeg's) throw `NotSupportedException` on decode; `WmaEncoder` never produces mid/side output, so round-tripping through this library's own encoder/decoder always works.
+
+### AIFF / AIFC — `EggEncoder.Codecs.Aiff`
+
+```csharp
+public sealed class AiffReader : IDisposable
+{
+    public static AiffReader Open(string filePath);
+    public static AiffReader Open(Stream stream); // requires stream.CanSeek -- header chunk-walk relies on Position/Seek; does NOT dispose stream
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public bool IsFloatFormat { get; }
+    public bool IsFloat32 { get; }
+    public bool IsFloat64 { get; }
+    public bool IsALaw { get; }
+    public bool IsMuLaw { get; }
+    public bool IsLittleEndian { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+}
+
+public sealed class AiffWriter : IDisposable
+{
+    public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Plain AIFF (FORM/AIFF, 8/16/24/32-bit signed integer PCM -- 8-bit is signed, unlike WAV's unsigned convention) both read and write under `AiffSampleFormat.Integer`, the default, under the `.aiff`/`.aif` extensions. `AiffReader` additionally reads AIFC (FORM/AIFC) under the same extensions plus `.aifc`, with no separate dispatch beyond that extension list -- just an extra `compressionType` field it understands in COMM. Every other `AiffSampleFormat` value writes AIFC instead: `LittleEndianInteger` ('sowt'), `Float32`/`Float64` ('fl32'/'fl64', big-endian IEEE float, both reporting `BitsPerSample` 32 since this project's `int[]` model has no 64-bit representation), and `MuLaw`/`ALaw` ('ulaw'/'alaw', G.711, via the same `G711Codec` the WAV side uses). AIFC's `ima4` (QuickTime IMA4 ADPCM) compressionType is also decoded (decode only -- `AiffWriter` never writes it) -- a materially different bitstream from WAV's own IMA ADPCM (no verbatim first sample per block; stereo stores each channel's own complete 34-byte sub-block consecutively rather than nibble-interleaving), though the underlying per-nibble math is identical and reused directly from `Wav.ImaAdpcmDecoder`. Any other, genuinely unsupported compressionType (e.g. `MAC3`/MACE) throws `NotSupportedException` naming it specifically.
+
+### AU — `EggEncoder.Codecs.Au`
+
+```csharp
+public sealed class AuReader : IDisposable
+{
+    public static AuReader Open(string filePath);
+    public static AuReader Open(Stream stream); // requires stream.CanSeek -- unknown-data-size files need Stream.Length; does NOT dispose stream
+    public int Channels { get; }
+    public int SampleRate { get; }
+    public int BitsPerSample { get; }
+    public long TotalSamples { get; }
+    public bool IsFloatFormat { get; }
+    public bool IsFloat32 { get; }
+    public bool IsFloat64 { get; }
+    public bool IsALaw { get; }
+    public bool IsMuLaw { get; }
+    public int ReadInterleavedSamples(int[] buffer, int maxSamplesPerChannel);
+}
+
+public sealed class AuWriter : IDisposable
+{
+    public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Sun/NeXT AU (magic `.snd`, mime `audio/basic`) -- no chunk structure at all: one fixed 24-byte header, optionally followed by an annotation string (never parsed), then raw big-endian samples with no byte-alignment padding requirement. `AuSampleFormat.Integer` (the default) covers 8/16/24/32-bit signed integer PCM -- AU's 8-bit is signed, the same convention AIFF uses. `Float32`/`Float64` are big-endian IEEE float (both report `BitsPerSample` 32). `MuLaw`/`ALaw` are G.711, via the same `G711Codec` the WAV/AIFF sides use. Every other defined AU encoding (G.721/G.722/G.723 ADPCM, fragmented samples) is real but obscure enough in practice that it's out of scope, the same way AIFC's `MAC3`/`MAC6` (MACE) are -- throws `NotSupportedException` naming the unrecognized encoding value. AU also has its own "unknown data size" sentinel a real streaming file can use; `AuReader` reads until end-of-file for it, though `AuWriter` never writes it (it always knows its exact `totalFrames` up front, like `WavWriter`/`AiffWriter`).
+
+### ALAC — `EggEncoder.Codecs.Alac`
+
+```csharp
+public static class AlacDecoder
+{
+    public static AlacStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class AlacEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destAlacFilePath);
+}
+
+public sealed class AlacEncoderSession : IDisposable
+{
+    public static AlacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Apple Lossless, in a CAF container (`.caf`). Mono and stereo, 16-bit or 24-bit integer PCM only -- throws `NotSupportedException` for any other channel count or bit depth (20-bit and 32-bit are out of scope, matching ffmpeg's own ALAC encoder). For stereo, the encoder tries a fixed mid/side mix first (the classic 0.5-weight split), falling back to independent channels and then to a verbatim (uncompressed) frame only if the previous option's residuals would overflow the Rice coder's escape code.
+
+### TTA — `EggEncoder.Codecs.Tta`
+
+```csharp
+public static class TtaDecoder
+{
+    public static TtaStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+}
+
+public static class TtaEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destTtaFilePath);
+}
+
+public sealed class TtaEncoderSession : IDisposable
+{
+    public static TtaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+True Audio, a lossless codec (`.tta`). Mono and stereo, 16-bit integer PCM only -- throws `NotSupportedException` for any other channel count or bit depth. Unlike ALAC, TTA's stereo decorrelation is unconditional (no bitstream flag, no fallback), and its Rice/unary residual coder has no escape code -- the unary code is fully unbounded, so there's no verbatim/overflow fallback path.
+
+### WavPack — `EggEncoder.Codecs.WavPack`
+
+```csharp
+public static class WavPackDecoder
+{
+    public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static WavPackStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose stream
+}
+
+public static class WavPackEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destWvFilePath);
+}
+
+public sealed class WavPackEncoderSession : IDisposable
+{
+    public static WavPackEncoderSession OpenSession(string destFilePath, int channels, int bitsPerSample, int sampleRate, long totalSamples);
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Lossless, in its own `.wv` container. Mono and stereo, 16-bit or 24-bit integer PCM only (WavPack's own lossy/hybrid and floating-point modes are rejected) -- throws `NotSupportedException` otherwise. Both `WavPackDecoder` and `WavPackEncoder`/`WavPackEncoderSession` are now pure managed, no native call at all (the former `wavpackdll.dll` native binary and `WavPackNative.cs` binding have been fully removed) -- the block/metadata container is implemented directly from the official (and, for this part, fully documented) WavPack 4/5 file format spec; the decorrelation/entropy-coding algorithm, which that same spec explicitly does not describe, was reconstructed with the owner's explicit sign-off from general familiarity with the WavPack reference project plus an arm's-length study of FFmpeg's own independently-written decoder (never copied -- see THIRD-PARTY-NOTICES.md); the encoder's own formulas are the direct mathematical inverse of that same decode-side knowledge, not a fresh study of any encoder. A "false stereo" block (output is stereo, but only one channel's data is actually transmitted) decodes as mono and duplicates into both outputs; a multi-block-per-frame sequence is also supported for mono/stereo streams, since a real encoder given no explicit channel layout commonly splits a stereo stream into two single-channel blocks per frame rather than one combined block. `WP_ID_INT32_INFO` metadata selects a post-decode sample scaling that isn't always a plain left-shift -- confirmed from a genuine reference-encoder-produced fixture, even ordinary lossless 16-bit full-scale content can select a variant where the newly-shifted-in low bit is reconstructed as a copy of the sample's own low bit, or forced to one, rather than zero-filled. The encoder itself is a deliberately simple MVP -- a single fixed decorrelation term, independent-channel stereo, no joint stereo or cross-channel terms, not yet compression-competitive (matching this project's own `FlacEncoder` precedent) -- whose output round-trips exactly through this project's own `WavPackDecoder` (the primary test oracle), but has not yet achieved full byte-for-byte compatibility with the real reference `wvunpack` CLI for arbitrary content; see `docs/managed-codec-rewrite-plan.md` item 5's status note for what's confirmed and what remains an open question. `OpenSession` requires an exact, positive `totalSamples` up front (like `WavWriter`/`AiffWriter`) -- WavPack genuinely cannot represent an empty/zero-sample stream at all (confirmed from its own reference CLI, which refuses to encode one), so a zero or negative total throws `NotSupportedException` rather than producing a file that would only turn out to be unreadable later.
+
+### Opus — `EggEncoder.Codecs.Opus`
+
+```csharp
+public static class OpusDecoder
+{
+    public static OpusStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    // OpusStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from the 'OpusTags' packet, or null)
+}
+
+public static class OpusEncoder
+{
+    public static void Encode(string sourceWavFilePath, string destOpusFilePath, IReadOnlyDictionary<string, string>? tags = null);
+}
+
+public sealed class OpusEncoderSession : IDisposable
+{
+    public static OpusEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, IReadOnlyDictionary<string, string>? tags = null); // tags: written into the 'OpusTags' packet via the shared VorbisCommentWriter
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Lossy, in a from-scratch OggOpus container (`.opus`). Mono and stereo, 16-bit integer PCM, and fixed at 48kHz (Opus's native/highest internal rate) regardless of the source's own rate -- encoding at any other rate throws `NotSupportedException`; resample first with `ResamplingTransform`. The actual Opus codec (SILK+CELT) is delegated to Concentus, a pure managed C# port (NuGet package, the same "lean on an established pure-managed implementation" precedent `NLayer` sets for MP3 decode); EggEncoder implements the OggOpus container itself (page framing, CRC-32, the mandatory `OpusHead`/`OpusTags` packets) from scratch. Channel mapping family 0 only. `OpusTags`'s own payload is the exact same Vorbis-spec vendor+comment-list structure FLAC's `VORBIS_COMMENT` block uses, read/written via the shared `Codecs.VorbisCommentReader`/`VorbisCommentWriter` rather than a duplicate implementation -- see the "FLAC/Opus/Vorbis Comment Tags" section of `llms.txt`.
+
+### Vorbis — `EggEncoder.Codecs.Vorbis`
+
+```csharp
+public static class VorbisDecoder
+{
+    public static VorbisStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    // VorbisStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from NVorbis's own VorbisReader.Tags.All, or null)
+}
+
+public static class VorbisEncoder
+{
+    public const float DefaultQuality = 0.5f;
+    public static void Encode(string sourceWavFilePath, string destOggFilePath, float quality = DefaultQuality, IReadOnlyDictionary<string, string>? tags = null);
+}
+
+public sealed class VorbisEncoderSession : IDisposable
+{
+    public static VorbisEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample, float quality = DefaultQuality, IReadOnlyDictionary<string, string>? tags = null); // tags: written via OggVorbisEncoder's own Comments.AddTag
+    public void WriteInterleavedSamples(int[] buffer, int frameCount);
+}
+```
+
+Lossy, in an Ogg container (`.ogg`). Mono and stereo, 16-bit integer PCM -- throws `NotSupportedException` otherwise; unlike Opus, any positive sample rate is accepted, no fixed-rate resampling requirement. The codec and the Ogg container are both delegated to third-party pure managed NuGet packages -- NVorbis for decode, OggVorbisEncoder for encode -- each with its own independent Ogg object model (EggEncoder's own `Codecs/Opus/OggPageReader`/`OggPageWriter` aren't involved here). Vorbis has no `pre_skip`-equivalent field the way Opus does, so there's no way to tell a decoder exactly how many samples of the encoder's own fixed MDCT lookahead to trim off the front -- finding the true alignment (e.g. via cross-correlation) is left to the caller if exact alignment matters.
 
 ### MOV/MP4 — `EggEncoder.Codecs.Mov`
 
@@ -238,11 +686,11 @@ public class MovProbeResult
 public static class MovDecoder
 {
     public static MovStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
-    // finds the 'soun' track, reads its esds AudioSpecificConfig + sample table (stsd/stsc/stsz/
-    // stco/co64), and decodes each sample through the same AacFrameDecoder engine AacDecoder uses --
-    // MP4 stores raw AAC access units with no ADTS framing, so there's no header to parse per sample.
-    // Mono AAC-LC only; throws InvalidDataException if there's no audio track, NotSupportedException
-    // for a non-AAC codec, stereo, or any other MPEG-4 audio object type.
+    // finds the 'soun' track, reads its esds AudioSpecificConfig + sample table, and decodes each
+    // sample through the same AacFrameDecoder engine AacDecoder uses -- MP4 stores raw AAC access
+    // units with no ADTS framing, so there's no header to parse per sample. Mono AAC-LC only; throws
+    // InvalidDataException if there's no audio track, NotSupportedException for a non-AAC codec,
+    // stereo, or any other MPEG-4 audio object type.
 }
 ```
 
@@ -250,21 +698,47 @@ public static class MovDecoder
 
 ## AudioCutter — `EggEncoder.Codecs`
 
-Format-dispatching convert/cut used internally by `NativeEncoder`; also usable directly:
+Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:
 
 ```csharp
 public static class AudioCutter
 {
     public static void Convert(string sourceFilePath, string destFilePath);
-    // dispatches by extension: .wav/.flac/.mp3/.aac/.wma source -> any supported dest extension
-
     public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
-    // decodes any supported source (.wav/.flac/.mp3/.aac/.wma) and writes any supported dest
-    // extension (.wav/.flac/.mp3/.aac/.wma) -- source and dest extensions no longer need to match,
-    // so Cut can transcode while it trims
-    // returns false (and writes no file) if the requested range is entirely outside the source duration
+
+    // Pipeline-aware overloads: run every decoded block through a PcmTransformPipeline first.
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline);
+    public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options);
+
+    // WavSampleFormat/AiffSampleFormat/AuSampleFormat overloads select a destination's on-disk
+    // encoding (each defaults to Integer, matching every overload above); ignored for a destination
+    // of a different family.
+    public static void Convert(string sourceFilePath, string destFilePath, WavSampleFormat destinationWavFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, AiffSampleFormat destinationAiffFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AiffSampleFormat destinationAiffFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, AuSampleFormat destinationAuFormat);
+    public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, AuSampleFormat destinationAuFormat);
+
+    // Mixes 2+ same-format sources with per-input gain; decodes every input fully into memory, concurrently.
+    public static void Mix(IReadOnlyList<MixInput> inputs, string destFilePath);
+    public static void Mix(IReadOnlyList<MixInput> inputs, string destFilePath, WavSampleFormat destinationWavFormat);
+
+    // Concatenates 2+ same-format sources, in order. Fully streaming for non-WAV destinations.
+    public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath);
+    public static void Concatenate(IReadOnlyList<string> sourceFilePaths, string destFilePath, WavSampleFormat destinationWavFormat);
+
+    // Decodes sourceFilePath fully to find its peak absolute sample value, for a true whole-file
+    // PeakNormalizationTransform.MeasurePeak(long, int) measurement.
+    public static (long Peak, int BitsPerSample) MeasurePeakAmplitude(string sourceFilePath);
+
+    // Convenience float[] entry points.
+    public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
+    public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan<float> interleavedSamples, int channels, int sampleRate);
 }
 ```
+
+`Cut` decodes any supported source and writes any supported destination extension -- source and destination don't need to match, so it can transcode while it trims. Returns `false` (and writes no file) if the requested range is entirely outside the source's duration.
 
 ## Waveform Generation — `EggEncoder.Waveform`
 
@@ -276,6 +750,8 @@ public sealed class WaveformCalculator
     public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
     public void AddBlock(ReadOnlySpan<int> interleavedSamples); // call repeatedly across decode callbacks
     public List<double> GetNormalizedWindows(); // each value in [0, 1]
+    public double GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, in [0, 1] -- no flush step needed
+    public double GetNormalizedRmsLevel();      // root-mean-square across every sample seen so far, in [0, 1]
 }
 ```
 
@@ -293,22 +769,33 @@ while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
 }
 
 List<double> windows = calculator.GetNormalizedWindows();
+double peak = calculator.GetNormalizedPeakAmplitude();
+double rms = calculator.GetNormalizedRmsLevel();
 ```
 
-## Decode Callback Shape
-
-Every codec's `Decode` method streams blocks through the same `AudioBlockDecodedCallback` delegate instead of returning the full signal in memory. `block` is interleaved samples for whatever chunk the decoder just produced. Accumulate it yourself (into a `List<int>`, a `WaveformCalculator`, an internal `IAudioSink` implementation) as needed — this keeps memory bounded for large files and lets `NativeEncoder`/`AudioCutter` pipe decode output directly into an encoder session without buffering the whole track.
+`WaveformCalculator` streams -- call `AddBlock` as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. `GetNormalizedPeakAmplitude`/`GetNormalizedRmsLevel` need no flushing step the way `GetNormalizedWindows` does (its own trailing partial window) -- both are fully up to date after every `AddBlock` call, and back `ProbeResult.PeakAmplitude`/`RmsLevel` the same way `GetNormalizedWindows` backs `ProbeResult.Waveform`.
 
 ## Constraints and Gotchas
 
-- **Windows x64 only.** `NativeEncoder` and its codec bindings P/Invoke into bundled `win-x64` binaries. There is no cross-platform build or fallback engine — this library does not run on Linux/macOS/ARM.
-- **WMA supports mono and independently-coded stereo only.** Genuine mid/side-coded stereo WMA files (the real-world default for most third-party encoders) throw `NotSupportedException` on decode rather than decoding incorrectly; `WmaEncoder` never produces mid/side output, so round-tripping through this library's own encoder/decoder always works.
-- **`AudioCutter.Cut` can transcode while it trims.** Source and destination extensions no longer need to match -- it decodes any supported source and writes any supported destination format.
+- **Every codec is pure managed; this project bundles or loads no native binary of any kind.** MP3 (decode via NLayer, encode clean-room from ISO/IEC 11172-3), WavPack (decode and encode), and FLAC (decode and encode) have all completed their migration off native P/Invoke (`docs/managed-codec-rewrite-plan.md` item 8) -- `NativeLibraryLoader`/`FlacNative.cs`/`libFLAC.dll` are gone. EggEncoder is genuinely cross-platform now, and CI builds and tests on Windows, Linux, and macOS.
+- **WAV's three ADPCM variants and G.711** are genuinely different algorithms despite the shared 4-bit (ADPCM) or 8-bit (G.711) coded width -- see "WAV's own format-tag variants" above.
+- **`ProbeResult.Tags`/`WavReader.Tags` never throws on a malformed or truncated `'LIST'`/`'INFO'` chunk.** Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (`Mp4EsdsParser`, `AsfContainerReader`), this is optional, decorative metadata -- parsing just stops at the first inconsistency and returns whatever sub-chunks were read cleanly before it (or `null` if none were).
+- **`WavWriter.Create`'s own `tags` parameter is stricter on write than `WavReader` is on read**: every tag id must be exactly 4 ASCII characters (RIFF's own FourCC convention) or `Create` throws `ArgumentException` immediately -- writing a well-formed file is a hard requirement here, unlike reading an already-on-disk file's possibly-malformed metadata, which degrades gracefully instead.
+- **`AudioCutter.Cut`/`Convert` can transcode while they trim/convert.** Source and destination extensions no longer need to match.
 - **AAC encoding is mono-only** and restricted to a fixed set of MPEG-4 sample rates (see `AacTables.SampleRates`); other combinations throw `NotSupportedException`.
+- **WMA supports mono and independently-coded stereo only.** Genuine mid/side-coded stereo WMA files throw `NotSupportedException` on decode; `WmaEncoder` never produces mid/side output.
+- **AIFC's `ima4` (QuickTime IMA4 ADPCM) is decode-only.** `AiffWriter` never writes it.
+- **ALAC/TTA/WavPack/Opus/Vorbis are each scoped to mono/stereo** and their own specific bit-depth/sample-rate constraints (see each codec's own section above) -- all throw `NotSupportedException` outside that scope, rather than silently producing something subtly wrong.
+- **`PcmTransformPipeline` instances carry cross-block state** -- build a fresh one per `Convert`/`Cut`/`Mix` call (see "PCM Transform Pipeline" above for the full list of stateful transforms and the `Flush()` contract).
+- **`PanTransform` requires stereo (2-channel) input** -- throws `ArgumentException` for mono or any other channel count.
+- **`NoiseGateTransform` with `ratio == 1.0` is an explicit no-op at every level, including true digital silence** -- guarded so it never hits an `Infinity * 0` intermediate (which would otherwise be `NaN` under IEEE 754, not 0).
+- **`LimiterTransform` is the one transform here that makes an exact guarantee rather than a statistical reduction** -- "never exceeds the ceiling" comes specifically from its final per-sample hard clip, not from the envelope-derived gain alone, which a nonzero attack time can let a transient briefly slip past.
+- **`EchoTransform` fixes `channels` at construction** (unlike the channel-count-agnostic compressor/gate/limiter family) and needs `EchoTransform.CanChangeFrameCount` to report `true` (which it does whenever `feedback > 0`) for a destination sink to be sized correctly through `AudioCutter.Convert`/`Cut` -- its `Flush()`-drained decaying tail means total output genuinely exceeds total input.
+- **`Mix` decodes every input fully into memory, concurrently** -- clip-length material, not multi-hour streams.
 
 ## License
 
-MIT (see LICENSE). EggEncoder bundles pre-built `libmp3lame.dll` (LGPL-2.1) and `libFLAC.dll` (BSD-style Xiph.Org license) as separate, dynamically-loaded native binaries, not statically linked — see THIRD-PARTY-NOTICES.md for details and source links.
+MIT (see LICENSE). EggEncoder bundles no native binaries of any kind -- see THIRD-PARTY-NOTICES.md for the licenses of its pure managed codec dependencies. MP3 decode (via NLayer), Opus (via Concentus), Vorbis decode (via NVorbis), and Vorbis encode (via OggVorbisEncoder) are all permissively-licensed, pure managed NuGet dependencies.
 
 ## Links
 

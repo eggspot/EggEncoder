@@ -45,6 +45,108 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithPanTransform_Should_Silence_The_OppositeChannel()
+        {
+            // Proves PanTransform genuinely runs through the real pipeline, not just that
+            // PanTransformTest's own unit tests pass it a buffer directly. CreateRampWav's own
+            // source has left=frame, right=-frame -- panning full left should leave the left
+            // channel untouched and zero the right channel entirely.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, samples) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 100, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new PanTransform(-1.0)));
+
+                using var reader = WavReader.Open(destPath);
+                reader.Channels.Should().Be(2);
+                reader.TotalSamples.Should().Be(100);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, 100);
+
+                for (var frame = 0; frame < 100; frame++)
+                {
+                    buffer[frame * 2].Should().Be(samples[frame * 2], "the left channel stays at unity gain when panned fully toward it");
+                    buffer[(frame * 2) + 1].Should().Be(0, "the right channel must be fully silenced when panned fully left");
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithCompressorTransform_Should_Reduce_A_SustainedAboveThresholdSignal()
+        {
+            // Proves CompressorTransform genuinely runs through the real pipeline, not just that
+            // CompressorTransformTest's own unit tests pass it a buffer directly.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = Enumerable.Repeat((int)short.MaxValue, 50).ToArray();
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 1000, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                const double thresholdDb = -6;
+                const double ratio = 4;
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new CompressorTransform(sampleRate: 1000, thresholdDb, ratio, attackMs: 0, releaseMs: 0)));
+
+                using var reader = WavReader.Open(destPath);
+                reader.TotalSamples.Should().Be(50);
+
+                var buffer = new int[50];
+                reader.ReadInterleavedSamples(buffer, 50);
+
+                var reductionDb = (0 - thresholdDb) * (1.0 - (1.0 / ratio));
+                var expectedGain = Math.Pow(10.0, -reductionDb / 20.0);
+                var expected = (int)Math.Clamp(short.MaxValue * expectedGain, short.MinValue, short.MaxValue);
+                buffer.Should().OnlyContain(sample => sample == expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithEchoTransform_Should_ExtendOutputPastTheSourceWithTheDecayingTail()
+        {
+            // Proves two things through the real pipeline, not just EchoTransformTest's own direct
+            // Apply()/Flush() calls: (1) AudioCutter.Convert actually calls Flush() and writes its
+            // tail, and (2) EchoTransform.CanChangeFrameCount correctly reports true so the
+            // destination WavWriter is sized for the true total (source + tail), not just the
+            // source's own frame count -- getting this wrong would either truncate the tail or
+            // produce a WAV file whose declared header size doesn't match what was actually written.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new[] { (int)short.MaxValue };
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 10, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new EchoTransform(sampleRate: 10, channels: 1, delaySeconds: 0.1, feedback: 0.5, wetGain: 1.0)));
+
+                using var reader = WavReader.Open(destPath);
+                // Hand-traced the same way EchoTransformTest's Flush test is: a single full-scale
+                // input frame produces a 10-frame decaying tail at feedback=0.5, delayFrames=1.
+                reader.TotalSamples.Should().Be(11, "1 source frame plus the 10-frame decaying tail Flush() produces");
+
+                var buffer = new int[11];
+                reader.ReadInterleavedSamples(buffer, 11);
+                buffer.Should().Equal(short.MaxValue, short.MaxValue, 16383, 8191, 4095, 2047, 1023, 511, 255, 127, 63);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithVolumeTransform_SpanningMultipleDecodeBlocks_Should_Write_Every_Frame()
         {
             // 5000 frames spans two 4096-frame decode blocks. Volume never changes frame count, so this
@@ -1131,10 +1233,11 @@ namespace EggEncoder.UnitTests.Codecs
         [InlineData(WavSampleFormat.ALaw)]
         public void Convert_WithG711Destination_Should_Apply_Pipeline_Transform_Before_Encoding(WavSampleFormat sampleFormat)
         {
-            // Unlike IMA ADPCM (decode-only, so a pipeline could only ever run with it as the
-            // SOURCE), G.711 supports the encode direction too -- this proves a PcmTransform
-            // genuinely runs before the companding step, not just that the generic WavSampleFormat
-            // destination routing (already proven for Float32) happens to compile for G.711 too.
+            // Unlike AIFC's own ima4 compressionType (decode-only, so a pipeline could only ever run
+            // with it as the SOURCE), G.711 supports the encode direction too -- this proves a
+            // PcmTransform genuinely runs before the companding step, not just that the generic
+            // WavSampleFormat destination routing (already proven for Float32) happens to compile
+            // for G.711 too.
             var tempDirectory = CreateTempDirectory();
             try
             {
@@ -1191,12 +1294,95 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Proves a PcmTransform genuinely runs before the quantization step, not just that the
+            // generic WavSampleFormat destination routing (already proven for Float32/G.711) happens
+            // to compile for IMA ADPCM too. A tolerance is used for the final comparison rather than
+            // exact equality -- IMA ADPCM is lossy, the same reasoning AudioCutterTest's own
+            // Convert_WavToImaAdpcmWav_Should_Round_Trip_WithinQuantizationTolerance already applies.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.ImaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsImaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Compare against the doubled samples directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail outside tolerance (the
+                // doubled signal's amplitude is far from the original's).
+                for (var i = 1; i < samples.Length; i++) // skip the first block's verbatim header sample
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithMsAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Mirrors Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding's
+            // own role for IMA ADPCM, now that MS ADPCM has gained encode support too.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.MsAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsMsAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                for (var i = 2; i < samples.Length; i++) // skip the first block's two verbatim header samples
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(2000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
         {
-            // MS ADPCM is decode-only (like IMA ADPCM), so it can only ever be the pipeline's SOURCE,
-            // never its destination -- this proves a PcmTransform genuinely runs on its decoded
-            // output, not just that an MS ADPCM source happens to be readable at all (already proven
-            // by AudioCutterTest's own bit-exact decode coverage).
+            // This proves a PcmTransform genuinely runs on its decoded output, not just that an MS
+            // ADPCM source happens to be readable at all (already proven by AudioCutterTest's own
+            // bit-exact decode coverage).
             var tempDirectory = CreateTempDirectory();
             try
             {
@@ -1218,6 +1404,83 @@ namespace EggEncoder.UnitTests.Codecs
                 // Compare against the source doubled directly, not the source as-is -- if the gain
                 // transform were silently skipped, this comparison would fail. Clamp the same way
                 // VolumeTransform itself does (int16 native range, since the source decodes to 16-bit).
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithYamahaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding()
+        {
+            // Mirrors Convert_WithImaAdpcmDestination_Should_Apply_Pipeline_Transform_Before_Encoding's
+            // own role for IMA ADPCM, now that Yamaha ADPCM has gained encode support too. Unlike IMA/
+            // MS ADPCM, there's no verbatim header sample to skip -- every sample goes through the
+            // quantizer (see AudioCutterTest's own analogous round-trip test for why).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                var samples = new int[2500];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (int)(4000 * Math.Sin(i * 0.05));
+                }
+
+                WavFileBuilder.Create(sourcePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, samples);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)), WavSampleFormat.YamahaAdpcm);
+
+                using var reader = WavReader.Open(destPath);
+                reader.IsYamahaAdpcm.Should().BeTrue();
+                reader.TotalSamples.Should().Be(samples.Length);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+
+                // Compare against the doubled samples directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail outside tolerance.
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    var expected = Math.Clamp(samples[i] * 2, short.MinValue, short.MaxValue);
+                    Math.Abs(buffer[i] - expected).Should().BeLessThan(3000);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithYamahaAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // Mirrors Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own
+            // role for MS ADPCM as a source, proving a PcmTransform genuinely runs on Yamaha ADPCM's
+            // decoded output (not just that a Yamaha ADPCM source happens to be readable at all,
+            // already proven by AudioCutterTest's own bit-exact decode coverage).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = WavReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
                 var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
                 destBuffer.Should().Equal(expected);
             }
@@ -1256,6 +1519,45 @@ namespace EggEncoder.UnitTests.Codecs
                 // Clamp at this source's own native range (32-bit, since fl32 decodes into the full
                 // int32 range) rather than MS ADPCM's 16-bit one above.
                 var expected = sourceBuffer.Select(s => (int)Math.Clamp((long)s * 2, int.MinValue, int.MaxValue)).ToArray();
+                destBuffer.Should().Equal(expected);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithIma4AifcSource_Should_Apply_Pipeline_Transform_Before_Writing()
+        {
+            // ima4 is decode-only (unlike WAV's own IMA/MS ADPCM, which have since both gained
+            // encode support), so it can only ever be the pipeline's SOURCE, never its destination --
+            // mirrors Convert_WithMsAdpcmSource_Should_Apply_Pipeline_Transform_Before_Writing's own
+            // role for MS ADPCM as a source, proving a PcmTransform genuinely runs on ima4's decoded
+            // output (not just that an ima4 source happens to be readable at all, already proven by
+            // AudioCutterTest's own bit-exact decode coverage).
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(new VolumeTransform(2.0)));
+
+                using var sourceReader = EggEncoder.Codecs.Aiff.AiffReader.Open(sourcePath);
+                var sourceBuffer = new int[sourceReader.TotalSamples];
+                sourceReader.ReadInterleavedSamples(sourceBuffer, (int)sourceReader.TotalSamples);
+
+                using var destReader = WavReader.Open(destPath);
+                destReader.TotalSamples.Should().Be(sourceReader.TotalSamples);
+
+                var destBuffer = new int[destReader.TotalSamples];
+                destReader.ReadInterleavedSamples(destBuffer, (int)destReader.TotalSamples);
+
+                // Compare against the source doubled directly, not the source as-is -- if the gain
+                // transform were silently skipped, this comparison would fail. Clamp at int16 native
+                // range, since ima4 decodes to 16-bit.
+                var expected = sourceBuffer.Select(s => Math.Clamp(s * 2, short.MinValue, short.MaxValue)).ToArray();
                 destBuffer.Should().Equal(expected);
             }
             finally

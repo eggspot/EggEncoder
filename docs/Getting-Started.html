@@ -47,10 +47,10 @@
         <span class="install-cmd">dotnet add package EggEncoder</span>
         <button class="copy-btn">Copy</button>
       </div>
-      <p>Targets <code>net8.0</code>, <code>net9.0</code>, and <code>net10.0</code>. The native codec binaries (<code>libmp3lame.dll</code>, <code>libFLAC.dll</code>, <code>wavpackdll.dll</code>) for <code>win-x64</code> are bundled inside the package and copied to your output directory automatically — no separate install step.</p>
+      <p>Targets <code>net8.0</code>, <code>net9.0</code>, and <code>net10.0</code>. No native binaries, no extra install steps — just the package. EggEncoder runs anywhere .NET 8/9/10 runs (Windows, Linux, macOS).</p>
 
-      <h2>One Interface, Fully Native</h2>
-      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, implemented by <code>NativeEncoder</code> — pure .NET codecs plus P/Invoke bindings to LAME, libFLAC, and WavPack. No external process, no ffmpeg install.</p>
+      <h2>One Interface, 100% Pure Managed</h2>
+      <p>EggEncoder exposes one interface, <code>IMediaEncoder</code>, implemented by <code>NativeEncoder</code> — pure .NET codecs for every supported format, with no native binary or P/Invoke binding anywhere in this project. No external process, no ffmpeg install.</p>
 
       <h2>Register with DI</h2>
       <pre><code class="language-csharp">using EggEncoder;
@@ -104,8 +104,10 @@ Console.WriteLine($"{probeResult.SampleRate}Hz, {probeResult.DurationSeconds}s")
     public int? Width { get; init; }                // set for video containers (MOV/MP4), null for audio
     public int? Height { get; init; }
     public IReadOnlyList&lt;double&gt;? Waveform { get; init; }  // normalized peak windows, or null
+    public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
+    public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1]
 }</code></pre>
-      <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation, sample-accurate cutting, and the <a href="Advanced-Features.html#pcm-transform-pipeline">PCM transform pipeline</a> (resampling, normalization, remix, fades, parametric EQ, FIR filtering, mixing) details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
+      <p>See <a href="Advanced-Features.html">Advanced Features</a> for waveform generation, sample-accurate cutting, and the <a href="Advanced-Features.html#pcm-transform-pipeline">PCM transform pipeline</a> (resampling, normalization, pan/balance, remix, fades, parametric EQ, FIR filtering, mixing) details, or the <a href="API-Reference.html">API Reference</a> for the full type list.</p>
     </div>
   </main>
 </div>

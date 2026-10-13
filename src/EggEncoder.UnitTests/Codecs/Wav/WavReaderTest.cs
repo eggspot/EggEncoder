@@ -1,3 +1,4 @@
+using System.Text;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -6,6 +7,90 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 {
     public class WavReaderTest
     {
+        // -------- Stream-based Open --------
+
+        [Fact]
+        public void Open_Stream_Should_Round_Trip_Header_And_Samples_Same_As_Path_Based_Open()
+        {
+            var samples = new[] { 0, 1000, -1000, 32767, -32768 };
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, samples);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream(bytes);
+                using var reader = WavReader.Open(memoryStream);
+
+                reader.Channels.Should().Be(1);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length);
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            // Unlike Open(string), which owns and disposes its own FileStream, Open(Stream) takes
+            // no ownership -- the caller opened it, so the caller is responsible for closing it.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                var memoryStream = new MemoryStream(bytes);
+                var reader = WavReader.Open(memoryStream);
+                reader.Dispose();
+
+                // A disposed MemoryStream throws ObjectDisposedException on any further access --
+                // this would throw if Dispose() above had disposed it.
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => WavReader.Open((Stream)null!);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Open_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                var bytes = File.ReadAllBytes(filePath);
+
+                using var nonSeekable = new NonSeekableStream(bytes);
+                var act = () => WavReader.Open(nonSeekable);
+
+                act.Should().Throw<ArgumentException>().And.ParamName.Should().Be("stream");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         [Fact]
         public void Open_16Bit_Stereo_Should_Read_Header_And_Samples()
         {
@@ -187,6 +272,42 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 
                 var act = () => WavReader.Open(filePath).Dispose();
                 act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_TruncatedWithinFmtChunk_Should_ThrowInvalidDataException_NotRawEndOfStreamException()
+        {
+            // Declares a normal, complete-looking 16-byte 'fmt ' chunk (chunkSize=16), but the file
+            // physically ends after only 4 of those 16 bytes (formatTag + channels), before
+            // sampleRate. The chunk-walk loop's own `stream.Position < stream.Length` check only
+            // runs BETWEEN chunks, so it never catches this -- the raw BinaryReader.ReadUInt32 call
+            // for sampleRate then runs past EOF. Before this fix, that threw a raw
+            // EndOfStreamException ("Unable to read beyond the end of the stream"), not this
+            // codebase's own established InvalidDataException every other malformed-input case
+            // here throws (see AiffReader/AuReader's own identical fix).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write("RIFF"u8);
+                    writer.Write((uint)36);
+                    writer.Write("WAVE"u8);
+                    writer.Write("fmt "u8);
+                    writer.Write((uint)16); // declares a full 16-byte PCM fmt chunk payload
+                    writer.Write((ushort)1); // formatTag = PCM
+                    writer.Write((ushort)1); // channels = 1
+                    // file ends here -- sampleRate/byteRate/blockAlign/bitsPerSample never written
+                }
+
+                var act = () => WavReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
             }
             finally
             {
@@ -741,12 +862,226 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_YamahaAdpcmMono_Should_Decode_BitExact_Against_FfmpegGroundTruth()
+        {
+            // Same rationale as the IMA/MS ADPCM cross-checks above -- a from-scratch implementation
+            // of a well-standardized algorithm, bit-exact against a real ffmpeg-produced file decoded
+            // by ffmpeg's own independent decoder.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(1);
+            wavReader.SampleRate.Should().Be(44100);
+            wavReader.BitsPerSample.Should().Be(16, "Yamaha ADPCM decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            wavReader.TotalSamples.Should().Be(88200, "the file's own 'fact' chunk is the authoritative total, trimming the data chunk's own trailing padding");
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcmStereo_Should_Decode_BitExact_Against_FfmpegGroundTruth()
+        {
+            // Same rationale as the mono case, but this is the one real file that exercises the
+            // low-nibble=channel-0/high-nibble=channel-1 per-frame interleaving specifically (two
+            // different source tones, so a channel-swap or cross-contamination bug would be
+            // immediately visible as wrong pitch/phase in one channel, not just a subtly-off sample).
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_stereo.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_stereo_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+            wavReader.Channels.Should().Be(2);
+            wavReader.TotalSamples.Should().Be(88200);
+
+            var decoded = DecodeAll(wavReader);
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_CalledWithSmallBuffers_Should_StillProduceTheSameBitExactOutput()
+        {
+            // Yamaha ADPCM has no block structure at all, so unlike the IMA/MS ADPCM analogues of this
+            // test, the thing actually being exercised here is the one-nibble-pending-across-calls
+            // carry (YamahaAdpcmDecoder's own doc comment) at arbitrary, non-byte-aligned buffer
+            // boundaries -- a buffer size that's odd relative to channel count forces a high nibble to
+            // be carried from one ReadInterleavedSamples call into the next repeatedly.
+            var fixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
+            var expectedPath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono_expected.pcm");
+
+            using var wavReader = WavReader.Open(fixturePath);
+
+            var decoded = new List<int>();
+            var buffer = new int[37];
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 37)) > 0)
+            {
+                decoded.AddRange(buffer.Take(framesRead));
+            }
+
+            decoded.Should().Equal(ReadGroundTruthPcm16(expectedPath).Take(decoded.Count));
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcmWav_IsYamahaAdpcm_Should_Be_True_And_OtherFormatFlags_Should_Be_False()
+        {
+            using var wavReader = WavReader.Open(Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav"));
+
+            wavReader.IsYamahaAdpcm.Should().BeTrue();
+            wavReader.IsImaAdpcm.Should().BeFalse();
+            wavReader.IsMsAdpcm.Should().BeFalse();
+            wavReader.IsALaw.Should().BeFalse();
+            wavReader.IsMuLaw.Should().BeFalse();
+            wavReader.IsFloatFormat.Should().BeFalse();
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_With_UnsupportedChannelCount_Should_Throw()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 3, sampleRate: 44100, totalSamples: 1, dataSize: 4);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_WithoutFactChunk_Should_FallBack_To_DataChunkDerivedTotal()
+        {
+            // The 'fact' chunk is the preferred, authoritative source for TotalSamples, but it's not
+            // structurally required by the format tag itself -- a file missing it entirely should
+            // still decode using the raw nibble-count-derived formula instead of failing outright.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // mono: 100 bytes -> 200 nibbles -> 200 frames (channels=1).
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, totalSamples: null, dataSize: 100);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.TotalSamples.Should().Be(200);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_WithTruncatedData_Should_Stop_Without_Throwing()
+        {
+            // A genuinely malformed input -- a 'fact' chunk total claiming far more frames than the
+            // data chunk's own byte count can actually supply -- is one this project doesn't try to
+            // recover partial data from: ReadInterleavedSamples should just stop cleanly (return 0
+            // once exhausted) rather than throw or read out of bounds.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // mono: 10 bytes -> only 20 real frames available, but 'fact' claims 1000.
+                WavYamahaAdpcmFileBuilder.CreateMinimal(filePath, channels: 1, sampleRate: 44100, totalSamples: 1000, dataSize: 10);
+
+                using var wavReader = WavReader.Open(filePath);
+                var buffer = new int[4096];
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                    }
+                };
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_YamahaAdpcm_WithFewerBytesPhysicallyOnDiskThanTheDataChunkDeclares_Should_Stop_Without_Throwing_Or_DecodingGarbage()
+        {
+            // A genuinely different malformation from the test above: there, the 'data' chunk's own
+            // declared size was itself accurate (matched the real bytes on disk), just smaller than
+            // what the 'fact' chunk separately claimed. Here, the 'data' chunk's own declared size
+            // -- what ReadYamahaAdpcmInterleavedSamples' framesAvailable bound is computed from --
+            // overstates the file's real, physical length (e.g. a write that was interrupted after
+            // the header was already flushed). Without an explicit check, Stream.ReadByte()'s -1 EOF
+            // sentinel would get stored as a pending byte: its LOW nibble masks fine via `& 0x0F`,
+            // but the matching HIGH nibble read next is a signed `>> 4` that stays -1 (arithmetic
+            // shift, not masked) -- confirmed via mutation testing that this throws
+            // IndexOutOfRangeException indexing DiffLookup/IndexScale with a negative index, not just
+            // a quiet wrong-value bug. Mirrors the same short-read guard
+            // ReadFullyAdpcmBlock/ReadFullyMsAdpcmBlock already have for IMA/MS ADPCM's own
+            // block-level reads.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    const int declaredDataSize = 100; // the header claims 100 bytes...
+
+                    writer.Write("RIFF"u8);
+                    writer.Write((uint)(4 + (8 + 18) + (8 + declaredDataSize))); // WAVE + fmt chunk + data chunk header+payload
+                    writer.Write("WAVE"u8);
+                    writer.Write("fmt "u8);
+                    writer.Write((uint)18);
+                    writer.Write((ushort)32); // Yamaha ADPCM format tag
+                    writer.Write((ushort)1); // mono
+                    writer.Write((uint)44100);
+                    writer.Write((uint)22050);
+                    writer.Write((ushort)4);
+                    writer.Write((ushort)4);
+                    writer.Write((ushort)0); // cbSize
+                    writer.Write("data"u8);
+                    writer.Write((uint)declaredDataSize);
+                    writer.Write(new byte[10]); // ...but only 10 real bytes ever get written
+                }
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.TotalSamples.Should().Be(200, "the data-chunk-derived fallback total (10 declared bytes * 2 nibbles/byte) is itself computed from the declared size, same as any other malformed-header case");
+
+                var buffer = new int[4096];
+                var totalDecoded = 0;
+
+                var act = () =>
+                {
+                    int framesRead;
+                    while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
+                    {
+                        totalDecoded += framesRead;
+                    }
+                };
+
+                act.Should().NotThrow();
+                totalDecoded.Should().Be(20, "only the 10 real bytes on disk (20 nibbles) can ever be decoded, regardless of what the header's own declared data chunk size claimed");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_WithUnsupportedFormatTag_Should_Throw()
         {
             // Format tag 20 (ITU G.723 ADPCM) is a real, legitimately different, still-unsupported
-            // format -- confirms the validation that lets PCM/float/G.711/IMA-ADPCM/MS-ADPCM through
-            // continues to reject everything else, now that MS ADPCM's own tag (2) has been added to
-            // that allow-list (format tag 2 was this test's own example before MS ADPCM landed).
+            // format -- confirms the validation that lets PCM/float/G.711/IMA-ADPCM/MS-ADPCM/Yamaha-
+            // ADPCM through continues to reject everything else, now that MS ADPCM's own tag (2) has
+            // been added to that allow-list (format tag 2 was this test's own example before MS ADPCM
+            // landed).
             var filePath = Path.GetTempFileName();
             try
             {
@@ -808,6 +1143,249 @@ namespace EggEncoder.UnitTests.Codecs.Wav
             }
 
             return samples;
+        }
+
+        [Fact]
+        public void Open_WithListInfoChunk_Should_Expose_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                // INAM's value ("Test", 4 chars + null terminator = 5 bytes) is odd and needs a pad
+                // byte; IART's ("Artist", 6 + null = 7 bytes) is also odd -- both exercise the padding
+                // path, not just the (less common in practice) already-even case.
+                var listPayload = BuildListInfoPayload(("INAM", "Test"), ("IART", "Artist"));
+                CreateWavWithListChunk(filePath, listPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!["INAM"].Should().Be("Test", "the null terminator (and any pad byte) must be trimmed, not left in the value");
+                wavReader.Tags!["IART"].Should().Be("Artist");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithoutListChunk_Should_Have_Null_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithFormatTag(filePath, formatTag: 1);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListChunk_OfNonInfoSubtype_Should_Have_Null_Tags()
+        {
+            // 'adtl' (cue-point labels/notes) is a real RIFF LIST sub-type, structured completely
+            // differently from 'INFO' -- it must not be misread as one.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var listPayload = Encoding.ASCII.GetBytes("adtl").Concat(BuildInfoSubChunk("INAM", "Test")).ToArray();
+                CreateWavWithListChunk(filePath, listPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListChunk_TooShortToCarryASubtype_Should_Have_Null_Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                CreateWavWithListChunk(filePath, listChunkPayload: [(byte)'I', (byte)'N']); // only 2 of the 4 subtype bytes
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithListInfoChunk_WhereASubChunk_DeclaresASizeRunningPastTheListChunksOwnBound_Should_Stop_Gracefully_WithoutThrowing()
+        {
+            // The first sub-chunk (INAM) is well-formed; the second (IART) declares a size far larger
+            // than what's actually left in the LIST chunk -- a truncated/corrupted file, not something
+            // this optional metadata read should ever throw over (unlike the mandatory-for-decode
+            // truncation checks elsewhere in this codebase, e.g. Mp4EsdsParser/AsfContainerReader).
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var corruptedSecondSubChunk = new List<byte>();
+                corruptedSecondSubChunk.AddRange(Encoding.ASCII.GetBytes("IART"));
+                corruptedSecondSubChunk.AddRange(BitConverter.GetBytes((uint)1000)); // far larger than any real remaining data
+
+                var listPayload = Encoding.ASCII.GetBytes("INFO")
+                    .Concat(BuildInfoSubChunk("INAM", "Test"))
+                    .Concat(corruptedSecondSubChunk)
+                    .ToArray();
+                CreateWavWithListChunk(filePath, listPayload);
+
+                var act = () => WavReader.Open(filePath).Dispose();
+                act.Should().NotThrow();
+
+                using var wavReader = WavReader.Open(filePath);
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!.Should().ContainKey("INAM").WhoseValue.Should().Be("Test", "the well-formed sub-chunk before the corrupted one should still be parsed");
+                wavReader.Tags!.Should().NotContainKey("IART", "the corrupted sub-chunk itself must not be parsed");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithAnInfoListChunk_FollowedByA_NonInfoListChunk_Should_StillExposeTheEarlierTags()
+        {
+            // A real file can carry more than one 'LIST' chunk -- 'INFO' metadata alongside 'adtl'
+            // cue-point labels is a real, not-contrived combination. The second, non-INFO 'LIST'
+            // chunk must not wipe out the tags the first, INFO one already found.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var infoPayload = BuildListInfoPayload(("INAM", "Test"));
+                var adtlPayload = Encoding.ASCII.GetBytes("adtl").Concat(BuildInfoSubChunk("labl", "A cue label")).ToArray();
+                CreateWavWithTwoListChunks(filePath, infoPayload, adtlPayload);
+
+                using var wavReader = WavReader.Open(filePath);
+
+                wavReader.Tags.Should().NotBeNull();
+                wavReader.Tags!["INAM"].Should().Be("Test", "the earlier INFO chunk's own tags must survive the later, non-INFO LIST chunk");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static void CreateWavWithTwoListChunks(string filePath, byte[] firstListPayload, byte[] secondListPayload)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int dataSize = 4;
+            var firstSize = (uint)firstListPayload.Length;
+            var firstPadding = firstSize % 2 == 0 ? 0u : 1u;
+            var secondSize = (uint)secondListPayload.Length;
+            var secondPadding = secondSize % 2 == 0 ? 0u : 1u;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + firstSize + firstPadding) + (8 + secondSize + secondPadding) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write(firstSize);
+            writer.Write(firstListPayload);
+            if (firstPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("LIST"u8);
+            writer.Write(secondSize);
+            writer.Write(secondListPayload);
+            if (secondPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
+        }
+
+        private static byte[] BuildInfoSubChunk(string id, string value)
+        {
+            var valueBytes = Encoding.UTF8.GetBytes(value + "\0");
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+            writer.Write(Encoding.ASCII.GetBytes(id));
+            writer.Write((uint)valueBytes.Length); // declared size is the real (possibly odd) payload length, excluding any pad byte
+            writer.Write(valueBytes);
+            if (valueBytes.Length % 2 != 0)
+            {
+                writer.Write((byte)0);
+            }
+
+            return ms.ToArray();
+        }
+
+        private static byte[] BuildListInfoPayload(params (string Id, string Value)[] subChunks)
+        {
+            var payload = Encoding.ASCII.GetBytes("INFO").ToList();
+            foreach (var (id, value) in subChunks)
+            {
+                payload.AddRange(BuildInfoSubChunk(id, value));
+            }
+
+            return payload.ToArray();
+        }
+
+        private static void CreateWavWithListChunk(string filePath, byte[] listChunkPayload)
+        {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            using var writer = new BinaryWriter(stream);
+
+            const int dataSize = 4;
+            var listChunkSize = (uint)listChunkPayload.Length;
+            var listPadding = listChunkSize % 2 == 0 ? 0u : 1u;
+
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + listChunkSize + listPadding) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1); // PCM
+            writer.Write((ushort)1); // mono
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write(listChunkSize);
+            writer.Write(listChunkPayload);
+            if (listPadding == 1u)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
         }
     }
 }

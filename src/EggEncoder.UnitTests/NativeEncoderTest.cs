@@ -1,3 +1,4 @@
+using System.Text;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
@@ -5,6 +6,7 @@ using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
+using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -18,6 +20,7 @@ namespace EggEncoder.UnitTests
         private static readonly string _wavFixturePath = Path.GetFullPath("Codecs/Flac/sample.wav");
         private static readonly string _imaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ima_adpcm_mono.wav");
         private static readonly string _msAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_ms_adpcm_mono.wav");
+        private static readonly string _yamahaAdpcmWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_yamaha_adpcm_mono.wav");
         private static readonly string _muLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_mulaw_mono.wav");
         private static readonly string _aLawWavFixturePath = Path.GetFullPath("Codecs/Wav/sample_g711_alaw_mono.wav");
         private static readonly string _movFixturePath = Path.GetFullPath("Codecs/Mov/test.mov");
@@ -52,6 +55,230 @@ namespace EggEncoder.UnitTests
             probeResult.ChannelLayout.Should().Be("stereo");
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.TimeBase.Should().Be("1/44100");
+            // This fixture is itself ffmpeg-produced and carries a real 'LIST'/'INFO' chunk -- a
+            // software tag ffmpeg writes into every WAV it encodes.
+            probeResult.Tags.Should().NotBeNull();
+            probeResult.Tags!.Should().ContainKey("ISFT");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WavFormat_Should_Return_Same_Metadata_As_Path_Based_Probe()
+        {
+            using var stream = File.OpenRead(_wavFixturePath);
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Wav);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_wavFixturePath).Length);
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(2);
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.Tags.Should().NotBeNull();
+            probeResult.Tags!.Should().ContainKey("ISFT");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_FlacFormat_Should_Return_Correct_Metadata()
+        {
+            var bytes = FlacFileBuilder.BuildConstantFrame(channels: 1, bitsPerSample: 8, sampleRate: 8000, blockSize: 16, constantValuePerChannel: [42]);
+            using var stream = new MemoryStream(bytes);
+
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Flac);
+
+            probeResult.FormatName.Should().Be("flac");
+            probeResult.CodecName.Should().Be("flac");
+            probeResult.SampleRate.Should().Be(8000);
+            probeResult.Channels.Should().Be(1);
+            probeResult.BitsPerSample.Should().Be(8);
+            probeResult.DurationInSamples.Should().Be(16);
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithNullSource_Should_Throw()
+        {
+            var act = async () => await _nativeEncoder.Probe((Stream)null!, AudioFormat.Wav);
+            await act.Should().ThrowAsync<ArgumentNullException>();
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithUnsupportedFormat_Should_ThrowNotSupportedException()
+        {
+            // Wav/Aiff/Au/Flac/Aac/WavPack are wired up for the Stream-based overload so far --
+            // see docs/feature-roadmap.md item 1 for status. Every other AudioFormat should fail
+            // clearly rather than silently misbehaving.
+            using var stream = new MemoryStream();
+            var act = async () => await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+            await act.Should().ThrowAsync<NotSupportedException>();
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AiffFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var aiffPath = Path.Combine(tempDirectory, "source.aiff");
+                AiffFileBuilder.Create(aiffPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(aiffPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Aiff);
+
+                probeResult.FormatName.Should().Be("aiff");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+                probeResult.BitsPerSample.Should().Be(16);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AuFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var auPath = Path.Combine(tempDirectory, "source.au");
+                AuFileBuilder.Create(auPath, channels: 1, sampleRate: 8000, encoding: 3, [0, 0, 3, 232]);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(auPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Au);
+
+                probeResult.FormatName.Should().Be("au");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_AacFormat_Should_Return_Correct_Metadata()
+        {
+            using var stream = new MemoryStream(File.ReadAllBytes(_aacFixturePath));
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Aac);
+
+            probeResult.FormatName.Should().Be("aac");
+            probeResult.CodecName.Should().Be("aac");
+            probeResult.SampleRate.Should().BePositive();
+            probeResult.ChannelLayout.Should().Be("mono");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WavPackFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var wvPath = Path.Combine(tempDirectory, "source.wv");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                WavPackEncoder.Encode(wavPath, wvPath);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(wvPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.WavPack);
+
+                probeResult.FormatName.Should().Be("wv");
+                probeResult.CodecName.Should().Be("wavpack");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_WavFile_WithListInfoChunk_Should_Surface_Tags()
+        {
+            // End-to-end: confirms NativeEncoder.Probe actually wires WavReader.Tags through to
+            // ProbeResult.Tags, not just that WavReader itself parses them correctly (covered
+            // directly in WavReaderTest).
+            var filePath = Path.GetTempFileName() + ".wav"; // NativeEncoder.Probe dispatches by extension
+            try
+            {
+                File.WriteAllBytes(filePath, BuildMinimalWavWithListInfoTags("My Title", "My Artist"));
+
+                var probeResult = await _nativeEncoder.Probe(filePath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!["INAM"].Should().Be("My Title");
+                probeResult.Tags!["IART"].Should().Be("My Artist");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        private static byte[] BuildMinimalWavWithListInfoTags(string title, string artist)
+        {
+            byte[] InfoSubChunk(string id, string value)
+            {
+                var valueBytes = Encoding.UTF8.GetBytes(value + "\0");
+                var padding = valueBytes.Length % 2 == 0 ? [] : new byte[] { 0 };
+                return [.. Encoding.ASCII.GetBytes(id), .. BitConverter.GetBytes((uint)valueBytes.Length), .. valueBytes, .. padding];
+            }
+
+            byte[] listPayload = [.. Encoding.ASCII.GetBytes("INFO"), .. InfoSubChunk("INAM", title), .. InfoSubChunk("IART", artist)];
+            var listPadding = listPayload.Length % 2 == 0 ? Array.Empty<byte>() : new byte[] { 0 };
+            const int dataSize = 4;
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + (8 + 16) + (8 + listPayload.Length + listPadding.Length) + (8 + dataSize)));
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write((uint)16);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write((uint)8000);
+            writer.Write((uint)16000);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("LIST"u8);
+            writer.Write((uint)listPayload.Length);
+            writer.Write(listPayload);
+            writer.Write(listPadding);
+            writer.Write("data"u8);
+            writer.Write((uint)dataSize);
+            writer.Write(new byte[dataSize]);
+
+            return ms.ToArray();
+        }
+
+        [Fact]
+        public async Task Probe_WavFile_Should_Return_PeakAmplitude_And_RmsLevel_Matching_An_Independent_Decode()
+        {
+            // Cross-checks Probe's new PeakAmplitude/RmsLevel fields against values computed
+            // independently here from the exact same fixture's own decoded samples (via WavReader
+            // directly, not WaveformCalculator), rather than trusting a hand-picked expected
+            // constant -- if NativeEncoder ever stopped actually feeding every real sample into the
+            // same WaveformCalculator instance it reads these back from, this would catch it.
+            var probeResult = await _nativeEncoder.Probe(_wavFixturePath);
+
+            using var reader = WavReader.Open(_wavFixturePath);
+            var buffer = new int[reader.TotalSamples * reader.Channels];
+            reader.ReadInterleavedSamples(buffer, (int)reader.TotalSamples);
+
+            var maxAmplitude = 1L << (reader.BitsPerSample - 1);
+            var expectedPeak = (double)buffer.Max(sample => Math.Abs((long)sample)) / maxAmplitude;
+            var expectedRms = Math.Sqrt(buffer.Average(sample => (double)sample * sample)) / maxAmplitude;
+
+            probeResult.PeakAmplitude.Should().BeApproximately(expectedPeak, 1e-9);
+            probeResult.RmsLevel.Should().BeApproximately(expectedRms, 1e-9);
         }
 
         [Fact]
@@ -96,6 +323,28 @@ namespace EggEncoder.UnitTests
             probeResult.BitsPerSample.Should().Be(16);
             probeResult.DurationInSamples.Should().Be(44100);
             probeResult.TimeBase.Should().Be("1/22050");
+        }
+
+        [Fact]
+        public async Task Probe_YamahaAdpcmWavFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var probeResult = await _nativeEncoder.Probe(_yamahaAdpcmWavFixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("wav");
+            probeResult.SizeBytes.Should().Be(new FileInfo(_yamahaAdpcmWavFixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(2, 0.1);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("adpcm_yamaha");
+            probeResult.CodecLongName.Should().Be("ADPCM Yamaha");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16);
+            probeResult.DurationInSamples.Should().Be(88200);
+            probeResult.TimeBase.Should().Be("1/44100");
         }
 
         [Fact]
@@ -197,6 +446,30 @@ namespace EggEncoder.UnitTests
             probeResult.ChannelLayout.Should().Be("mono");
             probeResult.BitsPerSample.Should().Be(32);
             probeResult.DurationInSamples.Should().Be(4410);
+            probeResult.TimeBase.Should().Be("1/44100");
+        }
+
+        [Fact]
+        public async Task Probe_Ima4AifcFile_Should_Return_Correct_Metadata_And_Waveform()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Aiff/fixture_ima4_mono.aifc");
+
+            var probeResult = await _nativeEncoder.Probe(fixturePath);
+
+            AssertNonEmptyWaveform(probeResult.Waveform);
+
+            probeResult.FormatName.Should().Be("aiff");
+            probeResult.SizeBytes.Should().Be(new FileInfo(fixturePath).Length);
+            probeResult.DurationSeconds.Should().BeApproximately(0.2, 0.01);
+
+            probeResult.CodecType.Should().Be("audio");
+            probeResult.CodecName.Should().Be("adpcm_ima_qt");
+            probeResult.CodecLongName.Should().Be("ADPCM IMA QuickTime");
+            probeResult.SampleRate.Should().Be(44100);
+            probeResult.Channels.Should().Be(1);
+            probeResult.ChannelLayout.Should().Be("mono");
+            probeResult.BitsPerSample.Should().Be(16, "ima4 decodes to 16-bit PCM resolution regardless of its own 4-bit coded storage width");
+            probeResult.DurationInSamples.Should().Be(8832);
             probeResult.TimeBase.Should().Be("1/44100");
         }
 
@@ -340,6 +613,36 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_OpusFile_WithTags_Should_Surface_Tags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var opusPath = Path.Combine(tempDirectory, "tagged.opus");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+
+                using (var session = OpusEncoderSession.OpenSession(opusPath, channels: 1, sampleRate: 48000, bitsPerSample: 16, tags))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(opusPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {
@@ -384,6 +687,36 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be($"1/{sampleRate}");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_VorbisFile_WithTags_Should_Surface_Tags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var oggPath = Path.Combine(tempDirectory, "tagged.ogg");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+
+                using (var session = VorbisEncoderSession.OpenSession(oggPath, channels: 1, sampleRate: 44100, bitsPerSample: 16, tags: tags))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                var probeResult = await _nativeEncoder.Probe(oggPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {
@@ -453,6 +786,30 @@ namespace EggEncoder.UnitTests
                 probeResult.SampleRate.Should().Be(44100);
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.ChannelLayout.Should().Be("stereo");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_FlacFile_WithVorbisCommentTag_Should_Surface_Tags()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var flacPath = Path.Combine(tempDirectory, "tagged.flac");
+                var tags = new Dictionary<string, string> { ["TITLE"] = "Title", ["ARTIST"] = "Artist" };
+                FlacEncoder.Encode(_wavFixturePath, flacPath, tags: tags);
+
+                var probeResult = await _nativeEncoder.Probe(flacPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("TITLE").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("ARTIST").WhoseValue.Should().Be("Artist");
             }
             finally
             {
@@ -516,6 +873,8 @@ namespace EggEncoder.UnitTests
             var probeResult = await _nativeEncoder.Probe(_movFixturePath);
 
             probeResult.Waveform.Should().BeNull();
+            probeResult.PeakAmplitude.Should().BeNull();
+            probeResult.RmsLevel.Should().BeNull();
 
             probeResult.FormatName.Should().Be("mov");
             probeResult.DurationSeconds.Should().BeApproximately(5, 0.1);
@@ -530,6 +889,8 @@ namespace EggEncoder.UnitTests
             var probeResult = await _nativeEncoder.Probe(_mp4FixturePath);
 
             probeResult.Waveform.Should().BeNull();
+            probeResult.PeakAmplitude.Should().BeNull();
+            probeResult.RmsLevel.Should().BeNull();
             probeResult.Width.Should().Be(640);
             probeResult.Height.Should().Be(360);
 
@@ -569,6 +930,24 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("mono");
                 probeResult.BitsPerSample.Should().Be(16);
                 AssertNonEmptyWaveform(probeResult.Waveform);
+
+                // Proves the DecodedAudioTrack -> ProbeResult forwarding path (ProbeVideo's own,
+                // separate from every other codec's direct WaveformCalculator -> ProbeResult path)
+                // actually carries PeakAmplitude/RmsLevel through too, not just Waveform. Structural
+                // sanity rather than a predicted value: AAC's own lossy quantization/windowing
+                // didn't preserve this signal's pre-encode peak closely enough for a tight tolerance
+                // to be meaningful (confirmed by actually measuring it, not assumed -- the real
+                // round-tripped peak landed well under half of the original 10000/32768).
+                // BeGreaterThan(0.0), not just BeInRange: a range check alone would still pass even
+                // if the forwarding path silently regressed to always returning 0.0 (e.g. a future
+                // change that zeroed DecodedAudioTrack's own fields) -- confirmed this gap was real
+                // by temporarily weakening the assertions to range-only and seeing they'd still pass
+                // against a hard-coded 0.0, not assumed.
+                probeResult.PeakAmplitude.Should().NotBeNull();
+                probeResult.PeakAmplitude!.Value.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+                probeResult.RmsLevel.Should().NotBeNull();
+                probeResult.RmsLevel!.Value.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+                probeResult.RmsLevel!.Value.Should().BeLessThanOrEqualTo(probeResult.PeakAmplitude!.Value, "RMS can never exceed the peak for any real signal");
             }
             finally
             {

@@ -1,10 +1,12 @@
 using EggEncoder;
 using Microsoft.Extensions.Logging.Abstractions;
 
-// Exercises EggEncoder's riskiest-for-AOT paths — LibraryImport P/Invoke into
-// libmp3lame/libFLAC/wavpackdll, the UnmanagedCallersOnly + GCHandle FLAC decode callback and
-// WavPack encode callback, and the NLayer-backed MP3 decode — under a real
-// `dotnet publish -p:PublishAot=true` binary, not just under the JIT.
+// Exercises EggEncoder's riskiest-for-AOT paths now that every codec is pure managed C# (no
+// native binary, no P/Invoke, anywhere in this project) — the NLayer-backed MP3 decode
+// dependency in particular ships no AOT/trim metadata of its own, and this project's own managed
+// FLAC/MP3/WavPack encode+decode round trips need to keep working after trimming — under a real
+// `dotnet publish -p:PublishAot=true` binary for each of this project's supported RIDs, not just
+// under the JIT.
 var sourceWav = Path.Combine(AppContext.BaseDirectory, "sample.wav");
 var workingDirectory = Path.Combine(Path.GetTempPath(), $"EggEncoderAotSmoke_{Guid.NewGuid():N}");
 Directory.CreateDirectory(workingDirectory);
@@ -19,12 +21,12 @@ try
     var cutPath = Path.Combine(workingDirectory, "cut.wav");
 
     await RunCheck("Probe source WAV", () => encoder.Probe(sourceWav));
-    await RunCheck("Convert WAV -> MP3 (libmp3lame P/Invoke encode)", () => encoder.ConvertFile(sourceWav, mp3Path));
+    await RunCheck("Convert WAV -> MP3 (pure managed encode, no native call)", () => encoder.ConvertFile(sourceWav, mp3Path));
     await RunCheck("Probe + decode produced MP3 (NLayer decode)", () => encoder.Probe(mp3Path));
-    await RunCheck("Convert WAV -> FLAC (libFLAC P/Invoke encode)", () => encoder.ConvertFile(sourceWav, flacPath));
-    await RunCheck("Probe + decode produced FLAC (UnmanagedCallersOnly callback)", () => encoder.Probe(flacPath));
-    await RunCheck("Convert WAV -> WavPack (wavpackdll P/Invoke encode, UnmanagedCallersOnly write callback)", () => encoder.ConvertFile(sourceWav, wvPath));
-    await RunCheck("Probe + decode produced WavPack (wavpackdll P/Invoke decode)", () => encoder.Probe(wvPath));
+    await RunCheck("Convert WAV -> FLAC (pure managed encode, no native call)", () => encoder.ConvertFile(sourceWav, flacPath));
+    await RunCheck("Probe + decode produced FLAC (pure managed decode, no native call)", () => encoder.Probe(flacPath));
+    await RunCheck("Convert WAV -> WavPack (pure managed encode, no native call)", () => encoder.ConvertFile(sourceWav, wvPath));
+    await RunCheck("Probe + decode produced WavPack (pure managed decode, no native call)", () => encoder.Probe(wvPath));
     await RunCheck("Cut source WAV", () => encoder.CutFile(sourceWav, cutPath, 0, 1));
 
     Console.WriteLine("All AOT smoke checks passed.");
