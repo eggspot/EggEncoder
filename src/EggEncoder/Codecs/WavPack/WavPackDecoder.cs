@@ -33,6 +33,30 @@ namespace EggEncoder.Codecs.WavPack
                 throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: {e.Message}", e);
             }
 
+            return Decode(data, filePath, onBlockDecoded);
+        }
+
+        /// <summary>
+        /// Decodes a WavPack source from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a source that isn't a local file (an HTTP response body, blob storage, an
+        /// in-memory buffer). No <see cref="Stream.CanSeek"/> requirement: like
+        /// <see cref="Flac.FlacDecoder"/>, this reads the whole source into memory up front, so any
+        /// forward-readable stream works, seekable or not. Does NOT take ownership of
+        /// <paramref name="stream"/> -- the caller opened it, so the caller is responsible for
+        /// disposing it; this call never closes it.
+        /// </summary>
+        public static WavPackStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Decode(memoryStream.ToArray(), "<stream>", onBlockDecoded);
+        }
+
+        private static WavPackStreamInfo Decode(byte[] data, string filePath, AudioBlockDecodedCallback onBlockDecoded)
+        {
             if (data.Length < WavPackBlockHeader.ByteLength)
             {
                 throw new InvalidDataException($"Failed to open '{filePath}' as WavPack: the file is too short to contain even one block header.");

@@ -1,20 +1,23 @@
+using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.WavPack;
 using EggEncoder.Results;
 using EggEncoder.Waveform;
 
 namespace EggEncoder
 {
-    // Stream-based Probe overload (docs/feature-roadmap.md item 1) -- a first slice covering the two
-    // formats whose own Reader/Decoder classes needed the least adaptation to support a Stream source
-    // (WavReader, already FileStream-based internally, just needed that field's type widened to the
-    // base Stream and an ownership flag added so Dispose() doesn't close a stream it doesn't own; and
-    // FlacDecoder, which already reads its entire source into memory up front via File.ReadAllBytes,
-    // so a Stream source just needs reading fully into the same byte[] instead). Every other
-    // AudioFormat still throws NotSupportedException here -- adding them is mechanical but each one
-    // needs its own careful review (container/codec-specific seekability requirements, and for
-    // Opus/Vorbis/MP3, checking whether the underlying Concentus/NVorbis/NLayer dependency's own
-    // Stream support imposes any constraint of its own) -- see the roadmap item's own status note.
+    // Stream-based Probe overload (docs/feature-roadmap.md item 1) -- covers every format whose own
+    // Reader/Decoder class has been adapted for a Stream source so far: WAV/AIFF/AU (FileStream-field-
+    // widened-to-Stream, each requiring CanSeek since their own header parse relies on
+    // Stream.Position/Seek throughout) and FLAC/AAC/WavPack (read-fully-into-byte[] up front, needing
+    // no seek support at all). Every other AudioFormat still throws NotSupportedException here --
+    // adding them is mechanical but each one needs its own careful review (container/codec-specific
+    // seekability requirements, and for Opus/Vorbis/MP3, checking whether the underlying Concentus/
+    // NVorbis/NLayer dependency's own Stream support imposes any constraint of its own) -- see the
+    // roadmap item's own status note.
     public partial class NativeEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
@@ -28,7 +31,11 @@ namespace EggEncoder
                 var result = format switch
                 {
                     AudioFormat.Wav => ProbeWavStream(source),
+                    AudioFormat.Aiff => ProbeAiffStream(source),
+                    AudioFormat.Au => ProbeAuStream(source),
                     AudioFormat.Flac => ProbeFlacStream(source),
+                    AudioFormat.Aac => ProbeAacStream(source),
+                    AudioFormat.WavPack => ProbeWavPackStream(source),
                     _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
                 };
 
@@ -121,6 +128,150 @@ namespace EggEncoder
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
                 Tags = streamInfo.Tags
+            };
+        }
+
+        private static ProbeResult ProbeAiffStream(Stream source)
+        {
+            using var aiffReader = AiffReader.Open(source);
+            var waveformCalculator = new WaveformCalculator(aiffReader.TotalSamples, aiffReader.Channels, aiffReader.BitsPerSample);
+
+            var buffer = new int[FramesPerBlock * aiffReader.Channels];
+
+            int framesRead;
+            while ((framesRead = aiffReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+            {
+                waveformCalculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * aiffReader.Channels));
+            }
+
+            var durationSeconds = aiffReader.SampleRate > 0 ? (double)aiffReader.TotalSamples / aiffReader.SampleRate : 0;
+            var (codecName, codecLongName) = DescribeAiffCodec(aiffReader.BitsPerSample, aiffReader.IsLittleEndian, aiffReader.IsFloat32, aiffReader.IsFloat64, aiffReader.IsALaw, aiffReader.IsMuLaw, aiffReader.IsIma4);
+
+            return new ProbeResult
+            {
+                FormatName = "aiff",
+                FormatLongName = "AIFF (Audio Interchange File Format)",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = aiffReader.SampleRate,
+                Channels = aiffReader.Channels,
+                ChannelLayout = DescribeChannelLayout(aiffReader.Channels),
+                BitsPerSample = aiffReader.BitsPerSample,
+                BitRate = aiffReader.SampleRate * aiffReader.BitsPerSample * aiffReader.Channels,
+                DurationInSamples = aiffReader.TotalSamples,
+                TimeBase = aiffReader.SampleRate > 0 ? $"1/{aiffReader.SampleRate}" : null,
+                Waveform = waveformCalculator.GetNormalizedWindows(),
+                PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator.GetNormalizedRmsLevel()
+            };
+        }
+
+        private static ProbeResult ProbeAuStream(Stream source)
+        {
+            using var auReader = AuReader.Open(source);
+            var waveformCalculator = new WaveformCalculator(auReader.TotalSamples, auReader.Channels, auReader.BitsPerSample);
+
+            var buffer = new int[FramesPerBlock * auReader.Channels];
+
+            int framesRead;
+            while ((framesRead = auReader.ReadInterleavedSamples(buffer, FramesPerBlock)) > 0)
+            {
+                waveformCalculator.AddBlock(new ReadOnlySpan<int>(buffer, 0, framesRead * auReader.Channels));
+            }
+
+            var durationSeconds = auReader.SampleRate > 0 ? (double)auReader.TotalSamples / auReader.SampleRate : 0;
+            var (codecName, codecLongName) = DescribeAuCodec(auReader.BitsPerSample, auReader.IsFloat32, auReader.IsFloat64, auReader.IsALaw, auReader.IsMuLaw);
+
+            return new ProbeResult
+            {
+                FormatName = "au",
+                FormatLongName = "Sun AU",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = codecName,
+                CodecLongName = codecLongName,
+                SampleRate = auReader.SampleRate,
+                Channels = auReader.Channels,
+                ChannelLayout = DescribeChannelLayout(auReader.Channels),
+                BitsPerSample = auReader.BitsPerSample,
+                BitRate = auReader.SampleRate * auReader.BitsPerSample * auReader.Channels,
+                DurationInSamples = auReader.TotalSamples,
+                TimeBase = auReader.SampleRate > 0 ? $"1/{auReader.SampleRate}" : null,
+                Waveform = waveformCalculator.GetNormalizedWindows(),
+                PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator.GetNormalizedRmsLevel()
+            };
+        }
+
+        private static ProbeResult ProbeAacStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = AacDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "aac",
+                FormatLongName = "ADTS AAC (Advanced Audio Coding)",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "aac",
+                CodecLongName = "AAC-LC (Advanced Audio Coding, Low Complexity profile)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+            };
+        }
+
+        private static ProbeResult ProbeWavPackStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = WavPackDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "wv",
+                FormatLongName = "WavPack",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "wavpack",
+                CodecLongName = "WavPack",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
             };
         }
     }
