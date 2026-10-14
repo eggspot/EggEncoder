@@ -53,11 +53,12 @@ public class ProbeResult
     public IReadOnlyList<double>? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
+    public double? IntegratedLoudness { get; init; } // real ITU-R BS.1770-4 / EBU R128 integrated loudness, in LUFS -- null if not measured or <400ms audio; can legitimately be double.NegativeInfinity for audio below the standard's -70 LUFS absolute silence gate (a real measurement, not a "couldn't measure" sentinel)
     public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV/AIFF 'LIST'/'INFO'/'NAME' etc. metadata (keyed by raw chunk id, e.g. "INAM"/"NAME"), MP3/embedded-AIFF ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC/Opus/Vorbis comment fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/AIFF/MP3/FLAC/Opus/Vorbis with none
 }
 ```
 
-Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `AiffWriter.Create`'s own `tags` parameter for AIFF, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `tags` parameter for FLAC/Opus/Vorbis (see each format's own section below).
+Only fields this library can genuinely compute are populated -- nothing is filled with ffprobe-style placeholders (e.g. no `probe_score`, no disposition flags). `PeakAmplitude`/`RmsLevel`/`IntegratedLoudness` are null wherever `Waveform` is null (e.g. a MOV/MP4 file with no decodable audio track). `Tags` can also be written back out -- `WavWriter.Create`'s own `tags` parameter for WAV, `AiffWriter.Create`'s own `tags` parameter for AIFF, `Mp3Encoder.Encode`/`OpenSession`'s own `tags` parameter for MP3, `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `tags` parameter for FLAC/Opus/Vorbis (see each format's own section below).
 
 ## Dependency Injection
 
@@ -750,11 +751,12 @@ public sealed class WaveformCalculator
 {
     public const int DefaultWindowCount = 200;
 
-    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
+    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount, int? sampleRate = null);
     public void AddBlock(ReadOnlySpan<int> interleavedSamples); // call repeatedly across decode callbacks
     public List<double> GetNormalizedWindows(); // each value in [0, 1]
     public double GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, in [0, 1] -- no flush step needed
     public double GetNormalizedRmsLevel();      // root-mean-square across every sample seen so far, in [0, 1]
+    public double? GetIntegratedLoudness();     // ITU-R BS.1770-4 / EBU R128 integrated loudness in LUFS; null if sampleRate wasn't given or <400ms of audio
 }
 ```
 
@@ -762,7 +764,7 @@ Example, decoding a WAV file directly instead of via `IMediaEncoder.Probe`:
 
 ```csharp
 using var wavReader = WavReader.Open("track.wav");
-var calculator = new WaveformCalculator(wavReader.TotalSamples, wavReader.Channels, wavReader.BitsPerSample);
+var calculator = new WaveformCalculator(wavReader.TotalSamples, wavReader.Channels, wavReader.BitsPerSample, sampleRate: wavReader.SampleRate);
 
 var buffer = new int[4096 * wavReader.Channels];
 int framesRead;
@@ -774,9 +776,10 @@ while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) > 0)
 List<double> windows = calculator.GetNormalizedWindows();
 double peak = calculator.GetNormalizedPeakAmplitude();
 double rms = calculator.GetNormalizedRmsLevel();
+double? integratedLoudnessLufs = calculator.GetIntegratedLoudness();
 ```
 
-`WaveformCalculator` streams -- call `AddBlock` as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. `GetNormalizedPeakAmplitude`/`GetNormalizedRmsLevel` need no flushing step the way `GetNormalizedWindows` does (its own trailing partial window) -- both are fully up to date after every `AddBlock` call, and back `ProbeResult.PeakAmplitude`/`RmsLevel` the same way `GetNormalizedWindows` backs `ProbeResult.Waveform`.
+`WaveformCalculator` streams -- call `AddBlock` as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. `GetNormalizedPeakAmplitude`/`GetNormalizedRmsLevel` need no flushing step the way `GetNormalizedWindows` does (its own trailing partial window) -- both are fully up to date after every `AddBlock` call, and back `ProbeResult.PeakAmplitude`/`RmsLevel` the same way `GetNormalizedWindows` backs `ProbeResult.Waveform`. `GetIntegratedLoudness` is opt-in: pass `sampleRate` to the constructor (every `IMediaEncoder.Probe`/`Probe(Stream, AudioFormat)` call site does) to enable it -- it backs `ProbeResult.IntegratedLoudness` the same way. Internally it K-weights each sample via `Waveform.KWeightingFilter` (two cascaded biquads using the standard's own tan-prewarped coefficients, not `Pcm.BiquadTransform`'s RBJ-cookbook ones) before accumulating 400ms/100ms-step gated block energies per ITU-R BS.1770-4; can legitimately return `double.NegativeInfinity` for audio entirely below the standard's -70 LUFS absolute silence gate -- a real measurement, not a "couldn't measure" sentinel (that's what `null` means instead).
 
 ## Constraints and Gotchas
 

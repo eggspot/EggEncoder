@@ -46,7 +46,7 @@
       <p>Every <code>Probe</code> call that decodes audio (WAV, AIFF, ALAC, FLAC, MP3, AAC, WMA, TTA, Opus, Vorbis, WavPack — not MOV/MP4, which is metadata-only unless a decodable audio track is found) populates <code>ProbeResult.Waveform</code> with a list of normalized peak values in <code>[0, 1]</code>, one per window, via <code>WaveformCalculator</code>:</p>
       <pre><code class="language-csharp">using EggEncoder.Waveform;
 
-var calculator = new WaveformCalculator(totalSamplesPerChannel, channels, bitsPerSample);
+var calculator = new WaveformCalculator(totalSamplesPerChannel, channels, bitsPerSample, sampleRate: sampleRate);
 
 int framesRead;
 while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) &gt; 0)
@@ -56,8 +56,9 @@ while ((framesRead = wavReader.ReadInterleavedSamples(buffer, 4096)) &gt; 0)
 
 List&lt;double&gt; windows = calculator.GetNormalizedWindows(); // default 200 windows
 double peak = calculator.GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, in [0, 1]
-double rms = calculator.GetNormalizedRmsLevel();       // root-mean-square across every sample, in [0, 1]</code></pre>
-      <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. <code>GetNormalizedPeakAmplitude</code>/<code>GetNormalizedRmsLevel</code> need no flushing step the way <code>GetNormalizedWindows</code> does (its own trailing partial window) — both are fully up to date after every <code>AddBlock</code> call, and back <code>ProbeResult.PeakAmplitude</code>/<code>RmsLevel</code> the same way <code>GetNormalizedWindows</code> backs <code>ProbeResult.Waveform</code>. <code>RmsLevel</code> is a rough loudness indicator, not an ITU-R BS.1770 perceptual loudness measurement.</p>
+double rms = calculator.GetNormalizedRmsLevel();       // root-mean-square across every sample, in [0, 1]
+double? lufs = calculator.GetIntegratedLoudness();     // ITU-R BS.1770-4 / EBU R128 integrated loudness, only if sampleRate was given</code></pre>
+      <p><code>WaveformCalculator</code> streams — call <code>AddBlock</code> as many times as you like across however many decode callbacks the codec produces; it does not need the full signal in memory at once. <code>GetNormalizedPeakAmplitude</code>/<code>GetNormalizedRmsLevel</code> need no flushing step the way <code>GetNormalizedWindows</code> does (its own trailing partial window) — both are fully up to date after every <code>AddBlock</code> call, and back <code>ProbeResult.PeakAmplitude</code>/<code>RmsLevel</code> the same way <code>GetNormalizedWindows</code> backs <code>ProbeResult.Waveform</code>. <code>RmsLevel</code> is a rough loudness indicator, not an ITU-R BS.1770 perceptual loudness measurement — for that, see <a href="#loudness-measurement">Loudness Measurement</a> below.</p>
 
       <h2>WAV Metadata Tags</h2>
       <p><code>Probe</code>-ing a WAV file with a <code>'LIST'</code>/<code>'INFO'</code> chunk populates <code>ProbeResult.Tags</code>, keyed by the raw four-character chunk ID exactly as RIFF stores it (e.g. <code>"INAM"</code> for title, <code>"IART"</code> for artist, <code>"ICRD"</code> for creation date) — not remapped to friendlier names, the same way <code>CodecName</code> exposes <code>"pcm_s16le"</code> rather than a human label:</p>
@@ -108,6 +109,14 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("NAME", out var tit
       <pre><code class="language-csharp">AiffWriter.Create("tagged.aiff", channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount,
     tags: new Dictionary&lt;string, string&gt; { ["NAME"] = "Title", ["AUTH"] = "Artist" });</code></pre>
       <p>Unlike the read side, write is strict: a tag id must be exactly <code>"NAME"</code>, <code>"AUTH"</code>, or <code>"(c) "</code> or <code>Create</code> throws <code>ArgumentException</code> before the destination file is even created.</p>
+
+      <h2 id="loudness-measurement">Loudness Measurement (EBU R128)</h2>
+      <p><code>WaveformCalculator</code> takes an optional <code>sampleRate</code> constructor parameter; when given, <code>Probe</code> also measures real perceptual loudness — ITU-R BS.1770-4 / EBU R128 integrated loudness, in LUFS — alongside its existing peak/RMS tracking, surfaced as <code>ProbeResult.IntegratedLoudness</code>. This is a genuinely different measurement from <code>RmsLevel</code> (a flat sample-level average): the signal is K-weighted first, then gated 400ms-block energy averaging is applied per the standard:</p>
+      <pre><code class="language-csharp">var probeResult = await mediaEncoder.Probe("track.wav");
+double? integratedLoudnessLufs = probeResult.IntegratedLoudness;</code></pre>
+      <p><code>IntegratedLoudness</code> is <code>null</code> if the audio is shorter than one 400ms gating block (or, for a format where <code>Probe</code> can't decode audio at all, the same case <code>Waveform</code>/<code>PeakAmplitude</code>/<code>RmsLevel</code> are null for). It can legitimately be <code>double.NegativeInfinity</code> for audio entirely below the standard's own -70 LUFS absolute silence gate — that's a real measurement, not a "couldn't measure" sentinel. Every <code>Probe</code>/<code>Probe(Stream, AudioFormat)</code> entry point populates it whenever audio decodes at all.</p>
+      <p>Internally, each sample is run through <code>Waveform.KWeightingFilter</code> — two cascaded biquads using ITU-R BS.1770-4's own tan-prewarped bilinear-transform coefficients, a different parameterization from <code>Pcm.BiquadTransform</code>'s RBJ-cookbook formulas, so it isn't reused from that type — before 400ms/100ms-step gated block energies are accumulated (absolute gate at -70 LUFS, relative gate 10 LU below the mean energy of the absolute-gated blocks). The whole pipeline (filter and gating together, not just the coefficients in isolation) was verified against the standard's own published conformance signal: a 997Hz sine wave at -23dBFS peak must measure -23.0 LUFS.</p>
+      <p>This is measurement only — there's no <code>LoudnessTransform</code> yet to <em>normalize</em> to a target LUFS the way <code>PeakNormalizationTransform</code> normalizes to a target peak dBFS. See <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 3 for that still-open follow-up.</p>
 
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>

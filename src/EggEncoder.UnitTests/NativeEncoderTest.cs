@@ -60,6 +60,45 @@ namespace EggEncoder.UnitTests
             // software tag ffmpeg writes into every WAV it encodes.
             probeResult.Tags.Should().NotBeNull();
             probeResult.Tags!.Should().ContainKey("ISFT");
+            probeResult.IntegratedLoudness.Should().NotBeNull().And.BeGreaterThan(double.NegativeInfinity);
+        }
+
+        [Fact]
+        public async Task Probe_WavFile_IntegratedLoudness_Should_Match_The_ReferenceConformanceSignal()
+        {
+            // The official ITU-R BS.1770-4 conformance test signal, round-tripped through the full
+            // Probe pipeline (not just WaveformCalculator directly, which WaveformCalculatorTest
+            // already covers) -- confirms NativeEncoder.ProbeWav actually wires sampleRate through
+            // and surfaces the result, not just that the underlying calculator works in isolation.
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                const int sampleRate = 48000;
+                const double peakDbfs = -23.0;
+                var amplitude = Math.Pow(10, peakDbfs / 20.0) * short.MaxValue;
+                var frameCount = sampleRate * 2;
+                var interleaved = new int[frameCount * 2];
+                for (var frame = 0; frame < frameCount; frame++)
+                {
+                    var sample = (int)Math.Round(amplitude * Math.Sin(2 * Math.PI * 997 * frame / sampleRate));
+                    interleaved[frame * 2] = sample;
+                    interleaved[(frame * 2) + 1] = sample;
+                }
+
+                var wavPath = Path.Combine(tempDirectory, "reference.wav");
+                WavFileBuilder.Create(wavPath, channels: 2, sampleRate, bitsPerSample: 16, interleaved);
+
+                var probeResult = await _nativeEncoder.Probe(wavPath);
+
+                probeResult.IntegratedLoudness.Should().NotBeNull();
+                probeResult.IntegratedLoudness!.Value.Should().BeApproximately(peakDbfs, 0.1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
 
         [Fact]

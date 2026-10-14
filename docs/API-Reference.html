@@ -79,6 +79,7 @@ public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vo
     public IReadOnlyList&lt;double&gt;? Waveform { get; init; }  // normalized peak windows in [0,1], or null
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
+    public double? IntegratedLoudness { get; init; } // real ITU-R BS.1770-4 / EBU R128 integrated loudness, in LUFS -- null if not measured or &lt;400ms of audio; can legitimately be double.NegativeInfinity for audio below the standard's -70 LUFS absolute silence gate (a real measurement, not a "couldn't measure" sentinel)
     public IReadOnlyDictionary&lt;string, string&gt;? Tags { get; init; }  // WAV/AIFF 'LIST'/'INFO'/'NAME' etc. metadata, MP3/embedded-AIFF ID3v2 text frames, or FLAC/Opus/Vorbis comment fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/AIFF/MP3/FLAC/Opus/Vorbis with none
 }</code></pre>
 
@@ -154,12 +155,14 @@ public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vo
 {
     public const int DefaultWindowCount = 200;
 
-    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount);
+    public WaveformCalculator(long totalSamplesPerChannel, int channels, int bitsPerSample, int windowCount = DefaultWindowCount, int? sampleRate = null);
     public void AddBlock(ReadOnlySpan&lt;int&gt; interleavedSamples);
     public List&lt;double&gt; GetNormalizedWindows();
     public double GetNormalizedPeakAmplitude(); // loudest absolute sample seen so far, normalized to [0,1]
     public double GetNormalizedRmsLevel();      // root-mean-square across every sample seen so far, normalized to [0,1]
+    public double? GetIntegratedLoudness();     // ITU-R BS.1770-4 / EBU R128 integrated loudness in LUFS; pass sampleRate to the constructor to enable; null if not enabled or &lt;400ms of audio
 }</code></pre>
+      <p><code>GetIntegratedLoudness</code> K-weights every sample via <code>Waveform.KWeightingFilter</code> (two cascaded biquads using the standard's own tan-prewarped coefficients, not <code>Pcm.BiquadTransform</code>'s RBJ-cookbook formula) before gated 400ms-block energy averaging per ITU-R BS.1770-4. See <a href="Advanced-Features.html#loudness-measurement">Advanced Features</a> for details.</p>
 
       <h2 id="pcm-transform-pipeline">PCM Transform Pipeline</h2>
       <p>See <a href="Advanced-Features.html#pcm-transform-pipeline">Advanced Features</a> for a full walkthrough with usage examples and important limits. This section is the type reference.</p>

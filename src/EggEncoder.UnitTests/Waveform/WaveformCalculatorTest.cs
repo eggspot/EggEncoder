@@ -158,5 +158,119 @@ namespace EggEncoder.UnitTests.Waveform
             multiCallCalculator.GetNormalizedPeakAmplitude().Should().Be(singleCallCalculator.GetNormalizedPeakAmplitude());
             multiCallCalculator.GetNormalizedRmsLevel().Should().BeApproximately(singleCallCalculator.GetNormalizedRmsLevel(), 1e-12);
         }
+
+        // -------- Integrated loudness (ITU-R BS.1770-4 / EBU R128) --------
+
+        [Fact]
+        public void GetIntegratedLoudness_WithoutSampleRate_Should_ReturnNull()
+        {
+            var calculator = new WaveformCalculator(totalSamplesPerChannel: 48000 * 2, channels: 2, bitsPerSample: 16);
+            calculator.AddBlock(BuildSineWave(sampleRate: 48000, seconds: 2, channels: 2, bitsPerSample: 16, peakDbfs: -20, frequencyHz: 997));
+
+            calculator.GetIntegratedLoudness().Should().BeNull();
+        }
+
+        [Fact]
+        public void GetIntegratedLoudness_WithLessThan400MsOfAudio_Should_ReturnNull()
+        {
+            const int sampleRate = 48000;
+            var calculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate / 10, channels: 1, bitsPerSample: 16, sampleRate: sampleRate);
+
+            // 100ms -- under the 400ms needed to ever form a single gating block.
+            calculator.AddBlock(BuildSineWave(sampleRate, seconds: 0, channels: 1, bitsPerSample: 16, peakDbfs: -20, frequencyHz: 997, frameCountOverride: sampleRate / 10));
+
+            calculator.GetIntegratedLoudness().Should().BeNull();
+        }
+
+        [Fact]
+        public void GetIntegratedLoudness_WithPureSilence_Should_ReturnNegativeInfinity()
+        {
+            const int sampleRate = 48000;
+            var calculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate * 2, channels: 2, bitsPerSample: 16, sampleRate: sampleRate);
+
+            calculator.AddBlock(new int[sampleRate * 2 * 2]);
+
+            calculator.GetIntegratedLoudness().Should().Be(double.NegativeInfinity);
+        }
+
+        // The official ITU-R BS.1770-4 conformance test signal: a 997Hz sine wave at -23dBFS
+        // (peak amplitude) must measure -23.0 LUFS, within the standard's own stated tolerance.
+        // Confirmed against this exact target empirically before writing this test (a scratch
+        // console run against this same implementation), not assumed from the K-weighting filter
+        // coefficients alone -- see KWeightingFilter's own doc comment for where those coefficients
+        // were independently verified against the reference libebur128 source.
+        [Theory]
+        [InlineData(-23.0)]
+        [InlineData(-20.0)]
+        [InlineData(-40.0)]
+        public void GetIntegratedLoudness_WithReference997HzSineWave_Should_MatchItsOwnDbfsLevel(double peakDbfs)
+        {
+            const int sampleRate = 48000;
+            var calculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate * 2, channels: 2, bitsPerSample: 24, sampleRate: sampleRate);
+
+            calculator.AddBlock(BuildSineWave(sampleRate, seconds: 2, channels: 2, bitsPerSample: 24, peakDbfs, frequencyHz: 997));
+
+            var lufs = calculator.GetIntegratedLoudness();
+
+            lufs.Should().NotBeNull();
+            lufs!.Value.Should().BeApproximately(peakDbfs, 0.1);
+        }
+
+        [Fact]
+        public void GetIntegratedLoudness_Should_IgnoreATrailingQuietPassage_BelowTheRelativeGate()
+        {
+            const int sampleRate = 48000;
+            const int channels = 1;
+            const int bitsPerSample = 24;
+
+            var loudSeconds = BuildSineWave(sampleRate, seconds: 4, channels, bitsPerSample, peakDbfs: -20, frequencyHz: 997);
+            // -40dBFS is 20dB (well past the 10 LU relative gate) quieter than the loud passage,
+            // so it should be excluded from the integrated result almost entirely.
+            var quietSeconds = BuildSineWave(sampleRate, seconds: 4, channels, bitsPerSample, peakDbfs: -40, frequencyHz: 997);
+
+            var loudOnlyCalculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate * 4, channels, bitsPerSample, sampleRate: sampleRate);
+            loudOnlyCalculator.AddBlock(loudSeconds);
+            var loudOnlyLufs = loudOnlyCalculator.GetIntegratedLoudness();
+
+            var mixedCalculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate * 8, channels, bitsPerSample, sampleRate: sampleRate);
+            mixedCalculator.AddBlock(loudSeconds);
+            mixedCalculator.AddBlock(quietSeconds);
+            var mixedLufs = mixedCalculator.GetIntegratedLoudness();
+
+            mixedLufs.Should().NotBeNull();
+            mixedLufs!.Value.Should().BeApproximately(loudOnlyLufs!.Value, 0.2);
+        }
+
+        [Fact]
+        public void GetIntegratedLoudness_CalledTwice_Should_Return_TheSameValue()
+        {
+            const int sampleRate = 48000;
+            var calculator = new WaveformCalculator(totalSamplesPerChannel: sampleRate * 2, channels: 1, bitsPerSample: 16, sampleRate: sampleRate);
+            calculator.AddBlock(BuildSineWave(sampleRate, seconds: 2, channels: 1, bitsPerSample: 16, peakDbfs: -20, frequencyHz: 997));
+
+            var first = calculator.GetIntegratedLoudness();
+            var second = calculator.GetIntegratedLoudness();
+
+            second.Should().Be(first);
+        }
+
+        private static int[] BuildSineWave(int sampleRate, int seconds, int channels, int bitsPerSample, double peakDbfs, double frequencyHz, int? frameCountOverride = null)
+        {
+            var frameCount = frameCountOverride ?? sampleRate * seconds;
+            var maxAmplitude = 1 << (bitsPerSample - 1);
+            var amplitude = Math.Pow(10, peakDbfs / 20.0) * maxAmplitude;
+
+            var interleaved = new int[frameCount * channels];
+            for (var frame = 0; frame < frameCount; frame++)
+            {
+                var sample = (int)Math.Round(amplitude * Math.Sin(2 * Math.PI * frequencyHz * frame / sampleRate));
+                for (var c = 0; c < channels; c++)
+                {
+                    interleaved[(frame * channels) + c] = sample;
+                }
+            }
+
+            return interleaved;
+        }
     }
 }
