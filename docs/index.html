@@ -131,6 +131,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>Probe</code> surfaces an AIFF file's <code>'NAME'</code>/<code>'AUTH'</code>/<code>'(c) '</code> text chunks (and an embedded ID3v2 <code>'ID3 '</code> chunk, if present) as the same <code>ProbeResult.Tags</code> — and <code>AiffWriter.Create</code> can write the three native text chunks back out too.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#128266;</div>
+          <div class="feature-title">EBU R128 Loudness Measurement</div>
+          <p class="feature-desc"><code>Probe</code> surfaces real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) as <code>ProbeResult.IntegratedLoudness</code> — K-weighted, gated block averaging per the standard, not just a sample-level RMS. See <a href="Advanced-Features.html#loudness-measurement">Advanced Features</a>.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#127754;</div>
           <div class="feature-title">Stream-based Probe</div>
           <p class="feature-desc"><code>Probe(Stream, AudioFormat)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer. WAV, AIFF, AU, FLAC, AAC, WavPack, TTA and ALAC today, more formats landing incrementally.</p>

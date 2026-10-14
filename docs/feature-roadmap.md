@@ -140,16 +140,35 @@ per format, read tolerates more" asymmetry WAV's own ADPCM variants already esta
 
 ## 3. Loudness normalization (EBU R128)
 
-`WaveformCalculator.RmsLevel` already says explicitly it's "a rough loudness indicator, not an
-ITU-R BS.1770 perceptual loudness measurement" — real EBU R128/ITU-R BS.1770 loudness (the
-standard streaming/broadcast platforms actually target, e.g. "normalize to -14 LUFS") needs a
-K-weighting pre-filter (two cascaded biquads — reuses `BiquadTransform` directly, no new filter
-math needed) followed by a windowed mean-square measurement with the standard's own gating rules
-(absolute + relative gating to exclude silence/quiet passages from skewing the measurement). A new
-`LoudnessTransform`/`LoudnessMeter` alongside the existing `PeakNormalizationTransform` (which
-normalizes to a *peak* dBFS target, not a *perceptual loudness* one) — the two serve genuinely
-different normalization goals, matching real-world mastering/distribution tooling's own
-distinction between peak and loudness normalization.
+**Status: measurement done; normalization (the actual "Loudness*Transform*" half) not started.**
+`WaveformCalculator` gained an optional `sampleRate` constructor parameter that, when given, also
+measures real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) alongside the existing
+peak/RMS tracking, via `GetIntegratedLoudness()` -- surfaced as `ProbeResult.IntegratedLoudness`
+(nullable `double`; `null` if loudness wasn't requested or the audio is shorter than one 400ms
+gating block; can legitimately be `double.NegativeInfinity` for audio entirely below the
+standard's own -70 LUFS absolute silence gate, which is a real measurement, not a "couldn't
+measure" sentinel). Every `Probe`/`Probe(Stream, AudioFormat)` entry point in `NativeEncoder.cs`/
+`NativeEncoder.Stream.cs` now populates it.
+
+Correction to the original design sketch above: the K-weighting pre-filter does **not** reuse
+`Pcm.BiquadTransform` directly after all -- that type's RBJ-cookbook coefficient formula and the
+standard's own tan-prewarped bilinear-transform formula are two different (if related)
+parameterizations, and only the latter is verified to reproduce the standard's published 48kHz
+coefficient table. `Waveform.KWeightingFilter` implements the standard's own formula instead (as
+two cascaded Direct-Form-II-Transposed biquads, the same structural pattern `BiquadTransform`
+uses, just with different coefficients) -- see that type's own doc comment for exactly which
+public source (the reference `libebur128` implementation) the constants were verified against,
+not assumed from memory. Confirmed end-to-end against the standard's own published conformance
+test signal (a 997Hz sine wave at -23dBFS peak must measure -23.0 LUFS) before this was considered
+done, not just from the filter coefficients matching in isolation.
+
+Still open: the actual *normalization* half (a `LoudnessTransform` adjusting gain to hit a target
+LUFS, alongside the existing `PeakNormalizationTransform` which normalizes to a *peak* dBFS target
+instead -- the two serve genuinely different goals, matching real-world mastering/distribution
+tooling's own distinction between peak and loudness normalization). That's a two-pass transform
+(measure via a `LoudnessMeter`-shaped first pass, then apply a single computed gain in a second
+pass) that this item's own measurement half makes straightforward to build next, but wasn't
+attempted in this same change.
 
 ## 4. Encoder delay/padding metadata
 

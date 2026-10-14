@@ -136,7 +136,7 @@ namespace EggEncoder
         private static ProbeResult ProbeWav(string filePath)
         {
             using var wavReader = WavReader.Open(filePath);
-            var waveformCalculator = new WaveformCalculator(wavReader.TotalSamples, wavReader.Channels, wavReader.BitsPerSample);
+            var waveformCalculator = new WaveformCalculator(wavReader.TotalSamples, wavReader.Channels, wavReader.BitsPerSample, sampleRate: wavReader.SampleRate);
 
             var buffer = new int[FramesPerBlock * wavReader.Channels];
 
@@ -168,6 +168,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator.GetNormalizedWindows(),
                 PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator.GetIntegratedLoudness(),
                 Tags = wavReader.Tags
             };
         }
@@ -175,7 +176,7 @@ namespace EggEncoder
         private static ProbeResult ProbeAiff(string filePath)
         {
             using var aiffReader = AiffReader.Open(filePath);
-            var waveformCalculator = new WaveformCalculator(aiffReader.TotalSamples, aiffReader.Channels, aiffReader.BitsPerSample);
+            var waveformCalculator = new WaveformCalculator(aiffReader.TotalSamples, aiffReader.Channels, aiffReader.BitsPerSample, sampleRate: aiffReader.SampleRate);
 
             var buffer = new int[FramesPerBlock * aiffReader.Channels];
 
@@ -207,6 +208,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator.GetNormalizedWindows(),
                 PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator.GetIntegratedLoudness(),
                 Tags = aiffReader.Tags
             };
         }
@@ -214,7 +216,7 @@ namespace EggEncoder
         private static ProbeResult ProbeAu(string filePath)
         {
             using var auReader = AuReader.Open(filePath);
-            var waveformCalculator = new WaveformCalculator(auReader.TotalSamples, auReader.Channels, auReader.BitsPerSample);
+            var waveformCalculator = new WaveformCalculator(auReader.TotalSamples, auReader.Channels, auReader.BitsPerSample, sampleRate: auReader.SampleRate);
 
             var buffer = new int[FramesPerBlock * auReader.Channels];
 
@@ -245,7 +247,8 @@ namespace EggEncoder
                 TimeBase = auReader.SampleRate > 0 ? $"1/{auReader.SampleRate}" : null,
                 Waveform = waveformCalculator.GetNormalizedWindows(),
                 PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator.GetIntegratedLoudness()
             };
         }
 
@@ -255,7 +258,7 @@ namespace EggEncoder
 
             var streamInfo = FlacDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -280,6 +283,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
                 Tags = streamInfo.Tags
             };
         }
@@ -291,7 +295,7 @@ namespace EggEncoder
 
             Mp3Decoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -314,6 +318,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
                 Tags = mp3ProbeResult.Tags
             };
         }
@@ -324,7 +329,7 @@ namespace EggEncoder
 
             var streamInfo = AacDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -348,7 +353,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -358,7 +364,7 @@ namespace EggEncoder
 
             var streamInfo = AlacDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -382,7 +388,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -392,7 +399,7 @@ namespace EggEncoder
 
             var streamInfo = TtaDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -416,7 +423,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -426,7 +434,7 @@ namespace EggEncoder
 
             var streamInfo = OpusDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -451,6 +459,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
                 Tags = streamInfo.Tags
             };
         }
@@ -461,7 +470,7 @@ namespace EggEncoder
 
             var streamInfo = VorbisDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -486,6 +495,7 @@ namespace EggEncoder
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
                 Tags = streamInfo.Tags
             };
         }
@@ -496,7 +506,7 @@ namespace EggEncoder
 
             var streamInfo = WavPackDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -520,7 +530,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -530,7 +541,7 @@ namespace EggEncoder
 
             var streamInfo = WmaDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
             {
-                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                 waveformCalculator.AddBlock(block);
             });
 
@@ -554,7 +565,8 @@ namespace EggEncoder
                 TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -590,7 +602,8 @@ namespace EggEncoder
                 TimeBase = audio is not null && audio.SampleRate > 0 ? $"1/{audio.SampleRate}" : null,
                 Waveform = audio?.Waveform,
                 PeakAmplitude = audio?.PeakAmplitude,
-                RmsLevel = audio?.RmsLevel
+                RmsLevel = audio?.RmsLevel,
+                IntegratedLoudness = audio?.IntegratedLoudness
             };
         }
 
@@ -603,7 +616,7 @@ namespace EggEncoder
             {
                 streamInfo = MovDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
-                    waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                    waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                     waveformCalculator.AddBlock(block);
                 });
             }
@@ -623,7 +636,8 @@ namespace EggEncoder
                 TotalSamples = streamInfo.TotalSamples,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
             };
         }
 
@@ -642,6 +656,8 @@ namespace EggEncoder
             public double? PeakAmplitude { get; init; }
 
             public double? RmsLevel { get; init; }
+
+            public double? IntegratedLoudness { get; init; }
         }
 
         private static (string CodecName, string CodecLongName) DescribeWavCodec(int bitsPerSample, bool isFloatFormat, bool isImaAdpcm, bool isALaw, bool isMuLaw, bool isMsAdpcm, bool isYamahaAdpcm)

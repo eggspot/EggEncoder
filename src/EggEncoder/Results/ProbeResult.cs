@@ -54,6 +54,17 @@ namespace EggEncoder.Results
         public double? RmsLevel { get; init; }
 
         /// <summary>
+        /// Integrated loudness in LUFS, per ITU-R BS.1770-4 / EBU R128 -- the real perceptual
+        /// loudness measurement <see cref="RmsLevel"/>'s own doc comment says it is not. Null for
+        /// a file this probe couldn't decode audio from, or for audio shorter than the standard's
+        /// own minimum 400ms gating block. Can legitimately be <see cref="double.NegativeInfinity"/>
+        /// for audio that's entirely at or below the standard's -70 LUFS absolute silence gate --
+        /// that's a real measurement, not a sentinel for "couldn't measure" (which is what the
+        /// null case means instead).
+        /// </summary>
+        public double? IntegratedLoudness { get; init; }
+
+        /// <summary>
         /// Metadata tags, keyed by their raw format-native id exactly as the container stores them
         /// (e.g. "INAM" for WAV's own title chunk, "TIT2" for MP3's own ID3v2 title frame) -- not
         /// remapped to friendlier names, the same way <see cref="CodecName"/> exposes "pcm_s16le"
