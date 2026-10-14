@@ -43,8 +43,13 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
-        public void Probe_FileWithNoLameExtension_Should_Report_NullEncoderDelayAndPadding()
+        public void Probe_FileWithNoXingHeaderAtAll_Should_Report_NullEncoderDelayAndPadding()
         {
+            // no_xing.mp3 has no Xing/Info header at all, the broadest case that must yield
+            // null -- a Xing/Info header present but lacking the LAME-style extension specifically
+            // (a narrower, real case on its own) has no dedicated fixture in this directory to
+            // exercise distinctly, since every real fixture here happens to carry the full
+            // extension; TryReadLameTagDelayAndPadding's own length guard covers that case too.
             var result = Mp3Probe.Probe(Path.GetFullPath("Codecs/Mp3/no_xing.mp3"));
 
             result.EncoderDelaySamples.Should().BeNull();
