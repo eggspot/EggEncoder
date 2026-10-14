@@ -236,7 +236,10 @@ namespace EggEncoder.Codecs.Mp3
             return (baseLength, 0);
         }
 
-        private void WriteHeader(BitWriter writer, int padding)
+        // internal (not private) so BuildInfoTagFrame below can write a structurally valid frame
+        // header for its own dedicated Info-tag frame, reusing this exact bitrate/sample-rate/
+        // channel-mode encoding rather than duplicating it.
+        internal void WriteHeader(BitWriter writer, int padding)
         {
             writer.WriteBits(0x7FF, 11); // sync word
             writer.WriteBits(0b11, 2); // MPEG version 1
@@ -283,6 +286,102 @@ namespace EggEncoder.Codecs.Mp3
                     writer.WriteBits(0, 1); // count1table_select -- irrelevant, this baseline never uses the count1 region
                 }
             }
+        }
+
+        // The 9-byte "encoder short version string" this method's own Info-tag frame carries,
+        // identifying this project's own encoder -- deliberately NOT "LAME"/"Lavf"/"Lavc", the
+        // three exact strings FFmpeg's own libavformat/mp3dec.c gates its delay/padding parsing on
+        // (confirmed directly from that source): writing one of those would falsely claim to BE
+        // that tool. A real, accepted consequence is that FFmpeg's own demuxer won't itself honor
+        // this encoder's delay/padding fields for automatic gapless trimming; this project's own
+        // Mp3Probe reads them regardless of version string for exactly that reason. Null-terminated
+        // for safety even though a reader that already null-terminates its own fixed buffer first
+        // (as FFmpeg's own reader does) doesn't strictly need it.
+        private const string InfoTagVersionString = "EggEncdr\0";
+
+        // Builds the dedicated "Info" header frame every Mp3EncoderSession output now starts with:
+        // a structurally real, decodable MPEG frame (the same header shape WriteHeader above
+        // writes, zero side info, no padding bit) whose own payload is not real audio but the
+        // de-facto-standard "LAME tag" -- an Xing-style VBR-header extension real-world encoders
+        // (LAME itself, and FFmpeg's own Lavc/Lavf muxers) use to carry gapless-playback delay/
+        // padding metadata. The byte layout here was confirmed field-for-field against FFmpeg's own
+        // real libavformat/mp3dec.c source (its mp3_parse_info_tag function), and cross-checked
+        // against a real ffmpeg+libmp3lame-produced reference file's own raw bytes -- see
+        // THIRD-PARTY-NOTICES.md for the exact provenance and what was verified versus
+        // independently reimplemented. Called once with placeholder zero values when a session
+        // opens (reserving this frame's own exact, fixed byte length up front) and once more with
+        // the real values once Finish() knows them, patched in place over the placeholder -- the
+        // same provisional-header-then-patch shape FlacEncoderSession.Finish() already uses for
+        // STREAMINFO.
+        //
+        // Scoped deliberately to just the fields this feature needs (frame/byte count, for the
+        // standard's own realSamples = frames*spf - startPad - endPad identity to hold -- confirmed
+        // against the real reference file above -- and the delay/padding fields themselves): the
+        // TOC (Xing's own seek table) and VBR-quality flags are not set, since this encoder is
+        // CBR-only and gains nothing from either (CBR seeking is already exact without a TOC).
+        // ReplayGain, the "encoder" version-tag FFmpeg's own demuxer exports, and the Music/Info Tag
+        // CRC-16 fields this format also defines are written as zero/absent rather than guessed:
+        // FFmpeg's own decode-side code never gates the delay/padding fields on any of those
+        // (confirmed from source), so nothing this feature needs depends on them, and writing a
+        // value for a field this implementation hasn't actually verified would be dishonest.
+        internal byte[] BuildInfoTagFrame(int frameCount, int byteCount, int startPadSamples, int endPadSamples)
+        {
+            var frameLengthBytes = (144000 * _bitRateKbps) / _sampleRate;
+
+            var writer = new BitWriter();
+            WriteHeader(writer, padding: 0);
+            writer.WriteBits(0, _sideInfoBytes * 8);
+
+            foreach (var c in "Info")
+            {
+                writer.WriteBits(c, 8);
+            }
+
+            const uint flags = 0x01 | 0x02; // frame count present + byte count present
+            writer.WriteBits(flags, 32);
+            writer.WriteBits((uint)frameCount, 32);
+            writer.WriteBits((uint)byteCount, 32);
+
+            // Exactly 9 bytes, not "however long the string literal happens to be" -- every field
+            // after this one is at a fixed offset the real format (and this project's own
+            // Mp3Probe read side) assumes, so a wrong length here would silently shift and corrupt
+            // every field that follows, including the delay/padding this whole feature is for.
+            if (InfoTagVersionString.Length != 9)
+            {
+                throw new InvalidOperationException($"InfoTagVersionString must be exactly 9 characters, was {InfoTagVersionString.Length}");
+            }
+
+            foreach (var c in InfoTagVersionString)
+            {
+                writer.WriteBits(c, 8);
+            }
+
+            writer.WriteBits(0, 8); // Info Tag revision + VBR method
+            writer.WriteBits(0, 8); // lowpass filter value
+            writer.WriteBits(0, 32); // ReplayGain peak -- not computed, see this method's own doc comment
+            writer.WriteBits(0, 16); // Radio ReplayGain -- not computed
+            writer.WriteBits(0, 16); // Audiophile ReplayGain -- not computed
+            writer.WriteBits(0, 8); // encoding flags + ATH type
+            writer.WriteBits(0, 8); // ABR bitrate / minimal bitrate
+
+            var delays = ((uint)startPadSamples << 12) | ((uint)endPadSamples & 0xFFF);
+            writer.WriteBits(delays, 24);
+
+            writer.WriteBits(0, 8); // misc
+            writer.WriteBits(0, 8); // MP3 gain
+            writer.WriteBits(0, 16); // preset and surround info
+            writer.WriteBits((uint)byteCount, 32); // music length -- matches byte count, confirmed against the real reference file
+            writer.WriteBits(0, 16); // Music CRC -- not computed, see this method's own doc comment
+            writer.WriteBits(0, 16); // Info Tag CRC -- not computed, see this method's own doc comment
+
+            var writtenBytes = writer.BitPosition / 8;
+            var remainingBytes = frameLengthBytes - writtenBytes;
+            if (remainingBytes > 0)
+            {
+                writer.WriteBits(0, remainingBytes * 8);
+            }
+
+            return writer.ToArray();
         }
 
         private static double[] BuildSineWindow(int size)

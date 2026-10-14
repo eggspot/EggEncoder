@@ -30,6 +30,33 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
+        public void Probe_CbrFileWithInfoHeader_Should_Report_EncoderDelayAndPadding_Matching_RealLameTag()
+        {
+            // cbr128.mp3 carries a real, ffmpeg (Lavc)-produced LAME-style tag extension --
+            // confirmed directly from this fixture's own raw bytes (frames=384, start_pad=576,
+            // end_pad=792; 384*1152 - 576 - 792 = 441000 samples = exactly 10.0s at 44100Hz), not
+            // assumed. 576 is LAME's/Lavc's own well-known default encoder delay.
+            var result = Mp3Probe.Probe(Path.GetFullPath("Codecs/Mp3/cbr128.mp3"));
+
+            result.EncoderDelaySamples.Should().Be(576);
+            result.EncoderPaddingSamples.Should().Be(792);
+        }
+
+        [Fact]
+        public void Probe_FileWithNoXingHeaderAtAll_Should_Report_NullEncoderDelayAndPadding()
+        {
+            // no_xing.mp3 has no Xing/Info header at all, the broadest case that must yield
+            // null -- a Xing/Info header present but lacking the LAME-style extension specifically
+            // (a narrower, real case on its own) has no dedicated fixture in this directory to
+            // exercise distinctly, since every real fixture here happens to carry the full
+            // extension; TryReadLameTagDelayAndPadding's own length guard covers that case too.
+            var result = Mp3Probe.Probe(Path.GetFullPath("Codecs/Mp3/no_xing.mp3"));
+
+            result.EncoderDelaySamples.Should().BeNull();
+            result.EncoderPaddingSamples.Should().BeNull();
+        }
+
+        [Fact]
         public void Probe_CbrFileWithNoVbrHeader_Should_FallBackTo_FileSizeEstimate()
         {
             var result = Mp3Probe.Probe(Path.GetFullPath("Codecs/Mp3/no_xing.mp3"));
