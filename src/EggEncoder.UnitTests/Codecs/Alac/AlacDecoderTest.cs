@@ -1,10 +1,100 @@
 using EggEncoder.Codecs.Alac;
+using EggEncoder.Codecs.Wav;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Alac
 {
     public class AlacDecoderTest
     {
+        // -------- Stream-based Decode --------
+
+        [Fact]
+        public void Decode_Stream_Should_Round_Trip_Same_As_Path_Based_Decode()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var cafPath = Path.Combine(tempDirectory, "dest.caf");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                AlacEncoder.Encode(wavPath, cafPath);
+
+                var pathSamples = new List<int>();
+                var pathStreamInfo = AlacDecoder.Decode(cafPath, (block, _, _, _, _) => pathSamples.AddRange(block.ToArray()));
+
+                var bytes = File.ReadAllBytes(cafPath);
+                var streamSamples = new List<int>();
+                using var memoryStream = new MemoryStream(bytes);
+                var streamStreamInfo = AlacDecoder.Decode(memoryStream, (block, _, _, _, _) => streamSamples.AddRange(block.ToArray()));
+
+                streamStreamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+                streamStreamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+                streamSamples.Should().Equal(pathSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_NotDispose_TheCallersStream()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var cafPath = Path.Combine(tempDirectory, "dest.caf");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                AlacEncoder.Encode(wavPath, cafPath);
+
+                var memoryStream = new MemoryStream(File.ReadAllBytes(cafPath));
+                AlacDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => AlacDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var cafPath = Path.Combine(tempDirectory, "dest.caf");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                AlacEncoder.Encode(wavPath, cafPath);
+
+                using var nonSeekable = new NonSeekableStream(File.ReadAllBytes(cafPath));
+                var act = () => AlacDecoder.Decode(nonSeekable, (_, _, _, _, _) => { });
+
+                act.Should().Throw<ArgumentException>().And.ParamName.Should().Be("stream");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         [Fact]
         public void Decode_UnsupportedChannelCountFile_Should_Throw()
         {

@@ -11,7 +11,26 @@ namespace EggEncoder.Codecs.Tta
         public static TtaStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             using var reader = TtaReader.Open(filePath);
+            return Decode(reader, filePath, onBlockDecoded);
+        }
 
+        /// <summary>
+        /// Decodes a TTA source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). No <see cref="Stream.CanSeek"/> requirement, matching <see cref="TtaReader.Open(Stream)"/>'s
+        /// own. Does NOT take ownership of <paramref name="stream"/> -- the caller opened it, so the
+        /// caller is responsible for disposing it; this call never closes it.
+        /// </summary>
+        public static TtaStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var reader = TtaReader.Open(stream);
+            return Decode(reader, "<stream>", onBlockDecoded);
+        }
+
+        private static TtaStreamInfo Decode(TtaReader reader, string filePath, AudioBlockDecodedCallback onBlockDecoded)
+        {
             if (reader.Channels is not 1 and not 2)
             {
                 throw new NotSupportedException($"'{filePath}' has {reader.Channels} channels; only mono and stereo TTA are supported");

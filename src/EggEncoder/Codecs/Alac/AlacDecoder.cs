@@ -23,6 +23,26 @@ namespace EggEncoder.Codecs.Alac
         public static AlacStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             using var reader = CafReader.Open(filePath);
+            return Decode(reader, filePath, onBlockDecoded);
+        }
+
+        /// <summary>
+        /// Decodes a CAF/ALAC source from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a source that isn't a local file (an HTTP response body, blob storage, an
+        /// in-memory buffer). Must be seekable: see <see cref="CafReader.Open(Stream)"/>'s own doc
+        /// comment. Does NOT take ownership of <paramref name="stream"/> -- the caller opened it,
+        /// so the caller is responsible for disposing it; this call never closes it.
+        /// </summary>
+        public static AlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var reader = CafReader.Open(stream);
+            return Decode(reader, "<stream>", onBlockDecoded);
+        }
+
+        private static AlacStreamInfo Decode(CafReader reader, string filePath, AudioBlockDecodedCallback onBlockDecoded)
+        {
             var config = reader.Config;
 
             if (config.NumChannels is not 1 and not 2)

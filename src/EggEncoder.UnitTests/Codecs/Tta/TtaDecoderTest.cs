@@ -1,10 +1,102 @@
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Wav;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Tta
 {
     public class TtaDecoderTest
     {
+        // -------- Stream-based Decode --------
+
+        [Fact]
+        public void Decode_Stream_Should_Round_Trip_Same_As_Path_Based_Decode()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var ttaPath = Path.Combine(tempDirectory, "dest.tta");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                TtaEncoder.Encode(wavPath, ttaPath);
+
+                var pathSamples = new List<int>();
+                var pathStreamInfo = TtaDecoder.Decode(ttaPath, (block, _, _, _, _) => pathSamples.AddRange(block.ToArray()));
+
+                var bytes = File.ReadAllBytes(ttaPath);
+                var streamSamples = new List<int>();
+                using var memoryStream = new MemoryStream(bytes);
+                var streamStreamInfo = TtaDecoder.Decode(memoryStream, (block, _, _, _, _) => streamSamples.AddRange(block.ToArray()));
+
+                streamStreamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+                streamStreamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+                streamSamples.Should().Equal(pathSamples);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_NotDispose_TheCallersStream()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var ttaPath = Path.Combine(tempDirectory, "dest.tta");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+                TtaEncoder.Encode(wavPath, ttaPath);
+
+                var memoryStream = new MemoryStream(File.ReadAllBytes(ttaPath));
+                TtaDecoder.Decode(memoryStream, (_, _, _, _, _) => { });
+
+                var act = () => memoryStream.Position;
+                act.Should().NotThrow();
+
+                memoryStream.Dispose();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_StillWork()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var wavPath = Path.Combine(tempDirectory, "source.wav");
+                var ttaPath = Path.Combine(tempDirectory, "dest.tta");
+                WavFileBuilder.Create(wavPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1000, -1000, 500]);
+                TtaEncoder.Encode(wavPath, ttaPath);
+
+                using var nonSeekable = new NonSeekableStream(File.ReadAllBytes(ttaPath));
+                var samples = new List<int>();
+                var streamInfo = TtaDecoder.Decode(nonSeekable, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                samples.Should().NotBeEmpty();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => TtaDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().Throw<ArgumentNullException>();
+        }
+
         [Fact]
         public void Decode_UnsupportedChannelCountFile_Should_Throw()
         {

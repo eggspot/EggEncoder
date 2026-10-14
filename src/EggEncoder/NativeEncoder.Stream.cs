@@ -1,7 +1,9 @@
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
+using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
 using EggEncoder.Results;
@@ -10,13 +12,16 @@ using EggEncoder.Waveform;
 namespace EggEncoder
 {
     // Stream-based Probe overload (docs/feature-roadmap.md item 1) -- covers every format whose own
-    // Reader/Decoder class has been adapted for a Stream source so far: WAV/AIFF/AU (FileStream-field-
-    // widened-to-Stream, each requiring CanSeek since their own header parse relies on
-    // Stream.Position/Seek throughout) and FLAC/AAC/WavPack (read-fully-into-byte[] up front, needing
-    // no seek support at all). Every other AudioFormat still throws NotSupportedException here --
-    // adding them is mechanical but each one needs its own careful review (container/codec-specific
-    // seekability requirements, and for Opus/Vorbis/MP3, checking whether the underlying Concentus/
-    // NVorbis/NLayer dependency's own Stream support imposes any constraint of its own) -- see the
+    // Reader/Decoder class has been adapted for a Stream source so far: WAV/AIFF/AU/CAF (FileStream-
+    // field-widened-to-Stream, each requiring CanSeek since their own header parse relies on
+    // Stream.Position/Seek throughout) and FLAC/AAC/WavPack/TTA (read-fully-into-byte[] -- or, for
+    // TTA specifically, read-strictly-sequentially -- needing no seek support at all). Every other
+    // AudioFormat still throws NotSupportedException here -- adding them is mechanical but each one
+    // needs its own careful review (container/codec-specific seekability requirements, and for
+    // Opus/Vorbis/MP3, checking whether the underlying Concentus/NVorbis/NLayer dependency's own
+    // Stream support imposes any constraint of its own -- NLayer's own MpegFile(Stream) constructor
+    // has no leaveOpen option, so MP3 specifically needs its disposal ownership semantics verified
+    // before it can honor this type's own "never dispose the caller's stream" contract) -- see the
     // roadmap item's own status note.
     public partial class NativeEncoder
     {
@@ -36,6 +41,8 @@ namespace EggEncoder
                     AudioFormat.Flac => ProbeFlacStream(source),
                     AudioFormat.Aac => ProbeAacStream(source),
                     AudioFormat.WavPack => ProbeWavPackStream(source),
+                    AudioFormat.Tta => ProbeTtaStream(source),
+                    AudioFormat.Caf => ProbeAlacStream(source),
                     _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
                 };
 
@@ -263,6 +270,74 @@ namespace EggEncoder
                 CodecType = "audio",
                 CodecName = "wavpack",
                 CodecLongName = "WavPack",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+            };
+        }
+
+        private static ProbeResult ProbeTtaStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = TtaDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "tta",
+                FormatLongName = "TTA (True Audio)",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "tta",
+                CodecLongName = "TTA (True Audio) lossless",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel()
+            };
+        }
+
+        private static ProbeResult ProbeAlacStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = AlacDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "caf",
+                FormatLongName = "CAF (Core Audio Format)",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "alac",
+                CodecLongName = "ALAC (Apple Lossless Audio Codec)",
                 SampleRate = streamInfo.SampleRate,
                 Channels = streamInfo.Channels,
                 ChannelLayout = DescribeChannelLayout(streamInfo.Channels),

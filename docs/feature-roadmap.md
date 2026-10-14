@@ -101,17 +101,27 @@ run synchronously against the given stream under the hood, same as how `Probe`/`
 already work today — genuine async I/O is its own, later roadmap item if real usage shows it's
 needed.
 
-**Status: six formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
-enum, the interface method, and real `Stream` support for both adaptation shapes this item's own
-design called out: `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/`AuReader.Open(Stream)` (the
-`FileStream`-field-widened-to-`Stream` shape, each requiring `CanSeek` since their own header
+**Status: eight formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
+enum, the interface method, and real `Stream` support across both adaptation shapes this item's
+own design called out, plus a third variant TTA's own reader turned out to need:
+`WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/`AuReader.Open(Stream)`/`CafReader.Open(Stream)`
+(the `FileStream`-field-widened-to-`Stream` shape, each requiring `CanSeek` since their own header
 parse relies on `Stream.Position`/`Seek` throughout -- confirmed per format, not assumed
-uniformly, the correction the original design sketch above already flagged) and
+uniformly, the correction the original design sketch above already flagged);
 `FlacDecoder.Decode(Stream, ...)`/`AacDecoder.Decode(Stream, ...)`/`WavPackDecoder.Decode(Stream, ...)`
-(the read-fully-into-`byte[]` shape, confirmed to need no seek at all for any of the three). Every
-other `AudioFormat` still throws `NotSupportedException` from `Probe(Stream, AudioFormat)` with a
-message pointing back here. `ConvertFile`/`CutFile`'s own `Stream` overloads (the
-destination-seekability half) are not started -- that's the only piece of this item still open.
+(the read-fully-into-`byte[]` shape, confirmed to need no seek at all); and
+`TtaReader.Open(Stream)`/`TtaDecoder.Decode(Stream, ...)` (a third variant discovered while
+implementing this: TTA's own header/seek-table/frame layout is read strictly *sequentially*, with
+zero `Seek`/`Position` calls anywhere in the reader -- so it needs no seek support either, without
+even needing the read-fully-into-memory buffering `FlacDecoder`/`AacDecoder`/`WavPackDecoder` use
+to get there). Every other `AudioFormat` still throws `NotSupportedException` from
+`Probe(Stream, AudioFormat)` with a message pointing back here. MP3 is next in line but
+specifically blocked on verifying NLayer's own `MpegFile(Stream)` constructor's disposal/ownership
+semantics (it has no `leaveOpen` option) before it can honor this type's own "never dispose the
+caller's stream" contract; Opus/Vorbis/WMA need their own per-dependency review (Concentus/
+NVorbis/`AsfContainerReader`) before being added. `ConvertFile`/`CutFile`'s own `Stream` overloads
+(the destination-seekability half) are not started -- that, plus the remaining five formats above,
+are what's still open for this item.
 
 ## 2. Format-native metadata tags
 

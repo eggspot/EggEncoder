@@ -607,6 +607,64 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_Stream_TtaFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var ttaPath = Path.Combine(tempDirectory, "source.tta");
+                using (var session = TtaEncoderSession.OpenSession(ttaPath, channels: 1, sampleRate: 8000, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                using var stream = new MemoryStream(File.ReadAllBytes(ttaPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Tta);
+
+                probeResult.FormatName.Should().Be("tta");
+                probeResult.CodecName.Should().Be("tta");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_CafFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var cafPath = Path.Combine(tempDirectory, "source.caf");
+                using (var session = AlacEncoderSession.OpenSession(cafPath, channels: 1, sampleRate: 8000, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples([0, 1000, -1000, 500], frameCount: 4);
+                    session.Finish();
+                }
+
+                using var stream = new MemoryStream(File.ReadAllBytes(cafPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Caf);
+
+                probeResult.FormatName.Should().Be("caf");
+                probeResult.CodecName.Should().Be("alac");
+                probeResult.SampleRate.Should().Be(8000);
+                probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public async Task Probe_OpusFile_Should_Return_Correct_Metadata_And_Waveform()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
