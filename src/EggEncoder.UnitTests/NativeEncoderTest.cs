@@ -1,5 +1,6 @@
 using System.Text;
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
@@ -418,6 +419,35 @@ namespace EggEncoder.UnitTests
                 probeResult.ChannelLayout.Should().Be("stereo");
                 probeResult.BitsPerSample.Should().Be(16);
                 probeResult.TimeBase.Should().Be("1/44100");
+                probeResult.Tags.Should().BeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_AiffFile_WithTags_Should_Surface_Tags()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var aiffPath = Path.Combine(tempDirectory, "tagged.aiff");
+                var tags = new Dictionary<string, string> { ["NAME"] = "Title", ["AUTH"] = "Artist" };
+
+                using (var writer = AiffWriter.Create(aiffPath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 2, tags))
+                {
+                    writer.WriteInterleavedSamples([0, 1000], 2);
+                }
+
+                var probeResult = await _nativeEncoder.Probe(aiffPath);
+
+                probeResult.Tags.Should().NotBeNull();
+                probeResult.Tags!.Should().ContainKey("NAME").WhoseValue.Should().Be("Title");
+                probeResult.Tags.Should().ContainKey("AUTH").WhoseValue.Should().Be("Artist");
             }
             finally
             {

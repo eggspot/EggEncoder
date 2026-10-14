@@ -126,6 +126,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>Probe</code> surfaces a FLAC, Opus, or Vorbis file's comment tags (title, artist, album, etc.) as the same <code>ProbeResult.Tags</code>, keyed by raw field name — and each format's own <code>Encoder.Encode</code>/<code>OpenSession</code> can write them back out too.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#127925;</div>
+          <div class="feature-title">AIFF Metadata Tags</div>
+          <p class="feature-desc"><code>Probe</code> surfaces an AIFF file's <code>'NAME'</code>/<code>'AUTH'</code>/<code>'(c) '</code> text chunks (and an embedded ID3v2 <code>'ID3 '</code> chunk, if present) as the same <code>ProbeResult.Tags</code> — and <code>AiffWriter.Create</code> can write the three native text chunks back out too.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#127754;</div>
           <div class="feature-title">Stream-based Probe</div>
           <p class="feature-desc"><code>Probe(Stream, AudioFormat)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer. WAV, AIFF, AU, FLAC, AAC and WavPack today, more formats landing incrementally.</p>

@@ -206,7 +206,8 @@ namespace EggEncoder
                 TimeBase = aiffReader.SampleRate > 0 ? $"1/{aiffReader.SampleRate}" : null,
                 Waveform = waveformCalculator.GetNormalizedWindows(),
                 PeakAmplitude = waveformCalculator.GetNormalizedPeakAmplitude(),
-                RmsLevel = waveformCalculator.GetNormalizedRmsLevel()
+                RmsLevel = waveformCalculator.GetNormalizedRmsLevel(),
+                Tags = aiffReader.Tags
             };
         }
 

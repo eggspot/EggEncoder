@@ -153,6 +153,19 @@ after STREAMINFO; Opus: the `OpusTags` packet; Vorbis: via `Comments.AddTag`). U
 is strict: a field name must be non-empty, printable ASCII, and must not contain `=`, or
 `OpenSession` throws `ArgumentException` before the destination file is even created.
 
+## AIFF Metadata Tags
+
+`Probe`-ing an AIFF file populates the same `ProbeResult.Tags` from two possible sources, merged
+into one dictionary: the simple `'NAME'`/`'AUTH'`/`'(c) '` text chunks (keyed by the raw chunk id,
+e.g. `"NAME"` for title) and an embedded `'ID3 '` chunk if present (keyed by the raw ID3v2 frame
+id, e.g. `"TIT2"`, via the shared `Codecs.Mp3.Id3v2Reader` -- some real-world AIFF files carry one
+even though it's not AIFF's own native convention). `null` if the file carries none of these.
+`AiffWriter.Create`/`Create(..., AiffSampleFormat, ...)` gained an optional `tags` parameter that
+writes AIFF's own native text chunks only (not an embedded ID3v2 chunk) -- the same "write one
+native mechanism, read tolerates more" asymmetry `WavReader`/`WavWriter`'s own ADPCM variants
+already have. Unlike read, write is strict: a tag id must be exactly `"NAME"`, `"AUTH"`, or
+`"(c) "` or `Create` throws `ArgumentException` before the destination file is even created.
+
 ## Constraints
 
 - EggEncoder is 100% pure managed C# with no native binaries at all — it's genuinely cross-platform, not just Windows x64

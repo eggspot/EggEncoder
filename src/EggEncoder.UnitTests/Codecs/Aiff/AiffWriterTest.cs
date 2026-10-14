@@ -574,5 +574,74 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
                 File.Delete(filePath);
             }
         }
+
+        [Fact]
+        public void Create_WithTags_Should_Produce_Aiff_Whose_TagsRoundTrip_Through_Reader()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                var tags = new Dictionary<string, string> { ["NAME"] = "Title", ["AUTH"] = "Artist", ["(c) "] = "2026" };
+
+                using (var writer = AiffWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 2, tags))
+                {
+                    writer.WriteInterleavedSamples([0, 1], 2);
+                }
+
+                using var reader = AiffReader.Open(filePath);
+                reader.TotalSamples.Should().Be(2);
+                reader.Tags.Should().NotBeNull();
+                reader.Tags!.Should().ContainKey("NAME").WhoseValue.Should().Be("Title");
+                reader.Tags.Should().ContainKey("AUTH").WhoseValue.Should().Be("Artist");
+                reader.Tags.Should().ContainKey("(c) ").WhoseValue.Should().Be("2026");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithoutTags_Should_Produce_Aiff_With_NullTags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = AiffWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1))
+                {
+                    writer.WriteInterleavedSamples([0], 1);
+                }
+
+                using var reader = AiffReader.Open(filePath);
+                reader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_WithInvalidTagId_Should_Throw_Before_Creating_DestFile()
+        {
+            var filePath = Path.GetTempFileName();
+            File.Delete(filePath); // GetTempFileName already creates it; the "before creating" assertion needs it genuinely absent first
+            try
+            {
+                var tags = new Dictionary<string, string> { ["BAD"] = "value" };
+
+                var act = () => AiffWriter.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1, tags);
+
+                act.Should().Throw<ArgumentException>();
+                File.Exists(filePath).Should().BeFalse();
+            }
+            finally
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+        }
     }
 }

@@ -44,22 +44,33 @@ namespace EggEncoder.Codecs.Aiff
         /// <param name="sampleRate">Sample rate in Hz.</param>
         /// <param name="bitsPerSample">Bit depth: 8, 16, 24, or 32.</param>
         /// <param name="totalFrames">Exact total frame count that will be written -- required up front since the FORM/COMM/SSND chunk size fields are written at creation time.</param>
-        public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames)
+        /// <param name="tags">
+        /// Optional metadata written as AIFF's own 'NAME'/'AUTH'/'(c) ' text chunks -- the exact
+        /// inverse of <see cref="AiffReader.Tags"/>'s own read side for those three chunks (the
+        /// embedded-'ID3 '-chunk half of that read side has no write counterpart here, the same
+        /// "read tolerates more than write produces" asymmetry <see cref="Wav.WavReader"/>/
+        /// <see cref="Wav.WavWriter"/> already have). Unlike read, write is strict: a tag id must
+        /// be exactly one of those three literal chunk ids or <see cref="Create(string, int, int, int, long, AiffSampleFormat, IReadOnlyDictionary{string, string}?)"/>
+        /// throws <see cref="ArgumentException"/> immediately.
+        /// </param>
+        public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, IReadOnlyDictionary<string, string>? tags = null)
         {
-            return Create(filePath, channels, sampleRate, bitsPerSample, totalFrames, AiffSampleFormat.Integer);
+            return Create(filePath, channels, sampleRate, bitsPerSample, totalFrames, AiffSampleFormat.Integer, tags);
         }
 
         /// <summary>
-        /// Same as <see cref="Create(string, int, int, int, long)"/>, but additionally selects the
-        /// on-disk sample representation (see <see cref="AiffSampleFormat"/>). <see cref="AiffSampleFormat.Integer"/>
-        /// (the default) is byte-for-byte what the four-parameter overload always wrote; every other
-        /// value writes a FORM/AIFC container instead, regardless of the destination file's own exact
-        /// extension spelling among <c>.aiff</c>/<c>.aif</c>/<c>.aifc</c>.
+        /// Same as <see cref="Create(string, int, int, int, long, IReadOnlyDictionary{string, string}?)"/>,
+        /// but additionally selects the on-disk sample representation (see <see cref="AiffSampleFormat"/>).
+        /// <see cref="AiffSampleFormat.Integer"/> (the default) is byte-for-byte what the
+        /// four-parameter overload always wrote; every other value writes a FORM/AIFC container
+        /// instead, regardless of the destination file's own exact extension spelling among
+        /// <c>.aiff</c>/<c>.aif</c>/<c>.aifc</c>.
         /// </summary>
-        public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat)
+        public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags = null)
         {
             var (compressionType, commSampleSize, bytesPerDiskSample) = DetermineAifcEncoding(filePath, sampleFormat, bitsPerSample);
             var isAifc = sampleFormat != AiffSampleFormat.Integer;
+            var tagChunkBytes = BuildTagChunks(tags);
 
             var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
             try
@@ -76,7 +87,7 @@ namespace EggEncoder.Codecs.Aiff
                 var commChunkSize = isAifc ? 24 : 18;
                 var ssndChunkSize = 8 + dataSize; // offset(4) + blockSize(4) + data (SSND's own declared size never includes its pad byte, matching WavWriter's "data" chunk convention)
                 var fverChunkTotalSize = isAifc ? 8 + 4 : 0; // unlike commChunkSize/ssndChunkSize (payload only), this already includes FVER's own 8-byte chunk header since there's no other usage site that needs it separated out
-                var formSize = 4 + fverChunkTotalSize + (8 + commChunkSize) + (8 + ssndChunkSize) + (needsPadByte ? 1 : 0); // 4 = "AIFF"/"AIFC" form type; FORM's size *does* include the pad byte, matching WavWriter's RIFF size
+                var formSize = 4 + fverChunkTotalSize + (8 + commChunkSize) + tagChunkBytes.Length + (8 + ssndChunkSize) + (needsPadByte ? 1 : 0); // 4 = "AIFF"/"AIFC" form type; FORM's size *does* include the pad byte, matching WavWriter's RIFF size
 
                 using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
 
@@ -107,6 +118,8 @@ namespace EggEncoder.Codecs.Aiff
                     writer.Write((byte)0); // pad byte (1 + 0 is odd)
                 }
 
+                writer.Write(tagChunkBytes);
+
                 writer.Write("SSND"u8);
                 WriteUInt32BigEndian(writer, (uint)ssndChunkSize);
                 WriteUInt32BigEndian(writer, 0); // offset
@@ -119,6 +132,45 @@ namespace EggEncoder.Codecs.Aiff
                 stream.Dispose();
                 throw;
             }
+        }
+
+        // Builds the concatenated bytes of every 'NAME'/'AUTH'/'(c) ' text chunk tags requests --
+        // each one's own bytes (id(4) + size(4) + UTF8 text + a pad byte if the text length is odd)
+        // are fully known from the tags alone, independent of any audio data, so (unlike WavWriter's
+        // own deferred-to-Finish() LIST chunk) these can be written immediately within Create(),
+        // between COMM and SSND. Returns an empty array for null/empty tags, so formSize/Create
+        // never need a separate "no tags" branch. Write is strict: an id must be exactly one of the
+        // three recognized chunk ids, the same strictness precedent WavWriter.Create's own tag
+        // validation set.
+        private static byte[] BuildTagChunks(IReadOnlyDictionary<string, string>? tags)
+        {
+            if (tags is null || tags.Count == 0)
+            {
+                return [];
+            }
+
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+
+            foreach (var (id, value) in tags)
+            {
+                if (id is not "NAME" and not "AUTH" and not "(c) ")
+                {
+                    throw new ArgumentException($"Invalid AIFF tag id '{id}' -- must be exactly one of \"NAME\", \"AUTH\", or \"(c) \"", nameof(tags));
+                }
+
+                var textBytes = Encoding.UTF8.GetBytes(value);
+                writer.Write(Encoding.ASCII.GetBytes(id));
+                WriteUInt32BigEndian(writer, (uint)textBytes.Length);
+                writer.Write(textBytes);
+                if (textBytes.Length % 2 != 0)
+                {
+                    writer.Write((byte)0);
+                }
+            }
+
+            writer.Flush();
+            return stream.ToArray();
         }
 
         // Maps (sampleFormat, bitsPerSample) to the compressionType FourCC to write, the COMM chunk's

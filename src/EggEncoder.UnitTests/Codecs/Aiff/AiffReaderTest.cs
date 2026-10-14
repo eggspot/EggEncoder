@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Mp3;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using System.Buffers.Binary;
@@ -7,6 +8,46 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
 {
     public class AiffReaderTest
     {
+        // -------- Tags --------
+
+        [Fact]
+        public void Open_WithEmbeddedId3v2Chunk_Should_Surface_Id3v2Tags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+
+                var id3Bytes = Id3v2Writer.BuildTagBytes(new Dictionary<string, string> { ["TIT2"] = "Title" });
+                AppendId3Chunk(filePath, id3Bytes);
+
+                using var reader = AiffReader.Open(filePath);
+                reader.Tags.Should().NotBeNull();
+                reader.Tags!.Should().ContainKey("TIT2").WhoseValue.Should().Be("Title");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithNoTagChunks_Should_Return_NullTags()
+        {
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 8000, bitsPerSample: 16, [0, 1]);
+
+                using var reader = AiffReader.Open(filePath);
+                reader.Tags.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         // -------- Stream-based Open --------
 
         [Fact]
@@ -1040,6 +1081,37 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             }
 
             return samples;
+        }
+
+        // Appends an 'ID3 ' chunk to an already-written, otherwise-complete AIFF file and bumps
+        // FORM's own size field to match -- AIFF chunk order within FORM has no semantic meaning
+        // (AiffReader's own chunk-walk identifies each chunk by id, not position), so appending
+        // after SSND is simplest: no existing chunk's own byte offsets need to shift.
+        private static void AppendId3Chunk(string filePath, byte[] id3Bytes)
+        {
+            var bytes = File.ReadAllBytes(filePath).ToList();
+            var formSize = BinaryPrimitives.ReadUInt32BigEndian(bytes.ToArray().AsSpan(4, 4));
+
+            bytes.AddRange("ID3 "u8.ToArray());
+            var sizeBytes = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(sizeBytes, (uint)id3Bytes.Length);
+            bytes.AddRange(sizeBytes);
+            bytes.AddRange(id3Bytes);
+            var addedLength = 8 + id3Bytes.Length;
+            if (id3Bytes.Length % 2 != 0)
+            {
+                bytes.Add(0);
+                addedLength++;
+            }
+
+            var newFormSizeBytes = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(newFormSizeBytes, formSize + (uint)addedLength);
+            for (var i = 0; i < 4; i++)
+            {
+                bytes[4 + i] = newFormSizeBytes[i];
+            }
+
+            File.WriteAllBytes(filePath, bytes.ToArray());
         }
 
         private static void OverwriteChannelCount(string filePath, short channels)

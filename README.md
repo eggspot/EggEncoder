@@ -25,6 +25,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - 🏷️ **WAV metadata tags** — `Probe` surfaces a WAV file's `'LIST'`/`'INFO'` chunk (title, artist, etc.) via `ProbeResult.Tags`, and `WavWriter.Create` can write them back out too
 - 🎙️ **MP3 ID3v2 tags** — `Probe` surfaces an MP3 file's ID3v2.3/2.4 text frames (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `Mp3Encoder.Encode`/`OpenSession` can write a fresh ID3v2.4 tag back out too
 - 💬 **FLAC/Opus/Vorbis comment tags** — `Probe` surfaces a FLAC/Opus/Vorbis file's Vorbis comments (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `Encode`/`OpenSession` can write them back out too
+- 🎼 **AIFF metadata tags** — `Probe` surfaces an AIFF file's `'NAME'`/`'AUTH'`/`'(c) '` text chunks (and an embedded ID3v2 `'ID3 '` chunk, if present) via the same `ProbeResult.Tags`, and `AiffWriter.Create` can write the three native text chunks back out too
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and a handful of pure managed codec NuGet packages (NLayer, Concentus, NVorbis, OggVorbisEncoder)
