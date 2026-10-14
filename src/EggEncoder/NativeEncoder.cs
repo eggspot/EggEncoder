@@ -314,6 +314,8 @@ namespace EggEncoder
                 BitsPerSample = 16,
                 BitRate = mp3ProbeResult.BitRate,
                 IsVariableBitRate = mp3ProbeResult.IsVariableBitRate,
+                EncoderDelaySamples = mp3ProbeResult.EncoderDelaySamples,
+                EncoderPaddingSamples = mp3ProbeResult.EncoderPaddingSamples,
                 TimeBase = mp3ProbeResult.SampleRate > 0 ? $"1/{mp3ProbeResult.SampleRate}" : null,
                 Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),

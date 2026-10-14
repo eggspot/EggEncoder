@@ -41,6 +41,18 @@ namespace EggEncoder.Codecs.Mp3
             {
                 var samplesPerFrame = frame.Header.IsMpeg1 ? 1152 : 576;
                 var totalSamples = (long)knownVbrInfo.FrameCount * samplesPerFrame;
+
+                // The de-facto "LAME tag" encoder-delay/padding extension, when present, describes
+                // exactly how much of that raw frame-count-derived sample total is lookahead/
+                // flush silence rather than real audio -- see Mp3FrameEncoder.BuildInfoTagFrame's
+                // own doc comment for the byte layout this was confirmed against. Subtracting it
+                // here makes the reported duration match the real encoded source exactly, not just
+                // approximately, for any file (ours or a real LAME/ffmpeg one) that carries it.
+                if (knownVbrInfo.StartPadSamples is { } startPad && knownVbrInfo.EndPadSamples is { } endPad)
+                {
+                    totalSamples = Math.Max(0, totalSamples - startPad - endPad);
+                }
+
                 durationSeconds = (double)totalSamples / frame.Header.SampleRate;
                 bitRateKbps = durationSeconds > 0 && knownVbrInfo.ByteCount > 0
                     ? (int)(knownVbrInfo.ByteCount * 8 / 1000 / durationSeconds)
@@ -62,6 +74,8 @@ namespace EggEncoder.Codecs.Mp3
                 Channels = frame.Header.Channels,
                 BitRate = bitRateKbps * 1000,
                 IsVariableBitRate = isVariableBitRate,
+                EncoderDelaySamples = vbrInfo?.StartPadSamples,
+                EncoderPaddingSamples = vbrInfo?.EndPadSamples,
                 Tags = tags
             };
         }
@@ -191,7 +205,50 @@ namespace EggEncoder.Codecs.Mp3
                 byteCount = BinaryPrimitives.ReadUInt32BigEndian(byteCountBuffer);
             }
 
-            return new VbrInfo(frameCount, byteCount, tag == "Xing");
+            if ((flags & 0x04) != 0)
+            {
+                stream.Position += 100; // TOC (seek table) -- not surfaced by this probe
+            }
+
+            if ((flags & 0x08) != 0)
+            {
+                stream.Position += 4; // VBR quality -- not surfaced by this probe
+            }
+
+            var (startPad, endPad) = TryReadLameTagDelayAndPadding(stream);
+
+            return new VbrInfo(frameCount, byteCount, tag == "Xing", startPad, endPad);
+        }
+
+        // The de-facto-standard "LAME tag" extension that immediately follows the base Xing/Info
+        // fields above (an encoder short version string, several fields this probe doesn't surface,
+        // and a 24-bit pair of 12-bit encoder-delay/padding sample counts) -- byte layout confirmed
+        // field-for-field against FFmpeg's own real libavformat/mp3dec.c source
+        // (mp3_parse_info_tag), not assumed, and cross-checked against a real ffmpeg+libmp3lame-
+        // produced reference file's own raw bytes (see THIRD-PARTY-NOTICES.md). Read unconditionally
+        // -- NOT gated on the version string being exactly "LAME"/"Lavf"/"Lavc" the way FFmpeg's own
+        // reader gates its delay/padding parsing, since this probe has no reason to trust one
+        // encoder's self-identification over another's for a field this project itself also writes
+        // under its own, different version string (see Mp3FrameEncoder.BuildInfoTagFrame). Degrades
+        // gracefully to (null, null) for a plain Xing/Info header with no LAME extension at all (a
+        // real, valid, and fairly common case on its own) rather than throwing, the same
+        // "decorative metadata, stop at the first thing that isn't there" convention this project's
+        // other tag readers (WavReader.Tags, Id3v2Reader) already established.
+        private const int LameExtensionBytesNeeded = 9 + 1 + 1 + 4 + 2 + 2 + 1 + 1 + 3;
+
+        private static (int? StartPad, int? EndPad) TryReadLameTagDelayAndPadding(Stream stream)
+        {
+            if (stream.Position + LameExtensionBytesNeeded > stream.Length)
+            {
+                return (null, null);
+            }
+
+            stream.Position += 9 + 1 + 1 + 4 + 2 + 2 + 1 + 1; // version, revision/vbr, lowpass, peak, radio_rg, audiophile_rg, enc_flags, abr
+            Span<byte> delaysBuffer = stackalloc byte[3];
+            stream.ReadExactly(delaysBuffer);
+            var delays = (delaysBuffer[0] << 16) | (delaysBuffer[1] << 8) | delaysBuffer[2];
+
+            return (delays >> 12, delays & 0xFFF);
         }
 
         private static bool HasId3V1Tag(Stream stream)
@@ -222,6 +279,34 @@ namespace EggEncoder.Codecs.Mp3
 
         public required bool IsVariableBitRate { get; init; }
 
+        /// <summary>
+        /// This file's own de-facto "LAME tag" encoder delay, in samples -- how much of the
+        /// frame-count-derived total (every frame, including the Xing/Info header frame itself,
+        /// contributing 1152 samples -- the standard LAME-tag convention this value, and
+        /// <see cref="DurationSeconds"/>, both assume) is leading lookahead/warm-up silence rather
+        /// than real audio. Null if the file carries no Xing/Info header, or one with no LAME-style
+        /// extension (a real, valid case on its own). See
+        /// <c>Mp3FrameEncoder.BuildInfoTagFrame</c>'s own doc comment for where this project's own
+        /// encoder sets it.
+        ///
+        /// A real decoder's own raw decode doesn't always match that "every frame contributes 1152
+        /// samples" assumption: some decoders (including this project's own <c>Mp3Decoder.Decode</c>,
+        /// via NLayer) recognize and silently exclude the Xing/Info header frame from their own
+        /// decoded output entirely, so skipping this many samples from the front of such a decoder's
+        /// own raw output skips 1152 samples too many. This property reports the tag's own standard
+        /// value, not an adjustment for any specific decoder's own behavior.
+        /// </summary>
+        public int? EncoderDelaySamples { get; init; }
+
+        /// <summary>
+        /// This file's own de-facto "LAME tag" encoder padding, in samples -- how much trailing
+        /// flush silence should be discarded from the end of a raw decode, under the same "every
+        /// frame contributes 1152 samples" convention <see cref="EncoderDelaySamples"/>'s own doc
+        /// comment explains (including its caveat about decoders that exclude the header frame from
+        /// their own raw output). Null under the same conditions <see cref="EncoderDelaySamples"/> is.
+        /// </summary>
+        public int? EncoderPaddingSamples { get; init; }
+
         public IReadOnlyDictionary<string, string>? Tags { get; init; }
     }
 
@@ -229,5 +314,5 @@ namespace EggEncoder.Codecs.Mp3
 
     internal readonly record struct Mp3Frame(Mp3FrameHeader Header, long Offset);
 
-    internal readonly record struct VbrInfo(uint FrameCount, uint ByteCount, bool IsVbr);
+    internal readonly record struct VbrInfo(uint FrameCount, uint ByteCount, bool IsVbr, int? StartPadSamples, int? EndPadSamples);
 }

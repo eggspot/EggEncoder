@@ -54,6 +54,8 @@ public class ProbeResult
     public double? PeakAmplitude { get; init; }     // loudest absolute sample across the whole decode, normalized to [0,1]
     public double? RmsLevel { get; init; }          // root-mean-square level across every sample, normalized to [0,1] (not ITU-R BS.1770 loudness)
     public double? IntegratedLoudness { get; init; } // real ITU-R BS.1770-4 / EBU R128 integrated loudness, in LUFS -- null if not measured or <400ms audio; can legitimately be double.NegativeInfinity for audio below the standard's -70 LUFS absolute silence gate (a real measurement, not a "couldn't measure" sentinel)
+    public int? EncoderDelaySamples { get; init; }   // MP3 only -- this file's own "LAME tag" encoder delay, in samples; null if absent. Already subtracted from DurationSeconds/DurationInSeconds above
+    public int? EncoderPaddingSamples { get; init; } // MP3 only -- same tag's own encoder padding, in samples; null under the same conditions EncoderDelaySamples is
     public IReadOnlyDictionary<string, string>? Tags { get; init; }  // WAV/AIFF 'LIST'/'INFO'/'NAME' etc. metadata (keyed by raw chunk id, e.g. "INAM"/"NAME"), MP3/embedded-AIFF ID3v2 text frames (keyed by raw frame id, e.g. "TIT2"), or FLAC/Opus/Vorbis comment fields (keyed by raw field name, e.g. "TITLE"); null for every other format, or a WAV/AIFF/MP3/FLAC/Opus/Vorbis with none
 }
 ```
@@ -411,6 +413,7 @@ public static class Mp3Decoder // backed by the NLayer managed decoder -- no nat
 public static class Mp3Encoder // pure managed, clean-room from ISO/IEC 11172-3 -- no native call
 {
     public const int DefaultBitRateKbps = 320;
+    public const int EncoderDelaySamples = 1680; // this encoder's own fixed structural lookahead, written into every output's own "LAME tag"
     public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a fresh ID3v2.4 tag (UTF-8 text) before the audio frames; see Id3v2Writer
 }
 
@@ -423,7 +426,9 @@ public sealed class Mp3EncoderSession : IDisposable
 public static class Mp3Probe // manual MPEG frame-header parsing (Xing/Info/VBRI-aware), no native call
 {
     public static Mp3ProbeResult Probe(string mp3FilePath);
-    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate, Tags
+    // Mp3ProbeResult: DurationInSeconds, SampleRate, Channels, BitRate, IsVariableBitRate,
+    // EncoderDelaySamples, EncoderPaddingSamples (the file's own "LAME tag" fields, null if absent;
+    // already subtracted from DurationInSeconds/DurationSeconds above), Tags
 }
 
 internal static class Id3v2Reader // read-only half of ID3v2 tag support -- text information frames only, see doc comment
@@ -437,7 +442,7 @@ internal static class Id3v2Writer // write-only half -- always emits a fresh ID3
 }
 ```
 
-MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quantizer`/`Mp3HuffmanTables`) is a clean-room, CBR-only baseline implemented directly from the published ISO/IEC 11172-3 standard text -- no LAME/GroovyCodecs/ffmpeg encoder source consulted. Long blocks only (no block switching), independent (non-joint) stereo, no bit-reservoir borrowing across frames, no psychoacoustic model (`global_gain` alone is searched to fit each granule's fixed bit budget) -- a correctness-first baseline, not yet LAME-equivalent compression quality. Verified decodable, at a real SNR well above this project's own acceptance floor, by both `Mp3Decoder` (NLayer) and ffmpeg's own independent decoder, used read-only as test oracles. `Id3v2Reader`/`Id3v2Writer` (`Id3v2Tag.cs`) add ID3v2 metadata tag support, read and write -- see the "MP3 ID3v2 Tags" section of `llms.txt` for the full scope (text information frames only; ID3v2.3/2.4 read, ID3v2.4-only write).
+MP3 encode (`Mp3FrameEncoder`/`Mp3PolyphaseFilter`/`Mp3AliasReduction`/`Mp3Quantizer`/`Mp3HuffmanTables`) is a clean-room, CBR-only baseline implemented directly from the published ISO/IEC 11172-3 standard text -- no LAME/GroovyCodecs/ffmpeg encoder source consulted. Long blocks only (no block switching), independent (non-joint) stereo, no bit-reservoir borrowing across frames, no psychoacoustic model (`global_gain` alone is searched to fit each granule's fixed bit budget) -- a correctness-first baseline, not yet LAME-equivalent compression quality. Verified decodable, at a real SNR well above this project's own acceptance floor, by both `Mp3Decoder` (NLayer) and ffmpeg's own independent decoder, used read-only as test oracles. `Id3v2Reader`/`Id3v2Writer` (`Id3v2Tag.cs`) add ID3v2 metadata tag support, read and write -- see the "MP3 ID3v2 Tags" section of `llms.txt` for the full scope (text information frames only; ID3v2.3/2.4 read, ID3v2.4-only write). Every encoded file also starts with a dedicated "Info" header frame (`Mp3FrameEncoder.BuildInfoTagFrame`) carrying the de-facto-standard "LAME tag" gapless-playback extension -- see the "MP3 Gapless-Playback Metadata" section of `llms.txt` for the full scope, and `docs/feature-roadmap.md` item 4 / `THIRD-PARTY-NOTICES.md` for the byte-layout/constant provenance.
 
 ### WAV — `EggEncoder.Codecs.Wav`
 

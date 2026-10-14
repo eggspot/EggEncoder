@@ -65,6 +65,39 @@ namespace EggEncoder.Results
         public double? IntegratedLoudness { get; init; }
 
         /// <summary>
+        /// This MP3 file's own de-facto "LAME tag" encoder delay, in samples -- how much of the
+        /// file's total frame count * 1152 samples/frame is leading lookahead/warm-up silence
+        /// rather than real audio, under the standard convention every LAME-tag-aware tool
+        /// (including this one) uses for that total: every frame, including the dedicated Xing/
+        /// Info header frame itself, contributes exactly 1152 samples. Null for every non-MP3
+        /// format, and for an MP3 with no Xing/Info header or one with no LAME-style extension (a
+        /// real, valid case on its own). <see cref="DurationSeconds"/> already accounts for this
+        /// value when present, for a more accurate MP3 duration.
+        ///
+        /// Applying this value directly to a raw decode's own sample count needs care: some real
+        /// decoders (including this project's own <c>Mp3Decoder.Decode</c>, via NLayer) recognize
+        /// and silently exclude the Xing/Info header frame from their own decoded output entirely,
+        /// rather than decoding it to 1152 samples of meaningless audio the way the standard
+        /// convention above assumes -- for such a decoder's own raw output, skipping
+        /// <see cref="EncoderDelaySamples"/> worth of samples from the front skips 1152 samples too
+        /// many. This field reports the tag's own standard value, not a decoder-specific adjustment
+        /// of it, the same way <c>Mp3ProbeResult</c>'s own fields never assume a specific decoder's
+        /// quirks.
+        /// </summary>
+        public int? EncoderDelaySamples { get; init; }
+
+        /// <summary>
+        /// This MP3 file's own de-facto "LAME tag" encoder padding, in samples -- how much trailing
+        /// flush silence a gapless-aware player should discard from the end of a raw decode, under
+        /// the same "every frame, including the header frame, contributes 1152 samples" convention
+        /// <see cref="EncoderDelaySamples"/>'s own doc comment explains (including its caveat about
+        /// decoders, such as this project's own <c>Mp3Decoder.Decode</c>, that exclude the header
+        /// frame from their own raw output). Null under the same conditions
+        /// <see cref="EncoderDelaySamples"/> is.
+        /// </summary>
+        public int? EncoderPaddingSamples { get; init; }
+
+        /// <summary>
         /// Metadata tags, keyed by their raw format-native id exactly as the container stores them
         /// (e.g. "INAM" for WAV's own title chunk, "TIT2" for MP3's own ID3v2 title frame) -- not
         /// remapped to friendlier names, the same way <see cref="CodecName"/> exposes "pcm_s16le"

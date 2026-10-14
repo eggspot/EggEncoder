@@ -94,6 +94,75 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             }
         }
 
+        // Regression test for a real bug found while implementing encoder-delay/padding metadata
+        // (docs/feature-roadmap.md item 4): Finish() originally only silence-padded the final
+        // partial frame up to a whole 1152 samples, with no additional flush frame -- but this
+        // encoder's own one-granule MDCT history (Mp3FrameEncoder's own _subbandHistory) needs one
+        // more full frame of "future" context before the true tail of real audio becomes
+        // recoverable from the bitstream at all. Without the fix, the last ~1 frame's worth of
+        // genuinely real input samples were silently and permanently lost -- confirmed by direct
+        // measurement (encoding a known signal, decoding it back, and finding the last real samples
+        // were simply absent from the decoded output), not just reasoned about. A whole-signal SNR
+        // or duration check alone doesn't reliably catch this (both can still look acceptable while
+        // only the last handful of samples are missing), so this checks the correlation of just the
+        // last 200 real samples directly.
+        [Fact]
+        public void Encode_Should_PreserveTheExactTailOfRealAudio_NotJustAnApproximateDuration()
+        {
+            const int sampleRate = 44100;
+            const int channels = 1;
+
+            // White noise, not a periodic tone: a pure tone's own correlation has near-tied peaks
+            // at every multiple of its period, so FindBestAlignmentOffset below can lock onto a
+            // periodically-aliased (wrong) offset that still looks like a strong match -- exactly
+            // the ambiguity this test must NOT have, since it's checking for exact alignment, not
+            // just "sounds similar." Aperiodic noise has one sharp, unambiguous correlation peak at
+            // the true offset.
+            var rng = new Random(2468);
+            var samples = new int[sampleRate * 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = (int)((rng.NextDouble() * 2.0 - 1.0) * 20000);
+            }
+
+            var filePath = Path.Combine(Path.GetTempPath(), $"mp3_tail_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                using (var session = Mp3Encoder.OpenSession(filePath, channels, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length / channels);
+                    session.Finish();
+                }
+
+                var (_, decodedSamples) = Mp3TestDecoder.DecodeAll(filePath);
+                var original = Deinterleave(samples, channels, 0);
+                var decoded = Deinterleave(decodedSamples, channels, 0);
+
+                var offset = FindBestAlignmentOffset(original, decoded, maxOffset: sampleRate / 2);
+
+                var compareLength = decoded.Count - offset;
+                compareLength.Should().BeGreaterThanOrEqualTo(original.Count,
+                    "the full tail of real audio must be recoverable from the bitstream, not just most of it");
+
+                const int tailWindow = 200;
+                var tailStart = original.Count - tailWindow;
+                double dot = 0, originalEnergy = 0, decodedEnergy = 0;
+                for (var i = tailStart; i < original.Count; i++)
+                {
+                    dot += decoded[offset + i] * original[i];
+                    originalEnergy += original[i] * original[i];
+                    decodedEnergy += decoded[offset + i] * decoded[offset + i];
+                }
+
+                var correlation = dot / Math.Sqrt(originalEnergy * decodedEnergy);
+                correlation.Should().BeGreaterThan(0.99, $"expected the last {tailWindow} real samples to correlate almost perfectly with the original, got {correlation}");
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
         private static void AssertRoundTripSnr(int[] originalInterleaved, int sampleRate, int channels, int bitRateKbps, double minimumSnrDb)
         {
             var filePath = Path.Combine(Path.GetTempPath(), $"mp3_snr_{Guid.NewGuid():N}.mp3");

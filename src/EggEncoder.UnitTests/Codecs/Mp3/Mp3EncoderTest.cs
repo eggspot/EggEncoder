@@ -113,6 +113,60 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
+        public void Encode_Should_Produce_Mp3_With_EncoderDelay_Matching_TheKnownConstant()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var mp3Path = Path.Combine(tempDirectory, "output.mp3");
+                Mp3Encoder.Encode(_wavFixturePath, mp3Path);
+
+                var probeResult = Mp3Probe.Probe(mp3Path);
+                probeResult.EncoderDelaySamples.Should().Be(Mp3Encoder.EncoderDelaySamples);
+                probeResult.EncoderPaddingSamples.Should().NotBeNull();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Theory]
+        [InlineData(1152 * 38)] // an exact multiple of one frame -- no natural partial-frame pad needed
+        [InlineData((1152 * 38) + 37)] // not a multiple -- exercises the natural partial-frame pad path
+        public void OpenSession_Should_Produce_Mp3_WithDuration_MatchingTheExactRealSampleCount(int totalSamples)
+        {
+            const int sampleRate = 44100;
+            const int channels = 1;
+            var rng = new Random(42);
+            var samples = new int[totalSamples];
+            for (var i = 0; i < totalSamples; i++)
+            {
+                samples[i] = (int)((rng.NextDouble() * 2.0 - 1.0) * 20000);
+            }
+
+            var mp3Path = Path.Combine(Path.GetTempPath(), $"mp3_duration_{Guid.NewGuid():N}.mp3");
+
+            try
+            {
+                using (var session = Mp3Encoder.OpenSession(mp3Path, channels, sampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, totalSamples);
+                    session.Finish();
+                }
+
+                var probeResult = Mp3Probe.Probe(mp3Path);
+                probeResult.DurationSeconds.Should().BeApproximately((double)totalSamples / sampleRate, 1e-9);
+            }
+            finally
+            {
+                File.Delete(mp3Path);
+            }
+        }
+
+        [Fact]
         public void OpenSession_WithInvalidTagId_Should_Throw_Before_Creating_DestFile()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

@@ -29,7 +29,7 @@ starting sketch, not a locked design; revise it once real implementation experie
 | 1 | [Stream-based `IMediaEncoder` overloads](#1-stream-based-api-design-sketch) | High | Medium | none |
 | 2 | [Format-native metadata tags (ID3v2 for MP3, Vorbis comments for FLAC/Opus/Vorbis)](#2-format-native-metadata-tags) | High | Medium | none |
 | 3 | [True loudness normalization (EBU R128 / ITU-R BS.1770)](#3-loudness-normalization-ebu-r128) | Medium | Medium | none |
-| 4 | [Explicit encoder delay/padding metadata (gapless playback)](#4-encoder-delaypadding-metadata) | Medium | Low–Medium | none |
+| 4 | [Explicit encoder delay/padding metadata (gapless playback)](#4-encoder-delaypadding-metadata) — done for MP3, Vorbis still open | Medium | Low–Medium | none |
 | 5 | [`CancellationToken` support across `Probe`/`ConvertFile`/`CutFile`](#5-cancellationtoken-support) | Medium | Low | #1 (same call sites) |
 | 6 | [Multi-channel (&gt;2) support for the lossy codecs](#6-multi-channel-2-support) | Low–Medium | High | none |
 | 7 | [Cue points / chapter markers](#7-cue-points--chapter-markers) | Low | Medium | none |
@@ -172,16 +172,48 @@ attempted in this same change.
 
 ## 4. Encoder delay/padding metadata
 
-Opus has an explicit `pre_skip` field for this; Vorbis and this project's own MP3/encoder-side
-codecs don't, so today a caller has to find the true sample-accurate alignment empirically via
-cross-correlation (`VorbisEncoderSessionTest`'s own round-trip SNR helper does exactly this, and
-it's noted as a real gap for any caller who isn't just measuring SNR in a test). A real encoder
-delay/padding header (the MP3 ecosystem's own de facto standard: an LAME-style header comment
-encoding delay/padding sample counts in a dedicated Xing-adjacent frame, which `Mp3Probe` already
-partially understands per its own `IsVariableBitRate`/Xing-awareness) would let a real player trim
-exactly, not empirically. Likely the smallest-effort item on this list if scoped to "write the
-metadata," since computing the delay value itself is already deterministic from each encoder's own
-known, fixed lookahead.
+**Status: done for MP3.** Opus already has an explicit `pre_skip` field; Vorbis still has no
+equivalent (a caller has to find the true sample-accurate alignment empirically via
+cross-correlation, the same way `VorbisEncoderSessionTest`'s own round-trip SNR helper already
+does -- that gap is unchanged and still open). MP3 now writes and reads the MP3 ecosystem's own
+de facto standard: an Xing-style "Info" header frame carrying a LAME-style encoder-delay/padding
+extension. `Mp3Encoder.EncoderDelaySamples` (a fixed `1680`) and a per-file padding value
+`Mp3EncoderSession.Finish()` computes are written into every file this encoder produces;
+`Mp3Probe`/`ProbeResult` surface them back as `EncoderDelaySamples`/`EncoderPaddingSamples`
+(parsed from any LAME-tagged file, not just this project's own output) and `DurationSeconds`/
+`DurationInSeconds` already subtract them for a more accurate reported duration.
+
+The exact byte layout was confirmed directly against FFmpeg's own real
+`libavformat/mp3dec.c` source (with the owner's explicit sign-off to study it at arm's length,
+ideas/structure only, no code copied -- see `THIRD-PARTY-NOTICES.md`'s own clean-room entry for
+this feature), not assumed from memory; the `1680` constant and the padding formula were verified
+empirically (normalized cross-correlation against known test signals, cross-checked against both
+a real `ffmpeg` decode and a real `ffmpeg`+`libmp3lame`-produced reference file's own raw tag
+bytes) rather than derived from the byte layout alone -- a first attempt at the constant (528,
+treating only this encoder's own granule-history warm-up and forgetting the dedicated header
+frame's own 1152-sample contribution) was caught exactly this way, by the empirical check
+disagreeing with the arithmetic, before it shipped.
+
+This work also surfaced and fixed a real, independently-found bug, not something anticipated
+going in: `Mp3EncoderSession.Finish()` previously only silence-padded the final partial frame up
+to a whole 1152 samples, with no additional flush frame -- but this encoder's own one-granule
+MDCT history needs one more full frame of "future" context before the true tail of real audio
+becomes recoverable from the bitstream at all, so the last ~1 frame's worth of genuinely real
+input samples were silently and permanently lost on every encode, independent of this metadata
+feature. `Finish()` now always appends one more full frame of silence to flush that tail
+correctly; `Mp3EncoderSnrTest`'s new `Encode_Should_PreserveTheExactTailOfRealAudio_...` test
+checks this directly (the bug doesn't reliably show up in a whole-signal SNR or duration check
+alone).
+
+One real, deliberately accepted limitation: this encoder's own "EggEncdr" version string (not
+"LAME"/"Lavf"/"Lavc") means FFmpeg's own demuxer -- whose delay/padding parsing gates specifically
+on those three exact strings -- won't itself auto-trim a file this encoder writes, since writing
+one of those three strings would falsely claim to be that tool. This project's own `Mp3Probe`
+reads the fields regardless of version string for exactly that reason. Also not computed: the
+LAME tag's own Music/Info Tag CRC-16 fields (written as `0x0000`, honestly documented rather than
+guessed) -- confirming libmp3lame's own exact checksum convention would have needed reading LAME's
+own source, outside this change's sign-off (FFmpeg's own source only), and FFmpeg's own decode-side
+code never gates the delay/padding fields on either CRC anyway.
 
 ## 5. `CancellationToken` support
 

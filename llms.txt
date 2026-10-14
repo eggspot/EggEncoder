@@ -135,6 +135,28 @@ Unlike read, write is strict: a tag id must be exactly 4 ASCII characters starti
 (`TXXX` unsupported) or `OpenSession` throws `ArgumentException` before the destination file is
 even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
 
+## MP3 Gapless-Playback Metadata (Encoder Delay/Padding)
+
+Every MP3 `Mp3Encoder.Encode`/`OpenSession` writes now starts with a dedicated "Info" header frame
+carrying the MP3 ecosystem's own de-facto-standard "LAME tag" -- an Xing-style VBR-header
+extension (no official spec of its own) real-world encoders and players use for gapless-playback
+encoder-delay/padding metadata. `Mp3Encoder.EncoderDelaySamples` (a fixed `1680`, this encoder's
+own structural constant -- see its own doc comment) plus a per-file padding value are written in;
+`Mp3Probe`/`ProbeResult` surface them back as `EncoderDelaySamples`/`EncoderPaddingSamples`
+(parsed from any LAME-tagged file, not just this project's own -- unlike FFmpeg's own demuxer,
+which gates its own parsing on the encoder-identifying version string being exactly
+`"LAME"`/`"Lavf"`/`"Lavc"`, this project's own reader doesn't, since there's no reason to trust
+one encoder's self-identification over another's for a field this project also writes under its
+own, different version string). `DurationSeconds`/`DurationInSeconds` already subtract these
+values for a more accurate MP3 duration. Fixing this also surfaced and fixed a real,
+independently-found bug: the encoder previously only silence-padded the final partial frame to a
+whole 1152 samples with no additional flush frame, silently losing the last ~1 frame of genuinely
+real audio to this encoder's own one-granule MDCT lookahead -- `Finish()` now always appends one
+more full frame of silence to flush that tail correctly. See `docs/feature-roadmap.md` item 4 and
+`THIRD-PARTY-NOTICES.md`'s own LAME-tag clean-room entry for the exact provenance (byte layout
+confirmed against FFmpeg's real source; the delay constant and padding formula verified
+empirically, not assumed).
+
 ## FLAC/Opus/Vorbis Comment Tags
 
 `Probe`-ing a FLAC, Opus, or Vorbis file with comment tags populates the same `ProbeResult.Tags`,
