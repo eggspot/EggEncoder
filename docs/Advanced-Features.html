@@ -97,6 +97,18 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("TITLE", out var ti
     tags: new Dictionary&lt;string, string&gt; { ["TITLE"] = "Title", ["ARTIST"] = "Artist" });</code></pre>
       <p>Unlike the read side, write is strict: a field name must be non-empty, printable ASCII, and must not contain <code>=</code>, or <code>OpenSession</code> throws <code>ArgumentException</code> before the destination file is even created — for all three formats, even though Vorbis itself delegates the actual write to <code>OggVorbisEncoder</code>'s own <code>Comments.AddTag</code>, which validates nothing on its own.</p>
 
+      <h2>AIFF Metadata Tags</h2>
+      <p><code>Probe</code>-ing an AIFF file populates the same <code>ProbeResult.Tags</code> from two possible sources, merged into one dictionary: the simple <code>'NAME'</code>/<code>'AUTH'</code>/<code>'(c) '</code> text chunks (keyed by the raw chunk id, e.g. <code>"NAME"</code> for title) and an embedded <code>'ID3 '</code> chunk if present (keyed by the raw ID3v2 frame id, e.g. <code>"TIT2"</code> — some real-world AIFF files carry one even though it's not AIFF's own native convention):</p>
+      <pre><code class="language-csharp">var probeResult = await mediaEncoder.Probe("tagged.aiff");
+if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("NAME", out var title))
+{
+    Console.WriteLine($"Title: {title}");
+}</code></pre>
+      <p><code>Tags</code> is <code>null</code> if the file carries none of these chunks. <code>AiffWriter.Create</code> can write a tag back out too, via an optional <code>tags</code> parameter — writes AIFF's own native text chunks only, never an embedded ID3v2 chunk:</p>
+      <pre><code class="language-csharp">AiffWriter.Create("tagged.aiff", channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: frameCount,
+    tags: new Dictionary&lt;string, string&gt; { ["NAME"] = "Title", ["AUTH"] = "Artist" });</code></pre>
+      <p>Unlike the read side, write is strict: a tag id must be exactly <code>"NAME"</code>, <code>"AUTH"</code>, or <code>"(c) "</code> or <code>Create</code> throws <code>ArgumentException</code> before the destination file is even created.</p>
+
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
       <pre><code class="language-csharp">using var response = await httpClient.GetStreamAsync(audioUrl);

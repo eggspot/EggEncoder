@@ -115,17 +115,18 @@ destination-seekability half) are not started -- that's the only piece of this i
 
 ## 2. Format-native metadata tags
 
-WAV `'LIST'`/`'INFO'` tags are now read *and* written (`WavReader.Tags`/`ProbeResult.Tags`,
-`WavWriter.Create`'s own `tags` parameter). Every other format has its own, completely different
-metadata convention that this project currently touches nowhere: ID3v2 for MP3 (the near-universal
-tagging format for the format, layered on top of/around the MPEG frames rather than part of the
-bitstream itself), Vorbis comments for FLAC/Opus/Vorbis/OggVorbis (a simple vendor-string +
-key=value list, embedded in FLAC's own `VORBIS_COMMENT` metadata block or an Ogg `OpusTags`/
-Vorbis comment header packet), and AIFF's own `'LIST'`-equivalent (`ID3 `/`NAME`/`AUTH`/`(c) `
-chunks — a different convention from WAV's INFO sub-chunks despite both being chunk-based).
-Scoped as three separate, independent sub-items (one format family's convention at a time, same
-"pick by rank, no forced ordering between unrelated formats" precedent the codec rewrite plan
-itself established for FLAC vs. WavPack vs. MP3) rather than one combined item.
+**Status: done**, all four sub-items. WAV `'LIST'`/`'INFO'` tags are read *and* written
+(`WavReader.Tags`/`ProbeResult.Tags`, `WavWriter.Create`'s own `tags` parameter, PR #85). ID3v2 for
+MP3 is read *and* written (`Mp3Probe`/`Mp3Encoder`, PR #89, text information frames only). Vorbis
+comments for FLAC/Opus/Vorbis are read *and* written (`Codecs.VorbisCommentReader`/
+`VorbisCommentWriter`, shared by FLAC's own `VORBIS_COMMENT` metadata block and Opus's `OpusTags`
+packet; Vorbis itself delegates to NVorbis/OggVorbisEncoder's own container handling instead, PRs
+#90/#91). AIFF's own `'LIST'`-equivalent is read *and* written (`AiffReader.Tags`/
+`AiffWriter.Create`'s own `tags` parameter): read supports both the simple `'NAME'`/`'AUTH'`/
+`'(c) '` text chunks and an embedded `'ID3 '` chunk (reusing `Codecs.Mp3.Id3v2Reader`, since some
+real-world AIFF files carry one), while write only ever emits the three simple text chunks —
+AIFF's own native convention, not the embedded-ID3v2 one, the same "write one native mechanism
+per format, read tolerates more" asymmetry WAV's own ADPCM variants already established.
 
 ## 3. Loudness normalization (EBU R128)
 

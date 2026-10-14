@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Wav;
 
 namespace EggEncoder.Codecs.Aiff
@@ -55,6 +56,7 @@ namespace EggEncoder.Codecs.Aiff
         private readonly long _sampleDataLength;
         private readonly Compression _compression;
         private readonly int _bytesPerDiskSample;
+        private readonly IReadOnlyDictionary<string, string>? _tags;
 
         private long _bytesRead;
         private byte[] _rawBytes = [];
@@ -70,13 +72,14 @@ namespace EggEncoder.Codecs.Aiff
         private int _ima4PendingCount;
         private long _ima4FramesProduced;
 
-        private AiffReader(Stream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, Compression compression, int bytesPerDiskSample, bool leaveOpen)
+        private AiffReader(Stream stream, int channels, int sampleRate, int bitsPerSample, long totalSamples, long sampleDataStart, long sampleDataLength, Compression compression, int bytesPerDiskSample, bool leaveOpen, IReadOnlyDictionary<string, string>? tags)
         {
             _stream = stream;
             _leaveOpen = leaveOpen;
             _sampleDataLength = sampleDataLength;
             _compression = compression;
             _bytesPerDiskSample = bytesPerDiskSample;
+            _tags = tags;
 
             Channels = channels;
             SampleRate = sampleRate;
@@ -118,6 +121,16 @@ namespace EggEncoder.Codecs.Aiff
 
         /// <summary>True for AIFC's 'ima4' compressionType (QuickTime IMA4 ADPCM, decode only); false for everything else.</summary>
         public bool IsIma4 => _compression == Compression.Ima4;
+
+        /// <summary>
+        /// Metadata from this file's 'NAME'/'AUTH'/'(c) ' text chunks (keyed by the raw chunk id,
+        /// e.g. "NAME" for title) and/or an embedded 'ID3 ' chunk (keyed by the raw ID3v2 frame id,
+        /// e.g. "TIT2" for title -- see <see cref="Mp3.Id3v2Reader"/>'s own doc comment for that
+        /// format's exact scope), merged into one dictionary the same "keyed by raw id, not
+        /// remapped to friendlier names" convention <see cref="Wav.WavReader.Tags"/> already
+        /// established. <c>null</c> if the file carries none of these chunks.
+        /// </summary>
+        public IReadOnlyDictionary<string, string>? Tags => _tags;
 
         public static AiffReader Open(string filePath)
         {
@@ -174,6 +187,7 @@ namespace EggEncoder.Codecs.Aiff
                 long sampleDataLength = 0;
                 var ssndFound = false;
                 var compressionType = "NONE";
+                Dictionary<string, string>? tags = null;
 
                 while (stream.Position + 8 <= stream.Length)
                 {
@@ -211,6 +225,32 @@ namespace EggEncoder.Codecs.Aiff
                         sampleDataLength = chunkSize - 8 - offset;
                         ssndFound = true;
                     }
+                    // chunkSize <= int.MaxValue guards the (int) cast ReadBytes needs below --
+                    // metadata is decorative, so an implausibly large declared size (utterly
+                    // implausible for real text/ID3 metadata) just skips parsing that one chunk's
+                    // tag content entirely (the generic skip-to-next-chunk logic below still
+                    // advances past it correctly, using uint/long arithmetic that never needs the
+                    // cast) rather than risking the BCL's own ArgumentOutOfRangeException from a
+                    // negative-after-overflow ReadBytes count.
+                    else if (chunkId is "NAME" or "AUTH" or "(c) " && chunkSize <= int.MaxValue)
+                    {
+                        var textBytes = reader.ReadBytes((int)chunkSize);
+                        tags ??= [];
+                        tags[chunkId] = Encoding.UTF8.GetString(textBytes).TrimEnd('\0');
+                    }
+                    else if (chunkId == "ID3 " && chunkSize <= int.MaxValue)
+                    {
+                        var id3Bytes = reader.ReadBytes((int)chunkSize);
+                        using var id3Stream = new MemoryStream(id3Bytes);
+                        if (Id3v2Reader.ReadTags(id3Stream) is { } id3Tags)
+                        {
+                            tags ??= [];
+                            foreach (var (key, value) in id3Tags)
+                            {
+                                tags[key] = value;
+                            }
+                        }
+                    }
 
                     var paddedChunkSize = chunkSize + (chunkSize % 2);
                     stream.Position = chunkDataStart + paddedChunkSize;
@@ -245,7 +285,7 @@ namespace EggEncoder.Codecs.Aiff
                     ? totalSampleFrames.Value * Ima4Decoder.SamplesPerChannelSubBlock
                     : totalSampleFrames.Value;
 
-                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample, leaveOpen);
+                return new AiffReader(stream, channels.Value, sampleRate.Value, reportedBitsPerSample, trueTotalSamples, sampleDataStart, sampleDataLength, compression, bytesPerDiskSample, leaveOpen, tags);
             }
             catch (EndOfStreamException e)
             {
