@@ -12,14 +12,16 @@ namespace EggEncoder.Codecs.Alac
     // other format (e.g. raw LPCM, which CAF also commonly carries) is rejected rather than decoded.
     internal sealed class CafReader : IDisposable
     {
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly int[] _packetByteSizes;
 
         private int _nextPacketIndex;
 
-        private CafReader(FileStream stream, AlacSpecificConfig config, int[] packetByteSizes, long totalValidFrames, long dataChunkStart)
+        private CafReader(Stream stream, AlacSpecificConfig config, int[] packetByteSizes, long totalValidFrames, long dataChunkStart, bool leaveOpen)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _packetByteSizes = packetByteSizes;
 
             Config = config;
@@ -37,6 +39,32 @@ namespace EggEncoder.Codecs.Alac
         public static CafReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return OpenCore(stream, filePath, leaveOpen: false);
+        }
+
+        /// <summary>
+        /// Opens a CAF/ALAC source from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a source that isn't a local file (an HTTP response body, blob storage, an
+        /// in-memory buffer). Must be seekable: the chunk-walk header parse relies on
+        /// <see cref="Stream.Position"/>/<see cref="Stream.Seek"/> throughout, the same way the
+        /// path-based overload's own <see cref="FileStream"/> always is. Unlike the path-based
+        /// overload, this does NOT take ownership of <paramref name="stream"/> -- the caller opened
+        /// it, so the caller is responsible for disposing it; this type's own <see cref="Dispose"/>
+        /// leaves it open.
+        /// </summary>
+        public static CafReader Open(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanSeek)
+            {
+                throw new ArgumentException("CafReader requires a seekable stream -- its chunk-walk header parse relies on Stream.Position/Seek throughout", nameof(stream));
+            }
+
+            return OpenCore(stream, "<stream>", leaveOpen: true);
+        }
+
+        private static CafReader OpenCore(Stream stream, string filePath, bool leaveOpen)
+        {
             try
             {
                 using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
@@ -114,11 +142,15 @@ namespace EggEncoder.Codecs.Alac
                     throw new InvalidDataException($"'{filePath}' is missing a 'data' chunk");
                 }
 
-                return new CafReader(stream, config, packetByteSizes, totalValidFrames, dataChunkStart);
+                return new CafReader(stream, config, packetByteSizes, totalValidFrames, dataChunkStart, leaveOpen);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -144,7 +176,10 @@ namespace EggEncoder.Codecs.Alac
 
         public void Dispose()
         {
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
 
         private static string ParseDescChunk(BinaryReader reader, string filePath)

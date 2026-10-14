@@ -10,14 +10,16 @@ namespace EggEncoder.Codecs.Tta
     internal sealed class TtaReader : IDisposable
     {
         private const int HeaderSize = 18; // everything except the header's own trailing CRC32
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly int[] _frameByteSizes;
 
         private int _nextFrameIndex;
 
-        private TtaReader(FileStream stream, int channels, int bitsPerSample, int sampleRate, long totalSamples, int frameLength, int[] frameByteSizes)
+        private TtaReader(Stream stream, int channels, int bitsPerSample, int sampleRate, long totalSamples, int frameLength, int[] frameByteSizes, bool leaveOpen)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _frameByteSizes = frameByteSizes;
 
             Channels = channels;
@@ -42,6 +44,26 @@ namespace EggEncoder.Codecs.Tta
         public static TtaReader Open(string filePath)
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return OpenCore(stream, filePath, leaveOpen: false);
+        }
+
+        /// <summary>
+        /// Opens a TTA source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). No <see cref="Stream.CanSeek"/> requirement: unlike <see cref="Wav.WavReader"/>/
+        /// <see cref="Aiff.AiffReader"/>/<see cref="Au.AuReader"/>, TTA's own header/seek-table/frame
+        /// layout is read strictly sequentially, with no backward seek anywhere in this reader. Does
+        /// NOT take ownership of <paramref name="stream"/> -- the caller opened it, so the caller is
+        /// responsible for disposing it; this type's own <see cref="Dispose"/> leaves it open.
+        /// </summary>
+        public static TtaReader Open(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            return OpenCore(stream, "<stream>", leaveOpen: true);
+        }
+
+        private static TtaReader OpenCore(Stream stream, string filePath, bool leaveOpen)
+        {
             try
             {
                 using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
@@ -100,11 +122,15 @@ namespace EggEncoder.Codecs.Tta
                 var totalFrames = (int)totalFramesLong;
                 var frameByteSizes = ReadSeekTable(reader, filePath, totalFrames);
 
-                return new TtaReader(stream, channels, bitsPerSample, sampleRate, totalSamples, frameLength, frameByteSizes);
+                return new TtaReader(stream, channels, bitsPerSample, sampleRate, totalSamples, frameLength, frameByteSizes, leaveOpen);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -145,7 +171,10 @@ namespace EggEncoder.Codecs.Tta
 
         public void Dispose()
         {
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
 
         private static int[] ReadSeekTable(BinaryReader reader, string filePath, int totalFrames)

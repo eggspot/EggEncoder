@@ -22,7 +22,7 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
-    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Flac/Aac/WavPack implemented so far -- see docs/feature-roadmap.md item 1
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta implemented so far -- see docs/feature-roadmap.md item 1
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }
@@ -559,6 +559,7 @@ Sun/NeXT AU (magic `.snd`, mime `audio/basic`) -- no chunk structure at all: one
 public static class AlacDecoder
 {
     public static AlacStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static AlacStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // requires stream.CanSeek -- chunk-walk header parse relies on Position/Seek; does NOT dispose stream
 }
 
 public static class AlacEncoder
@@ -581,6 +582,7 @@ Apple Lossless, in a CAF container (`.caf`). Mono and stereo, 16-bit or 24-bit i
 public static class TtaDecoder
 {
     public static TtaStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static TtaStreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- TTA's own header/seek-table/frame layout is read strictly sequentially; does NOT dispose stream
 }
 
 public static class TtaEncoder
