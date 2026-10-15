@@ -13,13 +13,13 @@ namespace EggEncoder
     /// </summary>
     public interface IPcmTransformEncoder
     {
-        /// <summary>Same as <see cref="IMediaEncoder.ConvertFile"/>, but runs <paramref name="pipeline"/> over every decoded block first.</summary>
+        /// <summary>Same as <see cref="IMediaEncoder.ConvertFile(string, string)"/>, but runs <paramref name="pipeline"/> over every decoded block first.</summary>
         Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline);
 
         /// <summary>Same as <see cref="ConvertFile(string, string, PcmTransformPipeline)"/>, but additionally selects the on-disk sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>); ignored for every other destination format.</summary>
         Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat);
 
-        /// <summary>Same as <see cref="IMediaEncoder.CutFile"/>, but applies an optional fade and transform pipeline to the retained range; returns whether a file was produced.</summary>
+        /// <summary>Same as <see cref="IMediaEncoder.CutFile(string, string, int, int)"/>, but applies an optional fade and transform pipeline to the retained range; returns whether a file was produced.</summary>
         Task<bool> CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options);
 
         /// <summary>Mixes two or more same-format sources, with per-input gain, into one destination file.</summary>

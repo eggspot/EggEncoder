@@ -55,7 +55,7 @@ var probeResult = await encoder.Probe("track.flac");
 
 ## Core Types
 
-- `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`, plus `Probe(Stream, AudioFormat)` for a source that isn't a local file -- WAV and FLAC so far, see "Stream-based Probe" below)
+- `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`, plus `Probe(Stream, AudioFormat)` for a source that isn't a local file -- WAV and FLAC so far, see "Stream-based Probe" below; each also has a `CancellationToken`-accepting overload, see "CancellationToken Support" below)
 - `NativeEncoder` — the sole implementation, 100% pure managed and cross-platform (every codec, including MP3, FLAC, and WavPack, decode and encode, is pure managed C# -- no native call anywhere in this project); also implements `IPcmTransformEncoder`
 - `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), normalized waveform peak windows, peak amplitude/RMS level/integrated loudness (`IntegratedLoudness`, LUFS), and metadata `Tags` (WAV/MP3/FLAC/Opus/Vorbis/AIFF)
 - `AudioCutter` — format-dispatching convert/cut/mix/concatenate, used internally by `NativeEncoder`
@@ -219,6 +219,19 @@ point populates it. Verified against the standard's own published conformance si
 997Hz/-23dBFS sine wave must measure -23.0 LUFS), not just against the filter coefficients in
 isolation. `Pcm.LoudnessTransform` normalizes to a target LUFS using this same measurement --
 see "PCM Transform Pipeline" above, and `docs/feature-roadmap.md` item 3 (now done, both halves).
+
+## CancellationToken Support
+
+`IMediaEncoder.ConvertFile`/`CutFile`/`Probe` (and the `Stream`-based `Probe` overloads) each have
+a `CancellationToken`-accepting overload, added as new overloads (default interface methods) --
+not new parameters on the existing methods, so no existing compiled caller breaks.
+`ConvertFile`/`CutFile` check the token once per decoded block, inside the single shared decode
+callback every codec's own decode loop already funnels through (`AudioCutter`), giving real,
+sub-second cancellation for every format without touching each codec's own individual decode loop.
+`Probe`'s own cancellation check is deliberately shallow by contrast -- once, up front, before any
+decode starts, not per-block -- since `Probe`'s internal structure has no single shared callback
+funnel the way `Convert`/`Cut` do. A cancelled call throws `OperationCanceledException` and
+produces no destination file; see `docs/feature-roadmap.md` item 5 (now done).
 
 ## Constraints
 

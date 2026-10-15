@@ -214,6 +214,91 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void Convert_WithAlreadyCancelledToken_Should_Throw_And_Produce_NoDestinationFile()
+        {
+            // The token is checked as the very first thing inside the per-block callback -- before
+            // the pipeline ever runs and before the destination sink is opened -- so an
+            // already-cancelled token must fail before any destination file exists at all, not
+            // leave a truncated/partial one behind.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+                using var cts = new CancellationTokenSource();
+                cts.Cancel();
+
+                var act = () => AudioCutter.Convert(_wavFixturePath, destPath, cts.Token);
+
+                act.Should().Throw<OperationCanceledException>();
+                File.Exists(destPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WithAlreadyCancelledToken_Should_Throw_And_Produce_NoDestinationFile()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+                using var cts = new CancellationTokenSource();
+                cts.Cancel();
+
+                var act = () => AudioCutter.Cut(_wavFixturePath, destPath, startInSeconds: 0, endInSeconds: 1, cts.Token);
+
+                act.Should().Throw<OperationCanceledException>();
+                File.Exists(destPath).Should().BeFalse();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Convert_WithNotCancelledToken_Should_Succeed_Normally()
+        {
+            // A real, non-cancelled CancellationToken must not change behavior at all -- the same
+            // "safe to pass CancellationToken.None/default" guarantee every other cancellable API
+            // in .NET gives.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Convert(_wavFixturePath, destPath, CancellationToken.None);
+
+                File.Exists(destPath).Should().BeTrue();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Cut_WithNotCancelledToken_Should_Succeed_Normally()
+        {
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                AudioCutter.Cut(_wavFixturePath, destPath, startInSeconds: 0, endInSeconds: 1, CancellationToken.None).Should().BeTrue();
+
+                File.Exists(destPath).Should().BeTrue();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Cut_WavToMp3_CrossFormat_Should_Produce_Trimmed_NonSilent_Output()
         {
             var tempDirectory = CreateTempDirectory();

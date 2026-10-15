@@ -22,9 +22,13 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
+    Task<ProbeResult> Probe(string filePath, CancellationToken cancellationToken); // shallow: checked once up front before any decode starts, NOT per-block -- Probe has no single shared decode callback the way ConvertFile/CutFile do, see docs/feature-roadmap.md item 5
     Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta/Opus/Vorbis/Wma implemented so far (Vorbis requires source.CanSeek; every other implemented format does not); Mp3/Mov still throw NotSupportedException -- see docs/feature-roadmap.md item 1
+    Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken); // same shallow check as above
     Task ConvertFile(string sourceFilePath, string destFilePath);
+    Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken); // checked once per decoded block, inside AudioCutter's own shared decode callback -- real, sub-second cancellation for every format
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
+    Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken); // same per-block check as ConvertFile above
 }
 
 public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vorbis, WavPack, Mov } // mirrors AudioCutter's own extension-dispatch switch 1:1
@@ -818,6 +822,7 @@ double? integratedLoudnessLufs = calculator.GetIntegratedLoudness();
 - **`LimiterTransform` is the one transform here that makes an exact guarantee rather than a statistical reduction** -- "never exceeds the ceiling" comes specifically from its final per-sample hard clip, not from the envelope-derived gain alone, which a nonzero attack time can let a transient briefly slip past.
 - **`EchoTransform` fixes `channels` at construction** (unlike the channel-count-agnostic compressor/gate/limiter family) and needs `EchoTransform.CanChangeFrameCount` to report `true` (which it does whenever `feedback > 0`) for a destination sink to be sized correctly through `AudioCutter.Convert`/`Cut` -- its `Flush()`-drained decaying tail means total output genuinely exceeds total input.
 - **`Mix` decodes every input fully into memory, concurrently** -- clip-length material, not multi-hour streams.
+- **`CancellationToken` cancellation granularity differs by method.** `ConvertFile`/`CutFile` check once per decoded block (real, sub-second cancellation for every format, via `AudioCutter`'s own single shared decode callback). `Probe` checks only once, up front, before any decode starts -- it has no equivalent single shared callback (20+ separate per-format probe methods, each with its own `waveformCalculator`), so deep per-block cancellation there is out of scope, not an oversight. A cancelled call throws `OperationCanceledException` and produces no destination file; see `docs/feature-roadmap.md` item 5.
 
 ## License
 

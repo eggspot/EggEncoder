@@ -65,6 +65,17 @@ namespace EggEncoder
             }
         }
 
+        /// <summary>
+        /// Checks <paramref name="cancellationToken"/> once, up front, before any decode work starts
+        /// -- see <see cref="IMediaEncoder.Probe(string, CancellationToken)"/>'s own doc comment for
+        /// why this scope boundary was chosen (docs/feature-roadmap.md item 5).
+        /// </summary>
+        public Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Probe(source, format);
+        }
+
         // A non-seekable source (e.g. a live HTTP response body) genuinely doesn't have a byte count
         // to report up front -- 0 is this type's own established "unknown" convention for a numeric
         // ProbeResult field (see DurationSeconds's own `sampleRate > 0 ? ... : 0` fallback above),
