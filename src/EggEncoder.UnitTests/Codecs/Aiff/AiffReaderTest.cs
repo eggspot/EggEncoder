@@ -454,6 +454,33 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
         }
 
         [Fact]
+        public void Open_TruncatedWithinCommChunksSampleRateField_Should_ThrowInvalidDataException_NotRawIndexOutOfRangeException()
+        {
+            // A different truncation point from Open_TruncatedWithinCommChunk_... above: that one
+            // cuts off before bitsPerSample is even read, so it never reaches the sample-rate field
+            // at all. This cuts partway through COMM's own 80-bit extended-float sample-rate field
+            // specifically (after channels/totalSampleFrames/bitsPerSample read cleanly). Before
+            // this fix, BinaryReader.ReadBytes(10) doesn't throw on a short read the way
+            // ReadInt16()/ReadUInt32() do -- it silently returns a shorter array -- so
+            // IeeeExtendedFloat.ToDouble's own unconditional tenBytes[0..9] indexing threw a raw
+            // IndexOutOfRangeException instead of this codebase's own established
+            // InvalidDataException.
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                AiffFileBuilder.Create(filePath, channels: 1, sampleRate: 44100, bitsPerSample: 16, [1, 2]);
+                TruncateWithinCommChunkSampleRateField(filePath);
+
+                var act = () => AiffReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_OddSizedChunk_Should_Skip_The_Pad_Byte()
         {
             // 1 channel, 8-bit, 3 frames = 3 (odd) data bytes -- AiffFileBuilder writes the IFF pad byte.
@@ -1140,6 +1167,18 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             const int formHeaderSize = 12;
             const int commChunkHeaderSize = 8;
             const int partialCommPayloadSize = 6;
+
+            var bytes = File.ReadAllBytes(filePath);
+            File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkHeaderSize + partialCommPayloadSize)]);
+        }
+
+        private static void TruncateWithinCommChunkSampleRateField(string filePath)
+        {
+            const int formHeaderSize = 12;
+            const int commChunkHeaderSize = 8;
+            // channels(2) + totalSampleFrames(4) + bitsPerSample(2) = 8 bytes read cleanly, then
+            // only 5 of the next 10 (the sample-rate field) survive the cut.
+            const int partialCommPayloadSize = 8 + 5;
 
             var bytes = File.ReadAllBytes(filePath);
             File.WriteAllBytes(filePath, bytes[..(formHeaderSize + commChunkHeaderSize + partialCommPayloadSize)]);
