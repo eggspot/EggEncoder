@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Vorbis;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using OggVorbisEncoder;
 
@@ -32,6 +33,69 @@ namespace EggEncoder.UnitTests.Codecs.Vorbis
 
                 streamInfo.Channels.Should().Be(2);
                 decoded.Should().NotBeEmpty();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_Should_Invoke_The_Callback_With_InterleavedSamples()
+        {
+            var samples = GenerateTone(seconds: 1, channels: 2);
+            var filePath = Path.Combine(Path.GetTempPath(), $"vorbis_decoder_stream_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                using (var session = VorbisEncoderSession.OpenSession(filePath, channels: 2, SampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length / 2);
+                    session.Finish();
+                }
+
+                using var stream = new MemoryStream(File.ReadAllBytes(filePath));
+                var decoded = new List<int>();
+                var streamInfo = VorbisDecoder.Decode(stream, (block, channels, sampleRate, bitsPerSample, _) =>
+                {
+                    channels.Should().Be(2);
+                    sampleRate.Should().Be(SampleRate);
+                    bitsPerSample.Should().Be(16);
+                    decoded.AddRange(block.ToArray());
+                });
+
+                streamInfo.Channels.Should().Be(2);
+                decoded.Should().NotBeEmpty();
+
+                // The Stream overload's own explicit "never dispose the caller's stream" contract --
+                // a disposed MemoryStream throws ObjectDisposedException from its own Position setter.
+                var act = () => stream.Position = 0;
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_ThrowNotSupportedException()
+        {
+            // NVorbis's own VorbisReader needs to seek internally -- confirmed directly here (not
+            // just documented in VorbisDecoder's own doc comment), via a real non-seekable stream.
+            var samples = GenerateTone(seconds: 1, channels: 1);
+            var filePath = Path.Combine(Path.GetTempPath(), $"vorbis_decoder_nonseekable_{Guid.NewGuid():N}.ogg");
+            try
+            {
+                using (var session = VorbisEncoderSession.OpenSession(filePath, channels: 1, SampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length);
+                    session.Finish();
+                }
+
+                using var nonSeekableStream = new NonSeekableStream(File.ReadAllBytes(filePath));
+                var act = () => VorbisDecoder.Decode(nonSeekableStream, (_, _, _, _, _) => { });
+
+                act.Should().ThrowExactly<NotSupportedException>();
             }
             finally
             {

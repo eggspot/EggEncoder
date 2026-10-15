@@ -9,6 +9,7 @@ using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
+using EggEncoder.Codecs.Wma;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
@@ -696,6 +697,150 @@ namespace EggEncoder.UnitTests
                 probeResult.CodecName.Should().Be("alac");
                 probeResult.SampleRate.Should().Be(8000);
                 probeResult.Channels.Should().Be(1);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_OpusFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                // Opus encoding here is fixed at 48kHz -- the shared _wavFixturePath is 44100Hz, so
+                // this needs its own source, the same way OpusEncoderTest's own fixtures do.
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 2, sampleRate: 48000, bitsPerSample: 16, [0, 0, 1000, -1000, -1000, 1000, 500, -500]);
+
+                var opusPath = Path.Combine(tempDirectory, "source.opus");
+                OpusEncoder.Encode(sourceWavPath, opusPath);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(opusPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Opus);
+
+                probeResult.FormatName.Should().Be("ogg");
+                probeResult.CodecName.Should().Be("opus");
+                probeResult.SampleRate.Should().Be(48000);
+                probeResult.Channels.Should().Be(2);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_OpusFormat_WithNonSeekableStream_Should_Still_Succeed()
+        {
+            // OpusDecoder's own Stream overload reads the whole source into memory up front, so
+            // (unlike Vorbis below) it genuinely needs no seek support at all -- confirmed directly
+            // rather than just documented, by actually probing a non-seekable wrapper stream.
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var sourceWavPath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourceWavPath, channels: 2, sampleRate: 48000, bitsPerSample: 16, [0, 0, 1000, -1000, -1000, 1000, 500, -500]);
+
+                var opusPath = Path.Combine(tempDirectory, "source.opus");
+                OpusEncoder.Encode(sourceWavPath, opusPath);
+
+                using var nonSeekableStream = new NonSeekableStream(File.ReadAllBytes(opusPath));
+                var probeResult = await _nativeEncoder.Probe(nonSeekableStream, AudioFormat.Opus);
+
+                probeResult.CodecName.Should().Be("opus");
+                probeResult.Channels.Should().Be(2);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_VorbisFormat_Should_Return_Correct_Metadata()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var oggPath = Path.Combine(tempDirectory, "source.ogg");
+                VorbisEncoder.Encode(_wavFixturePath, oggPath);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(oggPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Vorbis);
+
+                probeResult.FormatName.Should().Be("ogg");
+                probeResult.CodecName.Should().Be("vorbis");
+                probeResult.SampleRate.Should().Be(44100);
+                probeResult.Channels.Should().Be(2);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_VorbisFormat_WithNonSeekableStream_Should_Throw()
+        {
+            // Unlike every other Stream-based codec here, VorbisDecoder.Decode(Stream, ...) requires
+            // CanSeek -- NVorbis's own VorbisReader needs to seek internally (confirmed directly in
+            // VorbisDecoderTest, not just asserted here) -- so this is a real, documented constraint,
+            // not a gap: probing from a non-seekable source must fail clearly, not corrupt silently.
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var oggPath = Path.Combine(tempDirectory, "source.ogg");
+                VorbisEncoder.Encode(_wavFixturePath, oggPath);
+
+                using var nonSeekableStream = new NonSeekableStream(File.ReadAllBytes(oggPath));
+                var act = async () => await _nativeEncoder.Probe(nonSeekableStream, AudioFormat.Vorbis);
+
+                await act.Should().ThrowAsync<NotSupportedException>();
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WmaFormat_Should_Return_Correct_Metadata()
+        {
+            const int sampleRate = 44100;
+            const int channels = 1;
+
+            var samples = new short[sampleRate];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                samples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var wmaPath = Path.Combine(tempDirectory, "source.wma");
+                WmaEncoder.Encode(wmaPath, samples, channels, sampleRate);
+
+                using var stream = new MemoryStream(File.ReadAllBytes(wmaPath));
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Wma);
+
+                probeResult.FormatName.Should().Be("asf");
+                probeResult.CodecName.Should().Be("wmav2");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(channels);
             }
             finally
             {

@@ -101,27 +101,45 @@ run synchronously against the given stream under the hood, same as how `Probe`/`
 already work today — genuine async I/O is its own, later roadmap item if real usage shows it's
 needed.
 
-**Status: eight formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
-enum, the interface method, and real `Stream` support across both adaptation shapes this item's
-own design called out, plus a third variant TTA's own reader turned out to need:
+**Status: eleven formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
+enum, the interface method, and real `Stream` support across all four adaptation shapes this
+item's own design (and its own prior status notes) called out:
 `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/`AuReader.Open(Stream)`/`CafReader.Open(Stream)`
 (the `FileStream`-field-widened-to-`Stream` shape, each requiring `CanSeek` since their own header
 parse relies on `Stream.Position`/`Seek` throughout -- confirmed per format, not assumed
 uniformly, the correction the original design sketch above already flagged);
-`FlacDecoder.Decode(Stream, ...)`/`AacDecoder.Decode(Stream, ...)`/`WavPackDecoder.Decode(Stream, ...)`
-(the read-fully-into-`byte[]` shape, confirmed to need no seek at all); and
-`TtaReader.Open(Stream)`/`TtaDecoder.Decode(Stream, ...)` (a third variant discovered while
-implementing this: TTA's own header/seek-table/frame layout is read strictly *sequentially*, with
-zero `Seek`/`Position` calls anywhere in the reader -- so it needs no seek support either, without
-even needing the read-fully-into-memory buffering `FlacDecoder`/`AacDecoder`/`WavPackDecoder` use
-to get there). Every other `AudioFormat` still throws `NotSupportedException` from
-`Probe(Stream, AudioFormat)` with a message pointing back here. MP3 is next in line but
-specifically blocked on verifying NLayer's own `MpegFile(Stream)` constructor's disposal/ownership
-semantics (it has no `leaveOpen` option) before it can honor this type's own "never dispose the
-caller's stream" contract; Opus/Vorbis/WMA need their own per-dependency review (Concentus/
-NVorbis/`AsfContainerReader`) before being added. `ConvertFile`/`CutFile`'s own `Stream` overloads
-(the destination-seekability half) are not started -- that, plus the remaining five formats above,
-are what's still open for this item.
+`FlacDecoder.Decode(Stream, ...)`/`AacDecoder.Decode(Stream, ...)`/`WavPackDecoder.Decode(Stream, ...)`/
+`OpusDecoder.Decode(Stream, ...)`/`WmaDecoder.Decode(Stream, ...)` (the read-fully-into-`byte[]`
+shape, confirmed to need no seek at all -- `WmaDecoder`'s own `AsfContainerReader` already parsed
+from a plain `byte[]` with no `Stream`/`Seek` involved at all even before this overload existed,
+so its own `Read(string, ...)` just gained a sibling `Read(byte[], ...)` it now delegates to, and
+`OpusDecoder`'s own `OggPageReader` likewise has zero `Seek`/`Position` calls of its own -- the
+buffering is needed only because `ReadOpusHead`/`CountTotalSamples` each need their own
+independent pass from the start, not because any single pass needs to seek);
+`TtaReader.Open(Stream)`/`TtaDecoder.Decode(Stream, ...)` (read strictly *sequentially*, with zero
+`Seek`/`Position` calls anywhere in the reader -- so it needs no seek support either, without even
+needing the read-fully-into-memory buffering the previous shape uses to get there); and
+`VorbisDecoder.Decode(Stream, ...)` (the one format that *does* require `CanSeek` -- confirmed
+directly, not assumed, by feeding NVorbis's own `VorbisReader` a non-seekable stream and observing
+it throw `NotSupportedException` from its own internal seek call -- but needed no "widen"/"read
+fully into memory" adaptation of its own at all, since `VorbisReader`'s own constructor already
+supports not disposing the caller's stream directly via `closeOnDispose: false`, a first-class
+feature of that dependency this project didn't have to build itself).
+
+MP3 and MOV/MP4 are what's left. MP3 is still specifically blocked on NLayer's own
+`MpegFile(Stream)` constructor having no `leaveOpen` option, so it can't honor this type's own
+"never dispose the caller's stream" contract without further work (e.g. wrapping the stream in a
+disposal-suppressing adapter, or an upstream NLayer change) -- not attempted here, since that's a
+real design decision for the owner, not a mechanical port like the five formats this status note
+newly confirms. MOV/MP4 needs the same `CanSeek`-requiring `FileStream`-widened-to-`Stream`
+treatment WAV/AIFF/AU/CAF already got (`MovAtomReader`'s own atom-tree walk already uses
+`stream.Position` assignments extensively for random access, confirmed directly), it just hasn't
+been done yet -- a reasonable next slice of this same item, and more mechanical than MP3's own
+blocker, just untouched so far because it also means deciding how (or whether) `Probe`'s own
+video-track metadata interacts with a Stream source at all, not purely audio-codec work the way
+every other format in this item has been. `ConvertFile`/`CutFile`'s own `Stream` overloads (the
+destination-seekability half) are also still not started -- that, plus MP3/MOV above, are what's
+still open for this item.
 
 ## 2. Format-native metadata tags
 

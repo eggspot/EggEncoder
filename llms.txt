@@ -103,21 +103,28 @@ response body, blob storage, an in-memory buffer) -- the path-based `Probe(strin
 unaffected and unchanged. `AudioFormat` has to be given explicitly, since a `Stream` has no file
 extension to dispatch on the way the path-based overload uses. Does NOT take ownership of the
 stream -- the caller opened it, so the caller disposes it; `Probe` never closes it. Implemented so
-far for `AudioFormat.Wav`/`Aiff`/`Au`/`Caf`/`Flac`/`Aac`/`WavPack`/`Tta`; every other format throws
-`NotSupportedException` with a message pointing at `docs/feature-roadmap.md` item 1, where the
-remaining formats are tracked. `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/
-`AuReader.Open(Stream)`/`CafReader.Open(Stream)`/`FlacDecoder.Decode(Stream, callback)`/
-`AacDecoder.Decode(Stream, callback)`/`WavPackDecoder.Decode(Stream, callback)`/
-`TtaReader.Open(Stream)`/`TtaDecoder.Decode(Stream, callback)` are also available directly if
-driving a codec yourself rather than through `Probe` -- three adaptation shapes, split by whether
-the underlying reader needs to seek: `WavReader`/`AiffReader`/`AuReader`/`CafReader` all require
-`Stream.CanSeek` (each one's own header/chunk-walk parse relies on `Position`/`Seek`, or -- for
-AU's own unknown-data-size sentinel -- `Length`, throughout, same as each path-based overload's
-own `FileStream` always provides); `FlacDecoder`/`AacDecoder`/`WavPackDecoder` need no seek at all
-(each reads its whole source into memory before parsing anything); and `TtaReader` needs no seek
-either, for a different reason -- its own header/seek-table/frame layout is read strictly
-sequentially, with zero `Seek`/`Position` calls anywhere in it, so it doesn't even need the
-read-fully-into-memory buffering the other three use to get there.
+far for `AudioFormat.Wav`/`Aiff`/`Au`/`Caf`/`Flac`/`Aac`/`WavPack`/`Tta`/`Opus`/`Vorbis`/`Wma`;
+MP3 and MOV/MP4 still throw `NotSupportedException` with a message pointing at
+`docs/feature-roadmap.md` item 1, where the status of both is tracked. `WavReader.Open(Stream)`/
+`AiffReader.Open(Stream)`/`AuReader.Open(Stream)`/`CafReader.Open(Stream)`/
+`FlacDecoder.Decode(Stream, callback)`/`AacDecoder.Decode(Stream, callback)`/
+`WavPackDecoder.Decode(Stream, callback)`/`TtaReader.Open(Stream)`/
+`TtaDecoder.Decode(Stream, callback)`/`OpusDecoder.Decode(Stream, callback)`/
+`VorbisDecoder.Decode(Stream, callback)`/`WmaDecoder.Decode(Stream, callback)` are also available
+directly if driving a codec yourself rather than through `Probe` -- four adaptation shapes, split
+by whether the underlying reader needs to seek: `WavReader`/`AiffReader`/`AuReader`/`CafReader`
+all require `Stream.CanSeek` (each one's own header/chunk-walk parse relies on `Position`/`Seek`,
+or -- for AU's own unknown-data-size sentinel -- `Length`, throughout, same as each path-based
+overload's own `FileStream` always provides); `FlacDecoder`/`AacDecoder`/`WavPackDecoder`/
+`OpusDecoder`/`WmaDecoder` need no seek at all (each reads its whole source into memory before
+parsing anything -- `WmaDecoder`'s own `AsfContainerReader` already parsed from a plain `byte[]`
+with no `Stream`/`Seek` involved at all even before this overload existed); `TtaReader` needs no
+seek either, for a different reason -- its own header/seek-table/frame layout is read strictly
+sequentially, with zero `Seek`/`Position` calls anywhere in it; and `VorbisDecoder` is the one
+exception that DOES require `Stream.CanSeek` -- confirmed directly (not assumed), by feeding
+NVorbis's own `VorbisReader` a non-seekable stream and observing it throw -- but needs no "widen"/
+"read fully into memory" adaptation of its own at all, since `VorbisReader`'s own constructor
+already has first-class non-disposing support (`closeOnDispose: false`).
 
 ## MP3 ID3v2 Tags
 

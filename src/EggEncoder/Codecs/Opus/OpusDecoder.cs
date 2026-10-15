@@ -19,9 +19,36 @@ namespace EggEncoder.Codecs.Opus
             var totalSamples = CountTotalSamples(filePath, opusHead);
 
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return DecodeCore(stream, filePath, opusHead, totalSamples, onBlockDecoded);
+        }
+
+        // Stream-based overload (docs/feature-roadmap.md item 1): reads the whole source into
+        // memory up front, the same "read-fully-into-byte[]" shape FlacDecoder/AacDecoder/
+        // WavPackDecoder's own Stream overloads already use, rather than requiring source.CanSeek
+        // -- OggPageReader itself has no Seek/Position call anywhere (confirmed directly from its
+        // own source), so this isn't strictly required for a single pass, but ReadOpusHead/
+        // CountTotalSamples below each need their own independent pass from the very start of the
+        // stream, and re-reading an arbitrary caller-owned source three times over isn't possible
+        // without buffering it once first. Does not dispose source.
+        public static OpusStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            using var buffered = new MemoryStream();
+            source.CopyTo(buffered);
+            var bytes = buffered.ToArray();
+
+            const string displayName = "<stream>";
+            var opusHead = ReadOpusHead(new MemoryStream(bytes), displayName);
+            var totalSamples = CountTotalSamples(new MemoryStream(bytes), opusHead, displayName);
+
+            using var stream = new MemoryStream(bytes);
+            return DecodeCore(stream, displayName, opusHead, totalSamples, onBlockDecoded);
+        }
+
+        private static OpusStreamInfo DecodeCore(Stream stream, string displayName, OpusHead opusHead, long totalSamples, AudioBlockDecodedCallback onBlockDecoded)
+        {
             using var reader = new OggPageReader(stream);
 
-            var tags = SkipHeaderPackets(reader, filePath);
+            var tags = SkipHeaderPackets(reader, displayName);
 
             var decoder = OpusCodecFactory.CreateDecoder(SampleRate, opusHead.Channels);
             try
@@ -68,12 +95,17 @@ namespace EggEncoder.Codecs.Opus
         private static OpusHead ReadOpusHead(string filePath)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return ReadOpusHead(stream, filePath);
+        }
+
+        private static OpusHead ReadOpusHead(Stream stream, string displayName)
+        {
             using var reader = new OggPageReader(stream);
 
             var headPacket = reader.ReadNextPacket()
-                ?? throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: no packets found");
+                ?? throw new InvalidDataException($"'{displayName}' is not a valid OggOpus file: no packets found");
 
-            return OpusHeaderPackets.ParseOpusHead(headPacket, filePath);
+            return OpusHeaderPackets.ParseOpusHead(headPacket, displayName);
         }
 
         // A cheap first pass: OpusPacketInfo.GetNumSamples reads only a packet's 1-byte TOC
@@ -83,9 +115,14 @@ namespace EggEncoder.Codecs.Opus
         private static long CountTotalSamples(string filePath, OpusHead opusHead)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return CountTotalSamples(stream, opusHead, filePath);
+        }
+
+        private static long CountTotalSamples(Stream stream, OpusHead opusHead, string displayName)
+        {
             using var reader = new OggPageReader(stream);
 
-            _ = SkipHeaderPackets(reader, filePath);
+            _ = SkipHeaderPackets(reader, displayName);
 
             var totalSamplesIncludingPreSkip = 0L;
             while (reader.ReadNextPacket() is { } packet)
@@ -93,7 +130,7 @@ namespace EggEncoder.Codecs.Opus
                 var samples = OpusPacketInfo.GetNumSamples(packet, SampleRate);
                 if (samples < 0)
                 {
-                    throw new InvalidDataException($"'{filePath}' contains a malformed Opus packet");
+                    throw new InvalidDataException($"'{displayName}' contains a malformed Opus packet");
                 }
 
                 totalSamplesIncludingPreSkip += samples;
@@ -102,13 +139,13 @@ namespace EggEncoder.Codecs.Opus
             return Math.Max(0, totalSamplesIncludingPreSkip - opusHead.PreSkip);
         }
 
-        private static IReadOnlyDictionary<string, string> SkipHeaderPackets(OggPageReader reader, string filePath)
+        private static IReadOnlyDictionary<string, string> SkipHeaderPackets(OggPageReader reader, string displayName)
         {
-            _ = reader.ReadNextPacket() ?? throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: missing 'OpusHead' packet");
+            _ = reader.ReadNextPacket() ?? throw new InvalidDataException($"'{displayName}' is not a valid OggOpus file: missing 'OpusHead' packet");
 
             var tagsPacket = reader.ReadNextPacket()
-                ?? throw new InvalidDataException($"'{filePath}' is not a valid OggOpus file: missing 'OpusTags' packet");
-            return OpusHeaderPackets.ParseOpusTags(tagsPacket, filePath);
+                ?? throw new InvalidDataException($"'{displayName}' is not a valid OggOpus file: missing 'OpusTags' packet");
+            return OpusHeaderPackets.ParseOpusTags(tagsPacket, displayName);
         }
     }
 

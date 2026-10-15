@@ -3,9 +3,12 @@ using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
+using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
+using EggEncoder.Codecs.Vorbis;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
+using EggEncoder.Codecs.Wma;
 using EggEncoder.Results;
 using EggEncoder.Waveform;
 
@@ -14,15 +17,17 @@ namespace EggEncoder
     // Stream-based Probe overload (docs/feature-roadmap.md item 1) -- covers every format whose own
     // Reader/Decoder class has been adapted for a Stream source so far: WAV/AIFF/AU/CAF (FileStream-
     // field-widened-to-Stream, each requiring CanSeek since their own header parse relies on
-    // Stream.Position/Seek throughout) and FLAC/AAC/WavPack/TTA (read-fully-into-byte[] -- or, for
-    // TTA specifically, read-strictly-sequentially -- needing no seek support at all). Every other
-    // AudioFormat still throws NotSupportedException here -- adding them is mechanical but each one
-    // needs its own careful review (container/codec-specific seekability requirements, and for
-    // Opus/Vorbis/MP3, checking whether the underlying Concentus/NVorbis/NLayer dependency's own
-    // Stream support imposes any constraint of its own -- NLayer's own MpegFile(Stream) constructor
-    // has no leaveOpen option, so MP3 specifically needs its disposal ownership semantics verified
-    // before it can honor this type's own "never dispose the caller's stream" contract) -- see the
-    // roadmap item's own status note.
+    // Stream.Position/Seek throughout), FLAC/AAC/WavPack/Opus/WMA (read-fully-into-byte[], no seek
+    // needed), TTA (read-strictly-sequentially, also no seek needed), and Vorbis (requires CanSeek --
+    // confirmed directly, by feeding NVorbis's own VorbisReader a non-seekable stream and observing
+    // it throw; unlike every other codec here, NVorbis's own constructor already has first-class
+    // non-disposing support via closeOnDispose: false, so no "widen"/"read fully into memory"
+    // adaptation was needed for Vorbis at all). MP3 and MOV/MP4 still throw NotSupportedException
+    // here -- MP3 specifically because NLayer's own MpegFile(Stream) constructor has no leaveOpen
+    // option, so it can't honor this type's own "never dispose the caller's stream" contract without
+    // further work; MOV/MP4 because its own atom-tree walker needs the same CanSeek-requiring
+    // "FileStream-widened-to-Stream" treatment WAV/AIFF/AU/CAF already got, just not done yet -- see
+    // the roadmap item's own status note.
     public partial class NativeEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
@@ -43,6 +48,9 @@ namespace EggEncoder
                     AudioFormat.WavPack => ProbeWavPackStream(source),
                     AudioFormat.Tta => ProbeTtaStream(source),
                     AudioFormat.Caf => ProbeAlacStream(source),
+                    AudioFormat.Opus => ProbeOpusStream(source),
+                    AudioFormat.Vorbis => ProbeVorbisStream(source),
+                    AudioFormat.Wma => ProbeWmaStream(source),
                     _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
                 };
 
@@ -345,6 +353,113 @@ namespace EggEncoder
                 CodecType = "audio",
                 CodecName = "alac",
                 CodecLongName = "ALAC (Apple Lossless Audio Codec)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
+            };
+        }
+
+        private static ProbeResult ProbeOpusStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = OpusDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "ogg",
+                FormatLongName = "Ogg",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "opus",
+                CodecLongName = "Opus (Opus Interactive Audio Codec)",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
+                Tags = streamInfo.Tags
+            };
+        }
+
+        private static ProbeResult ProbeVorbisStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = VorbisDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "ogg",
+                FormatLongName = "Ogg",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "vorbis",
+                CodecLongName = "Vorbis",
+                SampleRate = streamInfo.SampleRate,
+                Channels = streamInfo.Channels,
+                ChannelLayout = DescribeChannelLayout(streamInfo.Channels),
+                BitsPerSample = streamInfo.BitsPerSample,
+                BitRate = streamInfo.SampleRate * streamInfo.BitsPerSample * streamInfo.Channels,
+                DurationInSamples = streamInfo.TotalSamples,
+                TimeBase = streamInfo.SampleRate > 0 ? $"1/{streamInfo.SampleRate}" : null,
+                Waveform = waveformCalculator?.GetNormalizedWindows() ?? [],
+                PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
+                RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
+                IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness(),
+                Tags = streamInfo.Tags
+            };
+        }
+
+        private static ProbeResult ProbeWmaStream(Stream source)
+        {
+            WaveformCalculator? waveformCalculator = null;
+
+            var streamInfo = WmaDecoder.Decode(source, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
+                waveformCalculator.AddBlock(block);
+            });
+
+            var durationSeconds = streamInfo.SampleRate > 0 ? (double)streamInfo.TotalSamples / streamInfo.SampleRate : 0;
+
+            return new ProbeResult
+            {
+                FormatName = "asf",
+                FormatLongName = "ASF (Advanced / Active Streaming Format)",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = durationSeconds,
+                CodecType = "audio",
+                CodecName = "wmav2",
+                CodecLongName = "Windows Media Audio 2",
                 SampleRate = streamInfo.SampleRate,
                 Channels = streamInfo.Channels,
                 ChannelLayout = DescribeChannelLayout(streamInfo.Channels),

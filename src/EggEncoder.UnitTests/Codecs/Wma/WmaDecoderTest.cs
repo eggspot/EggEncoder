@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Wma;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Wma
@@ -18,6 +19,25 @@ namespace EggEncoder.UnitTests.Codecs.Wma
             streamInfo.Channels.Should().Be(1);
             streamInfo.SampleRate.Should().Be(44100);
             samples.Should().NotBeEmpty();
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_Match_PathBasedDecode()
+        {
+            // AsfContainerReader already parses from a plain byte[] with no Stream/Seek involved
+            // at all (confirmed directly in AsfContainerReaderTest / this type's own doc comment),
+            // so WmaDecoder.Decode(Stream, ...) has no CanSeek requirement -- exercised here with
+            // an actual non-seekable wrapper, not just documented.
+            var pathBasedSamples = new List<int>();
+            var pathStreamInfo = WmaDecoder.Decode(_fixturePath, (block, _, _, _, _) => pathBasedSamples.AddRange(block.ToArray()));
+
+            using var nonSeekableStream = new NonSeekableStream(File.ReadAllBytes(_fixturePath));
+            var streamBasedSamples = new List<int>();
+            var streamInfo = WmaDecoder.Decode(nonSeekableStream, (block, _, _, _, _) => streamBasedSamples.AddRange(block.ToArray()));
+
+            streamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+            streamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+            streamBasedSamples.Should().Equal(pathBasedSamples, "the Stream and path overloads must decode the exact same file identically");
         }
 
         // KNOWN LIMITATION, TRACKED FAILURE (not yet root-caused): at zero offset this decoder's
