@@ -28,7 +28,7 @@ starting sketch, not a locked design; revise it once real implementation experie
 |---|---------|--------|--------|------------|
 | 1 | [Stream-based `IMediaEncoder` overloads](#1-stream-based-api-design-sketch) | High | Medium | none |
 | 2 | [Format-native metadata tags (ID3v2 for MP3, Vorbis comments for FLAC/Opus/Vorbis)](#2-format-native-metadata-tags) | High | Medium | none |
-| 3 | [True loudness normalization (EBU R128 / ITU-R BS.1770)](#3-loudness-normalization-ebu-r128) | Medium | Medium | none |
+| 3 | [True loudness normalization (EBU R128 / ITU-R BS.1770)](#3-loudness-normalization-ebu-r128) — done | Medium | Medium | none |
 | 4 | [Explicit encoder delay/padding metadata (gapless playback)](#4-encoder-delaypadding-metadata) — done for MP3, Vorbis still open | Medium | Low–Medium | none |
 | 5 | [`CancellationToken` support across `Probe`/`ConvertFile`/`CutFile`](#5-cancellationtoken-support) | Medium | Low | #1 (same call sites) |
 | 6 | [Multi-channel (&gt;2) support for the lossy codecs](#6-multi-channel-2-support) | Low–Medium | High | none |
@@ -158,7 +158,7 @@ per format, read tolerates more" asymmetry WAV's own ADPCM variants already esta
 
 ## 3. Loudness normalization (EBU R128)
 
-**Status: measurement done; normalization (the actual "Loudness*Transform*" half) not started.**
+**Status: done -- both measurement and normalization.**
 `WaveformCalculator` gained an optional `sampleRate` constructor parameter that, when given, also
 measures real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) alongside the existing
 peak/RMS tracking, via `GetIntegratedLoudness()` -- surfaced as `ProbeResult.IntegratedLoudness`
@@ -180,13 +180,21 @@ not assumed from memory. Confirmed end-to-end against the standard's own publish
 test signal (a 997Hz sine wave at -23dBFS peak must measure -23.0 LUFS) before this was considered
 done, not just from the filter coefficients matching in isolation.
 
-Still open: the actual *normalization* half (a `LoudnessTransform` adjusting gain to hit a target
-LUFS, alongside the existing `PeakNormalizationTransform` which normalizes to a *peak* dBFS target
-instead -- the two serve genuinely different goals, matching real-world mastering/distribution
-tooling's own distinction between peak and loudness normalization). That's a two-pass transform
-(measure via a `LoudnessMeter`-shaped first pass, then apply a single computed gain in a second
-pass) that this item's own measurement half makes straightforward to build next, but wasn't
-attempted in this same change.
+**Status: done -- normalization half also landed.** `Pcm.LoudnessTransform` (alongside the
+existing `PeakNormalizationTransform`, which normalizes to a *peak* dBFS target instead -- the two
+serve genuinely different goals, matching real-world mastering/distribution tooling's own
+distinction between peak and loudness normalization) adjusts gain to hit a target LUFS. It's a
+two-pass transform exactly as sketched above, but with one deliberate difference from
+`PeakNormalizationTransform`'s own shape: `Apply` has **no** single-pass self-measuring fallback
+at all. `PeakNormalizationTransform` can reasonably self-measure from whatever one decode block
+`Apply` is first given (an incomplete but still meaningful peak estimate); EBU R128's own gating
+algorithm cannot produce a meaningful number from one ~4096-frame block the same way, so
+`LoudnessTransform.MeasureLoudness` must be called first with a true whole-file measurement
+(`AudioCutter.MeasureIntegratedLoudness`, the loudness counterpart to this file's own existing
+`MeasurePeakAmplitude`) or `Apply` throws `InvalidOperationException` rather than silently
+normalizing against a wrong, block-local value. `null` or `double.NegativeInfinity` (EBU R128's
+own "measured, but entirely below the absolute silence gate" sentinel) both pass samples through
+unchanged, since no finite gain reaches a finite target from either starting point.
 
 ## 4. Encoder delay/padding metadata
 

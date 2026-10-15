@@ -145,6 +145,11 @@ public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vo
     // PeakNormalizationTransform.MeasurePeak(long, int) measurement.
     public static (long Peak, int BitsPerSample) MeasurePeakAmplitude(string sourceFilePath);
 
+    // Decodes sourceFilePath fully to measure its real ITU-R BS.1770-4/EBU R128 integrated
+    // loudness, for a true whole-file LoudnessTransform.MeasureLoudness(double?) measurement.
+    // Null if it couldn't be measured at all; can legitimately be double.NegativeInfinity.
+    public static double? MeasureIntegratedLoudness(string sourceFilePath);
+
     // Convenience float[] entry points -- see FloatSampleConverter below.
     public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
     public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan&lt;float&gt; interleavedSamples, int channels, int sampleRate);
@@ -229,6 +234,12 @@ public sealed class PeakNormalizationTransform : IPcmTransform
     public void MeasurePeak(int[] buffer, int frameCount, int channels, int bitsPerSample);
     public void MeasurePeak(long maxAbsoluteSample, int bitsPerSample);
     public static long ComputeMaxAbsoluteSample(ReadOnlySpan&lt;int&gt; samples);
+}
+
+public sealed class LoudnessTransform : IPcmTransform
+{
+    public LoudnessTransform(double targetLufs); // e.g. -14.0; must be finite
+    public void MeasureLoudness(double? measuredLufs); // MUST be called before Apply -- no self-measuring fallback
 }
 
 public sealed class CompressorTransform : IPcmTransform
@@ -318,6 +329,7 @@ public sealed class FirFilterTransform : IPcmTransform
 }</code></pre>
       <p><strong>Parametric EQ and FIR filtering:</strong> <code>BiquadTransform</code> is a single second-order IIR section using the RBJ Audio EQ Cookbook formulas (Direct Form II Transposed, two state values per channel) — low/high pass, band pass, notch, all pass, peaking EQ, and low/high shelf. <code>ButterworthTransform</code> cascades <code>order / 2</code> <code>BiquadTransform</code> stages sharing one cutoff frequency, each at a different Q from the standard Butterworth pole-pair formula, for a steeper, maximally-flat-passband low/high pass than a single biquad section can provide. <code>FirFilterTransform</code> is general FIR convolution (parity with ffmpeg's <code>afir</code>/general-FIR filters) — it applies a caller-supplied tap array identically to every channel and keeps each channel's last <code>taps.Length - 1</code> samples as history across blocks; accepting arbitrary taps is the whole point, so there's no filter-design helper bundled with it.</p>
       <p><strong>Peak normalization used naively:</strong> if <code>PeakNormalizationTransform</code> is dropped into a pipeline and never pre-measured, <code>MeasurePeak</code> self-measures from whatever buffer <code>Apply</code> first sees — which, driven by <code>AudioCutter.Convert</code>/<code>Cut</code>, is one ~4096-frame decode block, not the whole file. For a true whole-file measurement, call <code>AudioCutter.MeasurePeakAmplitude</code> first and pass its result to <code>MeasurePeak(long, int)</code> before handing the transform to a pipeline.</p>
+      <p><strong>Loudness normalization has no such fallback at all:</strong> <code>LoudnessTransform.Apply</code> throws <code>InvalidOperationException</code> unless <code>MeasureLoudness</code> was already called — EBU R128's own gating algorithm cannot produce a meaningful number from one decode block the way a peak scan can, so there is no "measure from whatever block <code>Apply</code> sees first" shortcut to fall back to. Call <code>AudioCutter.MeasureIntegratedLoudness</code> first and pass its result to <code>MeasureLoudness</code> before handing the transform to a pipeline; a <code>null</code> or <code>double.NegativeInfinity</code> measurement both pass samples through unchanged.</p>
       <p><strong>Resampler quality:</strong> <code>ResamplingTransform</code> is a Kaiser-windowed-sinc polyphase filter — anti-aliasing on downsample, band-limited reconstruction on upsample — not linear interpolation. Output is held back until its full tap window (<code>FilterHalfWidth</code> source frames on each side) has genuinely arrived, rather than falling back to duplicating an edge sample at a block boundary; see <code>Flush</code> above for draining the last few frames this implies at the true end of a stream. Total output frame count is a cumulative <code>floor(sourceFramesSoFar * ratio)</code>, so it's exact regardless of how a stream is split into blocks — no per-block rounding drift to account for. The continuous fractional source position is quantized to 1024 polyphase-table phases (a small, standard timing error for this class of resampler); downsampling scales the filter's half-width up by <code>1/cutoff</code> to preserve anti-aliasing quality as the ratio shrinks, capped at 256 taps so an extreme ratio (e.g. 100:1) can't grow the table or per-sample cost unboundedly.</p>
 
       <h3>CutOptions &amp; MixInput — <code>EggEncoder.Codecs</code></h3>

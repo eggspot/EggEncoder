@@ -1,6 +1,6 @@
 # 🥚 EggEncoder
 
-> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, entirely pure C#, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
+> **Audio encoding/decoding toolkit for .NET** — 12 formats (AAC, AIFF incl. AIFC, ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV incl. IMA/MS/Yamaha ADPCM and G.711, WavPack, WMA) plus MOV/MP4 probing, entirely pure C#, built-in waveform generation, and an opt-in PCM transform pipeline (resampling, gain/peak/loudness normalization, dynamics compression, noise gating, peak limiting, echo/delay, pan/balance, channel remix, fades, parametric EQ, FIR filtering, mixing), all behind one `IMediaEncoder` interface.
 
 Sponsored by [eggspot.app](https://eggspot.app)
 
@@ -27,7 +27,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - 🎙️ **MP3 ID3v2 tags** — `Probe` surfaces an MP3 file's ID3v2.3/2.4 text frames (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `Mp3Encoder.Encode`/`OpenSession` can write a fresh ID3v2.4 tag back out too
 - 💬 **FLAC/Opus/Vorbis comment tags** — `Probe` surfaces a FLAC/Opus/Vorbis file's Vorbis comments (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `Encode`/`OpenSession` can write them back out too
 - 🎼 **AIFF metadata tags** — `Probe` surfaces an AIFF file's `'NAME'`/`'AUTH'`/`'(c) '` text chunks (and an embedded ID3v2 `'ID3 '` chunk, if present) via the same `ProbeResult.Tags`, and `AiffWriter.Create` can write the three native text chunks back out too
-- 🔊 **EBU R128 loudness measurement** — `Probe` surfaces real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) via `ProbeResult.IntegratedLoudness`, alongside the existing peak/RMS level — a perceptual measurement, not just a sample-level average
+- 🔊 **EBU R128 loudness measurement and normalization** — `Probe` surfaces real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) via `ProbeResult.IntegratedLoudness`, alongside the existing peak/RMS level — a perceptual measurement, not just a sample-level average; `LoudnessTransform` (two-pass, like `PeakNormalizationTransform`) normalizes to a target LUFS
 - 🎚️ **MP3 gapless-playback metadata** — every MP3 `Mp3Encoder`/`OpenSession` writes carries a de-facto-standard "LAME tag" encoder-delay/padding header; `Probe` surfaces it (from this project's own output or any other LAME-tagged file) via `ProbeResult.EncoderDelaySamples`/`EncoderPaddingSamples`, and already folds it into a more accurate `DurationSeconds`
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
