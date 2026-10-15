@@ -116,7 +116,7 @@ if (probeResult.Tags is { } tags &amp;&amp; tags.TryGetValue("NAME", out var tit
 double? integratedLoudnessLufs = probeResult.IntegratedLoudness;</code></pre>
       <p><code>IntegratedLoudness</code> is <code>null</code> if the audio is shorter than one 400ms gating block (or, for a format where <code>Probe</code> can't decode audio at all, the same case <code>Waveform</code>/<code>PeakAmplitude</code>/<code>RmsLevel</code> are null for). It can legitimately be <code>double.NegativeInfinity</code> for audio entirely below the standard's own -70 LUFS absolute silence gate — that's a real measurement, not a "couldn't measure" sentinel. Every <code>Probe</code>/<code>Probe(Stream, AudioFormat)</code> entry point populates it whenever audio decodes at all.</p>
       <p>Internally, each sample is run through <code>Waveform.KWeightingFilter</code> — two cascaded biquads using ITU-R BS.1770-4's own tan-prewarped bilinear-transform coefficients, a different parameterization from <code>Pcm.BiquadTransform</code>'s RBJ-cookbook formulas, so it isn't reused from that type — before 400ms/100ms-step gated block energies are accumulated (absolute gate at -70 LUFS, relative gate 10 LU below the mean energy of the absolute-gated blocks). The whole pipeline (filter and gating together, not just the coefficients in isolation) was verified against the standard's own published conformance signal: a 997Hz sine wave at -23dBFS peak must measure -23.0 LUFS.</p>
-      <p>This is measurement only — there's no <code>LoudnessTransform</code> yet to <em>normalize</em> to a target LUFS the way <code>PeakNormalizationTransform</code> normalizes to a target peak dBFS. See <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 3 for that still-open follow-up.</p>
+      <p><code>Pcm.LoudnessTransform</code> normalizes to a target LUFS using this same measurement, the way <code>PeakNormalizationTransform</code> normalizes to a target peak dBFS — see <a href="#pcm-transform-pipeline">PCM Transform Pipeline</a> below for the two-pass measure-then-apply usage, and <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 3 for status (done, both halves).</p>
 
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
@@ -186,6 +186,16 @@ var normalize = new PeakNormalizationTransform(targetDb: -1.0);
 normalize.MeasurePeak(peak, bitsPerSample);
 
 AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(normalize));</code></pre>
+
+      <h3>True whole-file loudness normalization</h3>
+      <p><code>LoudnessTransform</code> is the real perceptual-loudness counterpart to <code>PeakNormalizationTransform</code> — it targets ITU-R BS.1770-4 / EBU R128 integrated loudness (LUFS), not peak dBFS. Unlike peak normalization, it has <strong>no</strong> self-measuring fallback at all: <code>Apply</code> throws <code>InvalidOperationException</code> unless <code>MeasureLoudness</code> was already called, since the standard's own gating algorithm cannot produce a meaningful number from one ~4096-frame decode block the way a peak scan can — measuring first is not just the recommended usage, it's required:</p>
+      <pre><code class="language-csharp">double? measuredLufs = AudioCutter.MeasureIntegratedLoudness(sourcePath);
+
+var loudnessNormalize = new LoudnessTransform(targetLufs: -14.0); // a common streaming-platform target
+loudnessNormalize.MeasureLoudness(measuredLufs);
+
+AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(loudnessNormalize));</code></pre>
+      <p>A <code>null</code> measurement (the source couldn't be measured at all — e.g. shorter than the standard's own 400ms minimum gating block) or <code>double.NegativeInfinity</code> (entirely below the standard's -70 LUFS absolute silence gate — a real measurement, not a "couldn't measure" sentinel) both make <code>Apply</code> pass samples through unchanged, since no finite gain reaches a finite target from either starting point.</p>
 
       <h3>Mixing and concatenating</h3>
       <pre><code class="language-csharp">AudioCutter.Mix(

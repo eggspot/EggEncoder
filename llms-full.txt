@@ -183,7 +183,7 @@ public interface IPcmTransform
 }
 ```
 
-### The fourteen built-in transforms
+### The fifteen built-in transforms
 
 ```csharp
 public sealed class ResamplingTransform : IPcmTransform
@@ -205,6 +205,12 @@ public sealed class PeakNormalizationTransform : IPcmTransform
     public void MeasurePeak(int[] buffer, int frameCount, int channels, int bitsPerSample);
     public void MeasurePeak(long maxAbsoluteSample, int bitsPerSample);
     public static long ComputeMaxAbsoluteSample(ReadOnlySpan<int> samples);
+}
+
+public sealed class LoudnessTransform : IPcmTransform
+{
+    public LoudnessTransform(double targetLufs); // e.g. -14.0; must be finite (no upper/lower bound enforced)
+    public void MeasureLoudness(double? measuredLufs); // from AudioCutter.MeasureIntegratedLoudness or WaveformCalculator.GetIntegratedLoudness -- MUST be called before Apply, no self-measuring fallback
 }
 
 public sealed class CompressorTransform : IPcmTransform
@@ -296,6 +302,7 @@ public sealed class FirFilterTransform : IPcmTransform
 ```
 
 - **Gain / peak normalization**: `VolumeTransform` is a flat linear multiplier. `PeakNormalizationTransform` measures the peak `|sample|` then applies `gain = targetPeakLinear * bitDepthMax / peak`; dropped into a pipeline without pre-measuring, it self-measures from whatever block `Apply` first sees -- driven by `AudioCutter.Convert`/`Cut`, that's one ~4096-frame decode block, **not the whole file**. For a true whole-file measurement: call `AudioCutter.MeasurePeakAmplitude(sourcePath)` first, then `peakTransform.MeasurePeak(peak, bitsPerSample)` before running the pipeline.
+- **Loudness normalization**: `LoudnessTransform` is the real perceptual-loudness counterpart -- `gainDb = targetLufs - measuredLufs`, applied as `10^(gainDb/20)`. Unlike `PeakNormalizationTransform`, it has **no** self-measuring fallback at all: `Apply` throws `InvalidOperationException` unless `MeasureLoudness` was already called, since EBU R128's own gating algorithm cannot produce a meaningful number from one decode block the way a peak scan can. Call `AudioCutter.MeasureIntegratedLoudness(sourcePath)` first, then `loudnessTransform.MeasureLoudness(measuredLufs)` before running the pipeline. A `null` measurement (couldn't be measured at all) or `double.NegativeInfinity` (EBU R128's own "entirely below the absolute silence gate" sentinel) both pass samples through unchanged, since no finite gain reaches a finite target from either.
 - **Dynamics compression**: `CompressorTransform` is a standard feedforward design (threshold dBFS / ratio / attack / release / makeup gain). Its envelope follower is **stereo-linked** -- one scalar tracking the loudest channel per frame, not independent per-channel envelopes, so a transient in one channel doesn't shift the stereo image. Tracked in linear scale via a one-pole filter with separate attack/release coefficients, converted to dB once per frame for the reduction computation. Channel-count-agnostic (no per-channel state, derives `channels` fresh from each `Apply` call, the same way `FadeTransform` does), but fixes `sampleRate` at construction (the attack/release coefficients depend on it) the same way `BiquadTransform` does.
 - **Noise gating**: `NoiseGateTransform` is the mirror image of `CompressorTransform` -- gain reduction below threshold instead of above, via the same stereo-linked envelope follower, one-pole attack/release tracking, and `ratio` convention (`>= 1.0`, where `1.0` is an explicit no-op at every level). Unlike the compressor, true digital silence (`envelopeDb == -Infinity`) is this transform's own common case rather than a boundary condition, so `ratio == 1.0` combined with silence is handled as its own branch rather than falling through the general `(threshold - envelopeDb) * (1 - 1/ratio)` formula -- that combination would otherwise compute `Infinity * 0`, which is `NaN` under IEEE 754, not 0.
 - **Peak limiting**: `LimiterTransform` is an infinite-ratio compressor against a `ceilingDb` -- the same stereo-linked envelope follower as `CompressorTransform`/`NoiseGateTransform`, but once the envelope exceeds the ceiling the gain applied brings it exactly down to the ceiling, not some ratio-scaled fraction of the way there. It then also applies a final per-sample hard clip to the ceiling, which is what makes this a true peak limiter rather than just "`CompressorTransform` with a very high ratio": a nonzero attack time lets a fast transient slip past the smoothed envelope follower before gain reduction has caught up, so the envelope-derived gain alone can only reduce toward the ceiling, not guarantee it. `attackMs` defaults to `0` (instant), the classic brick-wall-limiter default.
@@ -743,6 +750,11 @@ public static class AudioCutter
     // Decodes sourceFilePath fully to find its peak absolute sample value, for a true whole-file
     // PeakNormalizationTransform.MeasurePeak(long, int) measurement.
     public static (long Peak, int BitsPerSample) MeasurePeakAmplitude(string sourceFilePath);
+
+    // Decodes sourceFilePath fully to measure its real ITU-R BS.1770-4/EBU R128 integrated
+    // loudness, for a true whole-file LoudnessTransform.MeasureLoudness(double?) measurement.
+    // Null if it couldn't be measured at all; can legitimately be double.NegativeInfinity.
+    public static double? MeasureIntegratedLoudness(string sourceFilePath);
 
     // Convenience float[] entry points.
     public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);

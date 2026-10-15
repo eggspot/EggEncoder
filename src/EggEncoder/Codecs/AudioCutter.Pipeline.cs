@@ -3,6 +3,7 @@ using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
 using EggEncoder.Pcm;
+using EggEncoder.Waveform;
 using System.Runtime.ExceptionServices;
 
 namespace EggEncoder.Codecs
@@ -534,6 +535,36 @@ namespace EggEncoder.Codecs
             });
 
             return (maxAbs, bitsPerSample);
+        }
+
+        /// <summary>
+        /// Decodes <paramref name="sourceFilePath"/> fully to measure its real ITU-R BS.1770-4 / EBU
+        /// R128 integrated loudness, for use with <see cref="LoudnessTransform.MeasureLoudness"/> to
+        /// get a true whole-file measurement into a pipeline that will otherwise only ever see one
+        /// decode block at a time -- the same role this type's own <see cref="MeasurePeakAmplitude"/>
+        /// plays for <see cref="PeakNormalizationTransform"/>, just backed by
+        /// <see cref="WaveformCalculator.GetIntegratedLoudness"/> instead of a plain peak scan.
+        /// </summary>
+        /// <returns>
+        /// The source's own integrated loudness in LUFS, or <see langword="null"/> if it couldn't be
+        /// measured at all (the source decodes to no audio, or to less than EBU R128's own minimum
+        /// 400ms gating block) -- pass straight through to <see cref="LoudnessTransform.MeasureLoudness"/>
+        /// either way, including <see cref="double.NegativeInfinity"/> for a source that's entirely at
+        /// or below the standard's own -70 LUFS absolute silence gate, since that's a real measurement,
+        /// not a "couldn't measure" sentinel.
+        /// </returns>
+        public static double? MeasureIntegratedLoudness(string sourceFilePath)
+        {
+            var extension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
+            WaveformCalculator? waveformCalculator = null;
+
+            DecodeSource(sourceFilePath, extension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
+                waveformCalculator.AddBlock(block);
+            });
+
+            return waveformCalculator?.GetIntegratedLoudness();
         }
 
         /// <summary>

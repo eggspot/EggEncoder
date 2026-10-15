@@ -212,6 +212,67 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
+        public void MeasureIntegratedLoudness_Then_LoudnessNormalization_Should_Normalize_By_The_True_WholeFile_Loudness()
+        {
+            // Mirrors MeasurePeakAmplitude_Then_PeakNormalization_... above exactly, for the
+            // loudness-normalization counterpart: measure the true whole-file integrated loudness
+            // first (LoudnessTransform itself refuses to self-measure from a single block, unlike
+            // PeakNormalizationTransform), then hand it to the transform before the pipeline ever
+            // sees a single decode block.
+            const int sampleRate = 44100;
+            const int channels = 2;
+            const double sourcePeakDbfs = -20.0;
+            const double targetLufs = -14.0;
+
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var sourcePath = Path.Combine(tempDirectory, "source.wav");
+                WavFileBuilder.Create(sourcePath, channels, sampleRate, bitsPerSample: 16, BuildToneSamples(sampleRate, seconds: 2, channels, sourcePeakDbfs));
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                // The official ITU-R BS.1770-4 conformance relationship for a stereo 997Hz full-scale
+                // sine wave: measured LUFS tracks its own peak dBFS closely (confirmed in
+                // WaveformCalculatorTest's own conformance test, which this mirrors). A mono tone of
+                // the same peak amplitude would measure ~3 LU quieter instead -- EBU R128 sums energy
+                // across channels, so this isn't an arbitrary choice of channel count.
+                var measuredLufs = AudioCutter.MeasureIntegratedLoudness(sourcePath);
+                measuredLufs.Should().NotBeNull();
+                measuredLufs!.Value.Should().BeApproximately(sourcePeakDbfs, 1.0, "a full-scale stereo sine wave's own integrated loudness tracks its peak dBFS closely");
+
+                var loudnessNormalize = new LoudnessTransform(targetLufs);
+                loudnessNormalize.MeasureLoudness(measuredLufs);
+
+                AudioCutter.Convert(sourcePath, destPath, new PcmTransformPipeline(loudnessNormalize));
+
+                var destLufs = AudioCutter.MeasureIntegratedLoudness(destPath);
+                destLufs.Should().NotBeNull();
+                destLufs!.Value.Should().BeApproximately(targetLufs, 0.5, "the destination's own re-measured loudness must land at the requested target, not just apply some gain");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        private static int[] BuildToneSamples(int sampleRate, int seconds, int channels, double peakDbfs)
+        {
+            var frameCount = sampleRate * seconds;
+            var amplitude = Math.Pow(10, peakDbfs / 20.0) * short.MaxValue;
+            var samples = new int[frameCount * channels];
+            for (var frame = 0; frame < frameCount; frame++)
+            {
+                var value = (int)Math.Round(amplitude * Math.Sin(2 * Math.PI * 997 * frame / sampleRate));
+                for (var channel = 0; channel < channels; channel++)
+                {
+                    samples[(frame * channels) + channel] = value;
+                }
+            }
+
+            return samples;
+        }
+
+        [Fact]
         public void Convert_WithResamplingTransform_Should_Produce_Exact_Frame_Count_For_A_Single_Block()
         {
             var tempDirectory = CreateTempDirectory();
