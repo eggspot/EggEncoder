@@ -74,6 +74,23 @@ namespace EggEncoder.Codecs
         }
 
         /// <summary>
+        /// Same as <see cref="Convert(string, string, PcmTransformPipeline)"/>, but checks
+        /// <paramref name="cancellationToken"/> once per decoded block (every codec here decodes in
+        /// frame-sized chunks on the order of tens of milliseconds of audio, so cancellation takes
+        /// effect promptly, not just between whole files) and throws
+        /// <see cref="OperationCanceledException"/> if it's been requested -- the destination file
+        /// written so far is left in whatever partial state the last completed block left it in,
+        /// the same way any other mid-write failure here would (no automatic rollback/cleanup).
+        /// See docs/feature-roadmap.md item 5 for why this specific granularity (checked in the
+        /// shared per-block callback every format funnels through, rather than inside each codec's
+        /// own internal decode loop individually) was chosen.
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, CancellationToken cancellationToken)
+        {
+            Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer, AuSampleFormat.Integer, cancellationToken);
+        }
+
+        /// <summary>
         /// Same as <see cref="Convert(string, string, PcmTransformPipeline)"/>, but additionally selects the
         /// on-disk sample representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>);
         /// ignored for every other destination format.
@@ -103,7 +120,7 @@ namespace EggEncoder.Codecs
             Convert(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer, AiffSampleFormat.Integer, destinationAuFormat);
         }
 
-        private static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat, AiffSampleFormat destinationAiffFormat, AuSampleFormat destinationAuFormat)
+        private static void Convert(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat, AiffSampleFormat destinationAiffFormat, AuSampleFormat destinationAuFormat, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
 
@@ -120,6 +137,8 @@ namespace EggEncoder.Codecs
             {
                 DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     sourceChannels = channels;
                     sourceSampleRate = sampleRate;
                     sourceBitsPerSample = bitsPerSample;
@@ -159,6 +178,17 @@ namespace EggEncoder.Codecs
         /// </summary>
         public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options)
         {
+            return Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, options, CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Cut(string, string, int, int, CutOptions)"/>, but checks
+        /// <paramref name="cancellationToken"/> once per decoded block -- see
+        /// <see cref="Convert(string, string, PcmTransformPipeline, System.Threading.CancellationToken)"/>'s
+        /// own doc comment for the full rationale (docs/feature-roadmap.md item 5).
+        /// </summary>
+        public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options, CancellationToken cancellationToken)
+        {
             ArgumentNullException.ThrowIfNull(options);
 
             var sourceExtension = Path.GetExtension(sourceFilePath).ToLowerInvariant();
@@ -180,6 +210,8 @@ namespace EggEncoder.Codecs
             {
                 DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     if (!rangeComputed)
                     {
                         (startSample, endSample) = GetSampleRange(sampleRate, totalSamples, startInSeconds, endInSeconds);

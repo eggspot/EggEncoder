@@ -30,7 +30,7 @@ starting sketch, not a locked design; revise it once real implementation experie
 | 2 | [Format-native metadata tags (ID3v2 for MP3, Vorbis comments for FLAC/Opus/Vorbis)](#2-format-native-metadata-tags) | High | Medium | none |
 | 3 | [True loudness normalization (EBU R128 / ITU-R BS.1770)](#3-loudness-normalization-ebu-r128) — done | Medium | Medium | none |
 | 4 | [Explicit encoder delay/padding metadata (gapless playback)](#4-encoder-delaypadding-metadata) — done for MP3, Vorbis still open | Medium | Low–Medium | none |
-| 5 | [`CancellationToken` support across `Probe`/`ConvertFile`/`CutFile`](#5-cancellationtoken-support) | Medium | Low | #1 (same call sites) |
+| 5 | [`CancellationToken` support across `Probe`/`ConvertFile`/`CutFile`](#5-cancellationtoken-support) — done | Medium | Low | #1 (same call sites) |
 | 6 | [Multi-channel (&gt;2) support for the lossy codecs](#6-multi-channel-2-support) | Low–Medium | High | none |
 | 7 | [Cue points / chapter markers](#7-cue-points--chapter-markers) | Low | Medium | none |
 
@@ -241,16 +241,22 @@ guessed) -- confirming libmp3lame's own exact checksum convention would have nee
 own source, outside this change's sign-off (FFmpeg's own source only), and FFmpeg's own decode-side
 code never gates the delay/padding fields on either CRC anyway.
 
-## 5. `CancellationToken` support
+## 5. `CancellationToken` support — done
 
-Every `IMediaEncoder` method already returns `Task`, but none currently accept a
-`CancellationToken` — a caller driving a long `ConvertFile`/`CutFile` call from a web request or a
-background job has no way to cancel it short of abandoning the `Task` outright (which doesn't
-actually stop the underlying decode/encode loop). Cheapest to land as part of #1's own overload
-work, since that's already touching every one of these call sites; each codec's own per-block
-decode/write loop would need one `token.ThrowIfCancellationRequested()` check per block/frame
-(not per-sample — too fine-grained to matter, and would add real per-sample overhead for no
-benefit).
+`IMediaEncoder.ConvertFile`/`CutFile`/`Probe` (and the `Stream`-based `Probe` overloads) each
+gained a `CancellationToken`-accepting overload, added as new default-interface-method overloads
+rather than new parameters on the existing methods (binary-compatible: no existing caller's
+compiled code breaks). `ConvertFile`/`CutFile` check the token once per decoded block, inside the
+single shared `AudioCutter.DecodeSource` callback that every codec's own decode loop already
+funnels through (`AudioCutter.cs`/`AudioCutter.Pipeline.cs`) — this gives real, sub-second
+cancellation granularity for every format without touching each codec's own ~24+ individual decode
+call sites. `Probe`'s own `CancellationToken` support is deliberately shallow by contrast — checked
+once up front, before any decode starts, not per-block — because `Probe`'s internal structure is
+fragmented per-format (20+ separate methods, each with its own `waveformCalculator` callback) with
+no single shared callback funnel the way `Convert`/`Cut` have; this is a stated scope boundary, not
+a silent gap. A cancelled call throws `OperationCanceledException` and produces no destination
+file. `NativeEncoder`'s own catch blocks log `OperationCanceledException` as informational (an
+expected outcome), not as an error, before rethrowing.
 
 ## 6. Multi-channel (>2) support
 

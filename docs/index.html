@@ -146,6 +146,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc">Trim any supported source, into any supported destination format, without a full decode&rarr;encode round trip on the untouched region.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#128721;</div>
+          <div class="feature-title">Cancellation</div>
+          <p class="feature-desc"><code>ConvertFile</code>/<code>CutFile</code> (and <code>Probe</code>) each have a <code>CancellationToken</code>-accepting overload; <code>ConvertFile</code>/<code>CutFile</code> check it once per decoded block for real, sub-second cancellation. See <a href="Advanced-Features.html#cancellation">Advanced Features</a>.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#128269;</div>
           <div class="feature-title">MOV/MP4 Probing + Audio Decode</div>
           <p class="feature-desc">Manual atom-tree walker reads duration, dimensions, and codec four-cc with no native dependency — plus decodes a mono AAC-LC audio track when one's present.</p>

@@ -1662,6 +1662,56 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Fact]
+        public void Convert_WithPipeline_CancelledPartwayThrough_Should_Stop_Before_The_Next_Block()
+        {
+            // Proves the token is checked once PER decoded block, not just once up front: a source
+            // with several decode blocks (WAV reads in FramesPerBlock=4096-frame chunks) is run
+            // through a pipeline containing a transform that cancels the token during its own
+            // FIRST Apply() call -- the very next block's own callback invocation must see that
+            // cancellation and throw before this transform's Apply() is ever invoked a second time.
+            var tempDirectory = CreateTempDirectory();
+            try
+            {
+                var (sourcePath, _) = CreateRampWav(tempDirectory, "source.wav", totalFrames: 10_000, sampleRate: 1000);
+                var destPath = Path.Combine(tempDirectory, "dest.wav");
+
+                using var cts = new CancellationTokenSource();
+                var cancelOnFirstApply = new CancelOnFirstApplyTransform(cts);
+                var pipeline = new PcmTransformPipeline(cancelOnFirstApply);
+
+                var act = () => AudioCutter.Convert(sourcePath, destPath, pipeline, cts.Token);
+
+                act.Should().Throw<OperationCanceledException>();
+                cancelOnFirstApply.ApplyCallCount.Should().Be(1, "the second block's own cancellation check must fire before this transform's Apply() runs again");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        private sealed class CancelOnFirstApplyTransform(CancellationTokenSource cancellationTokenSource) : IPcmTransform
+        {
+            public int ApplyCallCount { get; private set; }
+
+            public int OutputSampleRate => 0;
+            public int OutputChannels => 0;
+            public int OutputBitsPerSample => 0;
+            public bool CanChangeFrameCount => false;
+
+            public (int[] buffer, int frameCount) Apply(int[] buffer, int frameCount, int channels, int sampleRate, int bitsPerSample)
+            {
+                ApplyCallCount++;
+                if (ApplyCallCount == 1)
+                {
+                    cancellationTokenSource.Cancel();
+                }
+
+                return (buffer, frameCount);
+            }
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

@@ -39,6 +39,16 @@ namespace EggEncoder.Codecs
         }
 
         /// <summary>
+        /// Same as <see cref="Convert(string, string)"/>, but observes <paramref name="cancellationToken"/>
+        /// once per decoded block -- see <see cref="Convert(string, string, PcmTransformPipeline, System.Threading.CancellationToken)"/>'s
+        /// own doc comment for the full rationale (docs/feature-roadmap.md item 5).
+        /// </summary>
+        public static void Convert(string sourceFilePath, string destFilePath, CancellationToken cancellationToken)
+        {
+            Convert(sourceFilePath, destFilePath, new PcmTransformPipeline(), cancellationToken);
+        }
+
+        /// <summary>
         /// Same as <see cref="Convert(string, string)"/>, but additionally selects the on-disk sample
         /// representation for a <c>.wav</c> destination (see <see cref="WavSampleFormat"/>); ignored for
         /// every other destination format. The most direct way to convert an integer-PCM source to a
@@ -75,6 +85,16 @@ namespace EggEncoder.Codecs
         public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
             return Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, new CutOptions());
+        }
+
+        /// <summary>
+        /// Same as <see cref="Cut(string, string, int, int)"/>, but observes <paramref name="cancellationToken"/>
+        /// once per decoded block -- see <see cref="Convert(string, string, PcmTransformPipeline, System.Threading.CancellationToken)"/>'s
+        /// own doc comment for the full rationale (docs/feature-roadmap.md item 5).
+        /// </summary>
+        public static bool Cut(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken)
+        {
+            return Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, new CutOptions(), cancellationToken);
         }
 
         private static void DecodeSource(string sourceFilePath, string sourceExtension, AudioBlockDecodedCallback onBlockDecoded)

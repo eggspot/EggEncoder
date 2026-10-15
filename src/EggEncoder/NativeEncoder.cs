@@ -66,6 +66,20 @@ namespace EggEncoder
             }
         }
 
+        /// <summary>
+        /// Checks <paramref name="cancellationToken"/> once, up front, before any decode work starts
+        /// -- not mid-decode the way <see cref="ConvertFile(string, string, CancellationToken)"/>/
+        /// <see cref="CutFile(string, string, int, int, CancellationToken)"/> do. See
+        /// <see cref="IMediaEncoder.Probe(string, CancellationToken)"/>'s own doc comment for why
+        /// this scope boundary was chosen rather than threading the token into every format's own
+        /// Probe method (docs/feature-roadmap.md item 5).
+        /// </summary>
+        public Task<ProbeResult> Probe(string filePath, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Probe(filePath);
+        }
+
         public Task ConvertFile(string sourceFilePath, string destFilePath)
         {
             try
@@ -78,6 +92,37 @@ namespace EggEncoder
                 LogInformation($"Completed native convert '{sourceFilePath}' to '{destFilePath}'");
 
                 return Task.CompletedTask;
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to convert from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Same as <see cref="ConvertFile(string, string)"/>, but observes <paramref name="cancellationToken"/>
+        /// once per decoded block via <see cref="AudioCutter.Convert(string, string, CancellationToken)"/>
+        /// -- cancellation is logged at informational level, not as a failure, since it's an expected
+        /// outcome the caller asked for, not a bug.
+        /// </summary>
+        public Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken)
+        {
+            try
+            {
+                LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
+
+                EnsureDestinationDirectory(destFilePath);
+                AudioCutter.Convert(sourceFilePath, destFilePath, cancellationToken);
+
+                LogInformation($"Completed native convert '{sourceFilePath}' to '{destFilePath}'");
+
+                return Task.CompletedTask;
+            }
+            catch (OperationCanceledException)
+            {
+                LogInformation($"Native convert '{sourceFilePath}' to '{destFilePath}' was cancelled");
+                throw;
             }
             catch (Exception e)
             {
@@ -100,6 +145,40 @@ namespace EggEncoder
                     : $"Completed native cut '{sourceFilePath}' to '{destFilePath}': requested range was outside the source duration, no file written");
 
                 return Task.CompletedTask;
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to cut from '{sourceFilePath}' to '{destFilePath}' {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Same as <see cref="CutFile(string, string, int, int)"/>, but observes
+        /// <paramref name="cancellationToken"/> once per decoded block via
+        /// <see cref="AudioCutter.Cut(string, string, int, int, CancellationToken)"/> -- cancellation
+        /// is logged at informational level, not as a failure, the same way
+        /// <see cref="ConvertFile(string, string, CancellationToken)"/> treats it.
+        /// </summary>
+        public Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken)
+        {
+            try
+            {
+                LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
+
+                EnsureDestinationDirectory(destFilePath);
+                var produced = AudioCutter.Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, cancellationToken);
+
+                LogInformation(produced
+                    ? $"Completed native cut '{sourceFilePath}' to '{destFilePath}'"
+                    : $"Completed native cut '{sourceFilePath}' to '{destFilePath}': requested range was outside the source duration, no file written");
+
+                return Task.CompletedTask;
+            }
+            catch (OperationCanceledException)
+            {
+                LogInformation($"Native cut '{sourceFilePath}' to '{destFilePath}' was cancelled");
+                throw;
             }
             catch (Exception e)
             {

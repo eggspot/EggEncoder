@@ -23,7 +23,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 
 ### `IMediaEncoder` implementation
 
-- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no native binary dependency at all (despite the class name, which predates the managed codec rewrite — see `docs/managed-codec-rewrite-plan.md`).
+- **`NativeEncoder`** (`src/EggEncoder/NativeEncoder.cs`) — the sole `IMediaEncoder` implementation. Dispatches by file extension to the codec classes under `Codecs/`. No subprocess, no native binary dependency at all (despite the class name, which predates the managed codec rewrite — see `docs/managed-codec-rewrite-plan.md`). `Probe`/`ConvertFile`/`CutFile` (and the `Stream`-based `Probe` overloads in `NativeEncoder.Stream.cs`) each have a `CancellationToken`-accepting overload — new default-interface-method overloads on `IMediaEncoder`, not new parameters on the existing methods, so no existing compiled caller breaks. `ConvertFile`/`CutFile` check the token once per decoded block, inside the single shared `AudioCutter.DecodeSource` callback every codec's own decode loop already funnels through; `Probe`'s own check is deliberately shallow instead — once, up front, before any decode starts — since `Probe` has no equivalent single shared callback across its 20+ per-format methods. See `docs/feature-roadmap.md` item 5.
 
 ### Codecs (`src/EggEncoder/Codecs/`)
 
