@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Opus;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Opus
@@ -31,6 +32,36 @@ namespace EggEncoder.UnitTests.Codecs.Opus
 
                 streamInfo.Channels.Should().Be(2);
                 decoded.Should().NotBeEmpty();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Decode_Stream_WithNonSeekableStream_Should_Still_Succeed_And_Match_PathBasedDecode()
+        {
+            // OpusDecoder's own Stream overload reads the whole source into memory up front, so
+            // (unlike VorbisDecoder) it has no CanSeek requirement at all -- confirmed directly here
+            // by actually probing a non-seekable wrapper stream, not just documented.
+            var samples = GenerateTone(seconds: 1, channels: 2);
+            var filePath = Path.Combine(Path.GetTempPath(), $"opus_decoder_stream_{Guid.NewGuid():N}.opus");
+            try
+            {
+                using (var session = OpusEncoderSession.OpenSession(filePath, channels: 2, SampleRate, bitsPerSample: 16))
+                {
+                    session.WriteInterleavedSamples(samples, samples.Length / 2);
+                    session.Finish();
+                }
+
+                var (_, pathBasedSamples) = DecodeAll(filePath);
+
+                using var nonSeekableStream = new NonSeekableStream(File.ReadAllBytes(filePath));
+                var (streamInfo, streamBasedSamples) = DecodeAll(nonSeekableStream);
+
+                streamInfo.Channels.Should().Be(2);
+                streamBasedSamples.Should().Equal(pathBasedSamples, "the Stream and path overloads must decode the exact same file identically");
             }
             finally
             {
@@ -183,6 +214,20 @@ namespace EggEncoder.UnitTests.Codecs.Opus
             }
 
             return samples;
+        }
+
+        private static (OpusStreamInfo StreamInfo, List<int> Samples) DecodeAll(string filePath)
+        {
+            var samples = new List<int>();
+            var streamInfo = OpusDecoder.Decode(filePath, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+            return (streamInfo, samples);
+        }
+
+        private static (OpusStreamInfo StreamInfo, List<int> Samples) DecodeAll(Stream source)
+        {
+            var samples = new List<int>();
+            var streamInfo = OpusDecoder.Decode(source, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+            return (streamInfo, samples);
         }
     }
 }

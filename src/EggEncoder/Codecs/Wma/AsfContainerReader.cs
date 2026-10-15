@@ -18,7 +18,17 @@ namespace EggEncoder.Codecs.Wma
 
         public static WmaStreamProperties Read(string wmaFilePath, out List<byte[]> framePayloads)
         {
-            var fileBytes = File.ReadAllBytes(wmaFilePath);
+            return Read(File.ReadAllBytes(wmaFilePath), out framePayloads);
+        }
+
+        // Stream-based overload's own entry point (docs/feature-roadmap.md item 1): this reader
+        // already parses entirely from an in-memory byte[] via manual position tracking, with no
+        // Stream/Seek involved anywhere -- WmaDecoder.Decode(Stream, ...) reads its own source
+        // fully into a byte[] up front (the same "read-fully-into-byte[]" shape FlacDecoder/
+        // AacDecoder/WavPackDecoder/OpusDecoder's own Stream overloads already use) and calls this
+        // overload directly, so no change was needed to the actual parsing logic below at all.
+        public static WmaStreamProperties Read(byte[] fileBytes, out List<byte[]> framePayloads)
+        {
             var position = 0;
 
             var headerGuid = ReadGuid(fileBytes, ref position);

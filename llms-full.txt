@@ -22,7 +22,7 @@ namespace EggEncoder;
 public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
-    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta implemented so far -- see docs/feature-roadmap.md item 1
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta/Opus/Vorbis/Wma implemented so far (Vorbis requires source.CanSeek; every other implemented format does not); Mp3/Mov still throw NotSupportedException -- see docs/feature-roadmap.md item 1
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 }
@@ -481,6 +481,7 @@ See "WAV's own format-tag variants" above for the full ADPCM/G.711 story. Every 
 public static class WmaDecoder
 {
     public static WmaStreamInfo Decode(string wmaFilePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static WmaStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- AsfContainerReader already parses from a plain byte[]; does NOT dispose source
     // throws NotSupportedException for mid/side-coded stereo or channel counts other than 1/2
 }
 
@@ -634,6 +635,7 @@ Lossless, in its own `.wv` container. Mono and stereo, 16-bit or 24-bit integer 
 public static class OpusDecoder
 {
     public static OpusStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static OpusStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded); // no CanSeek requirement -- reads the whole source into memory up front; does NOT dispose source
     // OpusStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from the 'OpusTags' packet, or null)
 }
 
@@ -657,6 +659,7 @@ Lossy, in a from-scratch OggOpus container (`.opus`). Mono and stereo, 16-bit in
 public static class VorbisDecoder
 {
     public static VorbisStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded);
+    public static VorbisStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded); // requires source.CanSeek -- NVorbis's own VorbisReader needs to seek internally; does NOT dispose source (VorbisReader's own closeOnDispose: false)
     // VorbisStreamInfo: Channels, SampleRate, BitsPerSample, TotalSamples, Tags (from NVorbis's own VorbisReader.Tags.All, or null)
 }
 

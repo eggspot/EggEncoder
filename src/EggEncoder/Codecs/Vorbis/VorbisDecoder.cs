@@ -27,11 +27,34 @@ namespace EggEncoder.Codecs.Vorbis
         public static VorbisStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return DecodeCore(stream, filePath, onBlockDecoded);
+        }
+
+        // Stream-based overload (docs/feature-roadmap.md item 1). Requires source.CanSeek --
+        // confirmed directly (not assumed), by feeding NVorbis's own VorbisReader a deliberately
+        // non-seekable wrapper stream and observing it throw NotSupportedException from its own
+        // internal Seek call, the same way WavReader/AiffReader/AuReader/CafReader's own
+        // Stream overloads already require it for their own chunk-walk/header parse. Never disposes
+        // source: NVorbis's own VorbisReader constructor already has first-class support for this
+        // (closeOnDispose: false) -- unlike every other codec's own Stream adaptation here, no
+        // "widen FileStream to Stream" or "read fully into memory" workaround is needed at all.
+        public static VorbisStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            if (!source.CanSeek)
+            {
+                throw new NotSupportedException("Probing an Ogg Vorbis stream requires a seekable stream -- NVorbis's own VorbisReader needs to seek internally");
+            }
+
+            return DecodeCore(source, "<stream>", onBlockDecoded);
+        }
+
+        private static VorbisStreamInfo DecodeCore(Stream stream, string displayName, AudioBlockDecodedCallback onBlockDecoded)
+        {
             using var reader = new VorbisReader(stream, closeOnDispose: false);
 
             if (reader.Channels is not 1 and not 2)
             {
-                throw new NotSupportedException($"'{filePath}' has {reader.Channels} channels; only mono and stereo Vorbis are supported");
+                throw new NotSupportedException($"'{displayName}' has {reader.Channels} channels; only mono and stereo Vorbis are supported");
             }
 
             var channels = reader.Channels;

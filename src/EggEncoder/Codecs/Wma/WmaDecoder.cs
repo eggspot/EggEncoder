@@ -8,7 +8,25 @@ namespace EggEncoder.Codecs.Wma
         public static WmaStreamInfo Decode(string wmaFilePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             var streamProperties = AsfContainerReader.Read(wmaFilePath, out var framePayloads);
+            return DecodeCore(streamProperties, framePayloads, onBlockDecoded);
+        }
 
+        // Stream-based overload (docs/feature-roadmap.md item 1): reads the whole source into
+        // memory up front, the same "read-fully-into-byte[]" shape FlacDecoder/AacDecoder/
+        // WavPackDecoder/OpusDecoder's own Stream overloads already use -- AsfContainerReader
+        // already parses from a plain byte[] with no Stream/Seek involved at all, so no CanSeek
+        // requirement either. Does not dispose source.
+        public static WmaStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            using var buffered = new MemoryStream();
+            source.CopyTo(buffered);
+
+            var streamProperties = AsfContainerReader.Read(buffered.ToArray(), out var framePayloads);
+            return DecodeCore(streamProperties, framePayloads, onBlockDecoded);
+        }
+
+        private static WmaStreamInfo DecodeCore(WmaStreamProperties streamProperties, List<byte[]> framePayloads, AudioBlockDecodedCallback onBlockDecoded)
+        {
             if (streamProperties.Channels is not 1 and not 2)
             {
                 throw new NotSupportedException($"WMA channel count {streamProperties.Channels} is not supported; only mono and stereo are supported");
