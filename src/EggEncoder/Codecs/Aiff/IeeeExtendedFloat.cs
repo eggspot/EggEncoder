@@ -12,6 +12,17 @@ namespace EggEncoder.Codecs.Aiff
     {
         public static double ToDouble(ReadOnlySpan<byte> tenBytes)
         {
+            // BinaryReader.ReadBytes(10) -- this method's own sole real caller -- doesn't throw on a
+            // short read the way ReadInt16()/ReadUInt32() do; it silently returns a shorter array at
+            // EOF. Throwing the same EndOfStreamException those calls would have thrown lets
+            // AiffReader.OpenCore's own existing catch (EndOfStreamException) block convert this into
+            // the InvalidDataException every other truncated-COMM-chunk case there already throws,
+            // rather than a raw IndexOutOfRangeException from the unconditional indexing below.
+            if (tenBytes.Length != 10)
+            {
+                throw new EndOfStreamException($"Expected 10 bytes for an 80-bit extended-precision float, got {tenBytes.Length}");
+            }
+
             var signAndExponent = (tenBytes[0] << 8) | tenBytes[1];
             var sign = (signAndExponent & 0x8000) != 0;
             var biasedExponent = signAndExponent & 0x7FFF;
