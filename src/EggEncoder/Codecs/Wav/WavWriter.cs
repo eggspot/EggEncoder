@@ -205,16 +205,10 @@ namespace EggEncoder.Codecs.Wav
         {
             var listChunkBytes = ValidateAndGetListChunkBytes(filePath, channels, bitsPerSample, sampleFormat, tags);
 
+            // No outer try/catch needed here -- WriteAndCreate's own catch already disposes stream
+            // (since leaveOpen is false) before rethrowing.
             var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
-            try
-            {
-                return WriteAndCreate(stream, filePath, channels, sampleRate, bitsPerSample, totalFrames, sampleFormat, listChunkBytes, leaveOpen: false);
-            }
-            catch
-            {
-                stream.Dispose();
-                throw;
-            }
+            return WriteAndCreate(stream, filePath, channels, sampleRate, bitsPerSample, totalFrames, sampleFormat, listChunkBytes, leaveOpen: false);
         }
 
         /// <summary>
