@@ -31,7 +31,8 @@ namespace EggEncoder.Codecs.Wav
         // mono, 1 frame/byte stereo, vs IMA's 8-sample/4-byte groups) are both genuinely different.
         private const int MsAdpcmBlockAlignBytes = 1024;
 
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _bitsPerSample;
         private readonly bool _isFloatFormat;
@@ -65,10 +66,11 @@ namespace EggEncoder.Codecs.Wav
         private readonly byte[] _listChunkBytes;
         private bool _disposed;
 
-        private WavWriter(FileStream stream, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock, bool isYamahaAdpcm, byte[] listChunkBytes)
+        private WavWriter(Stream stream, bool leaveOpen, int channels, int bitsPerSample, bool isFloatFormat, bool isALaw, bool isMuLaw, bool needsPadByte, bool isImaAdpcm, int adpcmSamplesPerBlock, bool isMsAdpcm, int msAdpcmSamplesPerBlock, bool isYamahaAdpcm, byte[] listChunkBytes)
         {
             _listChunkBytes = listChunkBytes;
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _bitsPerSample = bitsPerSample;
             _isFloatFormat = isFloatFormat;
@@ -201,6 +203,47 @@ namespace EggEncoder.Codecs.Wav
         /// </param>
         public static WavWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null)
         {
+            var listChunkBytes = ValidateAndGetListChunkBytes(filePath, channels, bitsPerSample, sampleFormat, tags);
+
+            var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            try
+            {
+                return WriteAndCreate(stream, filePath, channels, sampleRate, bitsPerSample, totalFrames, sampleFormat, listChunkBytes, leaveOpen: false);
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates a WAV destination from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a destination that isn't a local file (an HTTP request body, blob storage, an in-memory
+        /// buffer). Unlike <see cref="Flac.FlacEncoderSession"/>'s own STREAMINFO patch-up, every size
+        /// field a WAV header needs is already known up front from <paramref name="totalFrames"/>, so
+        /// this writes the complete header once and never seeks back -- no <see cref="Stream.CanSeek"/>
+        /// requirement at all, unlike every other Stream destination this codebase will eventually need.
+        /// Does NOT dispose <paramref name="destStream"/> -- the caller opened it, so the caller is
+        /// responsible for disposing it. See the other <see cref="Create(string, int, int, int, long, WavSampleFormat, IReadOnlyDictionary{string, string}?)"/>
+        /// overload's own parameter docs for everything else.
+        /// </summary>
+        public static WavWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+
+            var listChunkBytes = ValidateAndGetListChunkBytes("<stream>", channels, bitsPerSample, sampleFormat, tags);
+
+            return WriteAndCreate(destStream, "<stream>", channels, sampleRate, bitsPerSample, totalFrames, sampleFormat, listChunkBytes, leaveOpen: true);
+        }
+
+        // Validated (and the 'LIST'/'INFO' chunk built) before any destination is touched at all --
+        // for the path-based Create, before the destination file is even created; for the Stream-based
+        // Create, before a single byte is written to the caller's stream -- the same "fail before
+        // touching the destination" convention Mp3Encoder/FlacEncoder/AiffWriter/VorbisEncoderSession
+        // already establish for their own tag validation.
+        private static byte[] ValidateAndGetListChunkBytes(string filePath, int channels, int bitsPerSample, WavSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags)
+        {
             var listChunkBytes = BuildListInfoChunk(tags);
             var isFloatFormat = sampleFormat == WavSampleFormat.Float32;
             var isALaw = sampleFormat == WavSampleFormat.ALaw;
@@ -254,22 +297,33 @@ namespace EggEncoder.Codecs.Wav
                 throw new NotSupportedException($"'{filePath}' requests {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
             }
 
-            var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            return listChunkBytes;
+        }
+
+        private static WavWriter WriteAndCreate(Stream stream, string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat, byte[] listChunkBytes, bool leaveOpen)
+        {
+            var isFloatFormat = sampleFormat == WavSampleFormat.Float32;
+            var isALaw = sampleFormat == WavSampleFormat.ALaw;
+            var isMuLaw = sampleFormat == WavSampleFormat.MuLaw;
+            var isImaAdpcm = sampleFormat == WavSampleFormat.ImaAdpcm;
+            var isMsAdpcm = sampleFormat == WavSampleFormat.MsAdpcm;
+            var isYamahaAdpcm = sampleFormat == WavSampleFormat.YamahaAdpcm;
+
             try
             {
                 if (isImaAdpcm)
                 {
-                    return CreateImaAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes);
+                    return CreateImaAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes, leaveOpen);
                 }
 
                 if (isMsAdpcm)
                 {
-                    return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes);
+                    return CreateMsAdpcm(stream, filePath, channels, sampleRate, totalFrames, listChunkBytes, leaveOpen);
                 }
 
                 if (isYamahaAdpcm)
                 {
-                    return CreateYamahaAdpcm(stream, channels, sampleRate, totalFrames, listChunkBytes);
+                    return CreateYamahaAdpcm(stream, channels, sampleRate, totalFrames, listChunkBytes, leaveOpen);
                 }
 
                 // G.711 is always 1 byte/sample on disk regardless of the 16-bit input scale its
@@ -316,11 +370,15 @@ namespace EggEncoder.Codecs.Wav
                 writer.Write("data"u8);
                 writer.Write((uint)dataSize);
 
-                return new WavWriter(stream, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
+                return new WavWriter(stream, leaveOpen, channels, bitsPerSample, isFloatFormat, isALaw, isMuLaw, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -330,7 +388,7 @@ namespace EggEncoder.Codecs.Wav
         // size is block-quantized rather than exactly totalFrames * bytesPerFrame) is different enough
         // from every other WavSampleFormat's simple per-sample-width math above that it gets its own
         // method rather than threading more conditionals through the shared one.
-        private static WavWriter CreateImaAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
+        private static WavWriter CreateImaAdpcm(Stream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes, bool leaveOpen)
         {
             const int headerBytesPerChannel = 4;
             var samplesPerBlock = ((ImaAdpcmBlockAlignBytes - (headerBytesPerChannel * channels)) * 8 / (headerBytesPerChannel * channels)) + 1;
@@ -363,7 +421,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
+            return new WavWriter(stream, leaveOpen, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: true, samplesPerBlock, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: false, listChunkBytes);
         }
 
         // MS ADPCM's block structure mirrors IMA ADPCM's own CreateImaAdpcm above in shape (a
@@ -372,7 +430,7 @@ namespace EggEncoder.Codecs.Wav
         // channel (always 0 here, see MsAdpcmEncoder's own doc comment), plus the file-level 'fmt '
         // chunk extension additionally carries the full standard 7-pair coefficient table every real
         // MS ADPCM file includes, which IMA ADPCM's own extension has no equivalent of at all.
-        private static WavWriter CreateMsAdpcm(FileStream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
+        private static WavWriter CreateMsAdpcm(Stream stream, string filePath, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes, bool leaveOpen)
         {
             const int headerBytesPerChannel = 7;
             var coeffCount = MsAdpcmEncoder.Coeff1Table.Length;
@@ -422,7 +480,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock, isYamahaAdpcm: false, listChunkBytes);
+            return new WavWriter(stream, leaveOpen, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: true, samplesPerBlock, isYamahaAdpcm: false, listChunkBytes);
         }
 
         // Yamaha ADPCM has no block structure at all (see YamahaAdpcmDecoder's own doc comment), so --
@@ -432,7 +490,7 @@ namespace EggEncoder.Codecs.Wav
         // count (stereo always has an even total nibble count, one frame per byte, so it never pads).
         // No 'fmt' chunk extension is needed either -- confirmed directly from a real ffmpeg-produced
         // fixture's own bytes, whose 'fmt' chunk carries cbSize=0 with no further extension data.
-        private static WavWriter CreateYamahaAdpcm(FileStream stream, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes)
+        private static WavWriter CreateYamahaAdpcm(Stream stream, int channels, int sampleRate, long totalFrames, byte[] listChunkBytes, bool leaveOpen)
         {
             var totalNibbles = totalFrames * channels;
             var dataSize = (totalNibbles + 1) / 2; // ceiling division
@@ -470,7 +528,7 @@ namespace EggEncoder.Codecs.Wav
             writer.Write("data"u8);
             writer.Write((uint)dataSize);
 
-            return new WavWriter(stream, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: true, listChunkBytes);
+            return new WavWriter(stream, leaveOpen, channels, bitsPerSample: 16, isFloatFormat: false, isALaw: false, isMuLaw: false, needsPadByte, isImaAdpcm: false, adpcmSamplesPerBlock: 0, isMsAdpcm: false, msAdpcmSamplesPerBlock: 0, isYamahaAdpcm: true, listChunkBytes);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -716,7 +774,10 @@ namespace EggEncoder.Codecs.Wav
                 _stream.Write(_listChunkBytes, 0, _listChunkBytes.Length);
             }
 
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
     }
 }

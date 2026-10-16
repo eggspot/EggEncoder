@@ -6,6 +6,148 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 {
     public class WavWriterTest
     {
+        // -------- Stream-based Create --------
+
+        [Fact]
+        public void Create_Stream_Should_Round_Trip_Through_WavReader_Same_As_Path_Based_Create()
+        {
+            var samples = new[] { 0, 1000, -1000, 32767, -32768 };
+
+            using var memoryStream = new MemoryStream();
+            using (var writer = WavWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: samples.Length))
+            {
+                writer.WriteInterleavedSamples(samples, samples.Length);
+            }
+
+            memoryStream.Position = 0;
+            using var reader = WavReader.Open(memoryStream);
+
+            reader.Channels.Should().Be(1);
+            reader.SampleRate.Should().Be(8000);
+            reader.BitsPerSample.Should().Be(16);
+
+            var buffer = new int[samples.Length];
+            reader.ReadInterleavedSamples(buffer, samples.Length);
+            buffer.Should().Equal(samples);
+        }
+
+        [Fact]
+        public void Create_Stream_Should_Produce_TheExactSameBytes_As_PathBased_Create()
+        {
+            // No CanSeek requirement, no header patch-up at Finish() -- every field is already known
+            // from totalFrames up front, so the Stream-based and path-based overloads must write byte-
+            // for-byte identical output given identical inputs.
+            var samples = new[] { 0, 500, -500, int.MaxValue, int.MinValue };
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = WavWriter.Create(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 32, totalFrames: samples.Length / 2))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length / 2);
+                }
+
+                var pathBasedBytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream();
+                using (var writer = WavWriter.Create(memoryStream, channels: 2, sampleRate: 44100, bitsPerSample: 32, totalFrames: samples.Length / 2))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length / 2);
+                }
+
+                memoryStream.ToArray().Should().Equal(pathBasedBytes);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_Stream_WithTags_Should_Round_Trip_Through_WavReader()
+        {
+            var tags = new Dictionary<string, string> { ["INAM"] = "Stream Title" };
+
+            using var memoryStream = new MemoryStream();
+            using (var writer = WavWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 2, tags: tags))
+            {
+                writer.WriteInterleavedSamples([0, 1], 2);
+            }
+
+            memoryStream.Position = 0;
+            using var reader = WavReader.Open(memoryStream);
+
+            reader.Tags.Should().NotBeNull();
+            reader.Tags!.Should().ContainKey("INAM").WhoseValue.Should().Be("Stream Title");
+        }
+
+        [Fact]
+        public void Create_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            using var memoryStream = new MemoryStream();
+            var writer = WavWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1);
+            writer.WriteInterleavedSamples([0], 1);
+            writer.Dispose();
+
+            // A disposed MemoryStream throws ObjectDisposedException on any further access -- this
+            // would throw if Dispose() above had disposed it.
+            var act = () => memoryStream.Position;
+            act.Should().NotThrow();
+        }
+
+        [Fact]
+        public void Create_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => WavWriter.Create((Stream)null!, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Create_Stream_DoesNotRequire_CanSeek()
+        {
+            // Unlike WavReader.Open(Stream) (and every destination codec this project will eventually
+            // need to widen), WavWriter never seeks back to patch anything -- totalFrames makes every
+            // header field known up front -- so a non-seekable destination is genuinely fine here.
+            using var destination = new MemoryStream();
+            var writeOnly = new WriteOnlyStream(destination);
+
+            using var writer = WavWriter.Create(writeOnly, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1);
+            var act = () => writer.WriteInterleavedSamples([0], 1);
+
+            act.Should().NotThrow();
+        }
+
+        [Fact]
+        public void Create_Stream_WithInvalidSampleFormat_Should_Throw_Before_WritingAnyBytes()
+        {
+            // The same "validated before anything is written to the destination" guarantee the
+            // path-based overload gives (no file created on a validation failure) -- here, no bytes
+            // reach the caller's stream at all.
+            using var memoryStream = new MemoryStream();
+
+            var act = () => WavWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1, WavSampleFormat.Float32);
+
+            act.Should().Throw<NotSupportedException>();
+            memoryStream.Length.Should().Be(0);
+        }
+
+        // A Stream whose CanWrite is true but CanSeek is false, wrapping a real backing Stream --
+        // proves Create_Stream_DoesNotRequire_CanSeek's own claim against a genuinely non-seekable
+        // Stream, not just a seekable one that happens to pass.
+        private sealed class WriteOnlyStream(Stream inner) : Stream
+        {
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+            public override void Flush() => inner.Flush();
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+        }
+
         [Fact]
         public void WriteInterleavedSamples_8Bit_Should_Round_Trip_Through_WavReader()
         {
