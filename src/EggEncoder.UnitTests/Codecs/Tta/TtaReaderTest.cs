@@ -22,6 +22,53 @@ namespace EggEncoder.UnitTests.Codecs.Tta
         }
 
         [Fact]
+        public void Open_WithNoBytesFollowingTheHeader_Should_ThrowInvalidDataException_NotArgumentOutOfRangeException()
+        {
+            // BinaryReader.ReadBytes(4) doesn't throw on a short read -- it just returns however
+            // many bytes were actually available (0, here, since nothing follows the 18-byte header
+            // at all). Before this fix, that empty array was passed straight into
+            // BinaryPrimitives.ReadUInt32LittleEndian, which throws a raw ArgumentOutOfRangeException
+            // instead of this codebase's own clear, typed InvalidDataException convention for
+            // malformed/truncated input (the same class of bug IeeeExtendedFloat.ToDouble had).
+            var bytes = BuildHeader(format: 1, channels: 1, bitsPerSample: 16, sampleRate: 245, totalSamples: 0);
+
+            var filePath = WriteBytes(bytes);
+            try
+            {
+                var act = () => TtaReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Open_WithSeekTableMissingItsOwnTrailingCrc_Should_ThrowInvalidDataException_NotArgumentOutOfRangeException()
+        {
+            // totalSamples=100 at sampleRate=245 (frameLength=256) needs exactly 1 seek-table entry
+            // (4 bytes) -- provided here in full -- but the seek table's own separate trailing
+            // CRC32 (a further 4 bytes, distinct from the per-entry data) is entirely missing, not
+            // just short. Same underlying bug as the header-CRC case above, at the seek table's own
+            // trailing CRC read instead.
+            var header = BuildValidHeaderWithCrc(format: 1, channels: 1, bitsPerSample: 16, sampleRate: 245, totalSamples: 100);
+            var seekTableEntry = Uint32LittleEndianBytes(8); // 1 frame, declaring an 8-byte size
+            var bytes = header.Concat(seekTableEntry).ToArray(); // no trailing seek-table CRC32 at all
+
+            var filePath = WriteBytes(bytes);
+            try
+            {
+                var act = () => TtaReader.Open(filePath).Dispose();
+                act.Should().ThrowExactly<InvalidDataException>();
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
         public void Open_With_BadHeaderCrc_Should_Throw()
         {
             var header = BuildHeader(format: 1, channels: 1, bitsPerSample: 16, sampleRate: 245, totalSamples: 0);

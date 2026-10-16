@@ -74,7 +74,13 @@ namespace EggEncoder.Codecs.Tta
                     throw new InvalidDataException($"'{filePath}' is not a valid TTA file: missing 'TTA1' header");
                 }
 
-                var headerCrc = BinaryPrimitives.ReadUInt32LittleEndian(reader.ReadBytes(4));
+                var headerCrcBytes = reader.ReadBytes(4);
+                if (headerCrcBytes.Length != 4)
+                {
+                    throw new InvalidDataException($"'{filePath}' is truncated: its header's own trailing CRC32 is incomplete");
+                }
+
+                var headerCrc = BinaryPrimitives.ReadUInt32LittleEndian(headerCrcBytes);
                 if (Crc32.Compute(header) != headerCrc)
                 {
                     throw new InvalidDataException($"'{filePath}' has a TTA header that fails its own CRC32 check");
@@ -185,7 +191,13 @@ namespace EggEncoder.Codecs.Tta
                 throw new InvalidDataException($"'{filePath}' is truncated: its seek table is incomplete");
             }
 
-            var tableCrc = BinaryPrimitives.ReadUInt32LittleEndian(reader.ReadBytes(4));
+            var tableCrcBytes = reader.ReadBytes(4);
+            if (tableCrcBytes.Length != 4)
+            {
+                throw new InvalidDataException($"'{filePath}' is truncated: its seek table's own trailing CRC32 is incomplete");
+            }
+
+            var tableCrc = BinaryPrimitives.ReadUInt32LittleEndian(tableCrcBytes);
             if (Crc32.Compute(tableBytes) != tableCrc)
             {
                 throw new InvalidDataException($"'{filePath}' has a TTA seek table that fails its own CRC32 check");
