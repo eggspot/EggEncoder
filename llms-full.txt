@@ -23,7 +23,7 @@ public interface IMediaEncoder
 {
     Task<ProbeResult> Probe(string filePath);
     Task<ProbeResult> Probe(string filePath, CancellationToken cancellationToken); // shallow: checked once up front before any decode starts, NOT per-block -- Probe has no single shared decode callback the way ConvertFile/CutFile do, see docs/feature-roadmap.md item 5
-    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta/Opus/Vorbis/Wma implemented so far (Vorbis requires source.CanSeek; every other implemented format does not); Mp3/Mov still throw NotSupportedException -- see docs/feature-roadmap.md item 1
+    Task<ProbeResult> Probe(Stream source, AudioFormat format); // source isn't a local file (HTTP body, blob storage, in-memory buffer); does NOT dispose source. Wav/Aiff/Au/Caf/Flac/Aac/WavPack/Tta/Opus/Vorbis/Wma/Mov implemented so far (Vorbis and Mov require source.CanSeek; every other implemented format does not); Mp3 still throws NotSupportedException -- see docs/feature-roadmap.md item 1. Mov can't distinguish a MOV container from an MP4 one without a file extension, so it always reports FormatName/FormatLongName as "mov"/"QuickTime / MOV"
     Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken); // same shallow check as above
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken); // checked once per decoded block, inside AudioCutter's own shared decode callback -- real, sub-second cancellation for every format

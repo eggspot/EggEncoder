@@ -19,7 +19,31 @@ namespace EggEncoder.Codecs.Mov
         public static MovStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return DecodeCore(stream, filePath, onBlockDecoded);
+        }
 
+        /// <summary>
+        /// Decodes a MOV/MP4 source's audio track from an already-open <see cref="Stream"/> instead
+        /// of a file path -- for a source that isn't a local file (an HTTP response body, blob
+        /// storage, an in-memory buffer). Requires <see cref="Stream.CanSeek"/>, the same reasoning
+        /// as <see cref="MovProbe.Probe(Stream)"/>'s own doc comment. Does NOT dispose
+        /// <paramref name="source"/> -- the caller opened it, so the caller is responsible for
+        /// disposing it.
+        /// </summary>
+        public static MovStreamInfo Decode(Stream source, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+
+            if (!source.CanSeek)
+            {
+                throw new ArgumentException("MovDecoder.Decode requires a seekable stream -- its atom-tree walk relies on Stream.Position/Seek throughout", nameof(source));
+            }
+
+            return DecodeCore(source, "<stream>", onBlockDecoded);
+        }
+
+        private static MovStreamInfo DecodeCore(Stream stream, string filePath, AudioBlockDecodedCallback onBlockDecoded)
+        {
             var moov = MovAtomReader.FindAtom(stream, "moov", 0, stream.Length)
                 ?? throw new InvalidDataException($"'{filePath}' is not a valid MOV/MP4 file: missing 'moov' atom");
 

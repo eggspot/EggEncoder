@@ -3,6 +3,7 @@ using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
+using EggEncoder.Codecs.Mov;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
@@ -22,12 +23,12 @@ namespace EggEncoder
     // confirmed directly, by feeding NVorbis's own VorbisReader a non-seekable stream and observing
     // it throw; unlike every other codec here, NVorbis's own constructor already has first-class
     // non-disposing support via closeOnDispose: false, so no "widen"/"read fully into memory"
-    // adaptation was needed for Vorbis at all). MP3 and MOV/MP4 still throw NotSupportedException
-    // here -- MP3 specifically because NLayer's own MpegFile(Stream) constructor has no leaveOpen
-    // option, so it can't honor this type's own "never dispose the caller's stream" contract without
-    // further work; MOV/MP4 because its own atom-tree walker needs the same CanSeek-requiring
-    // "FileStream-widened-to-Stream" treatment WAV/AIFF/AU/CAF already got, just not done yet -- see
-    // the roadmap item's own status note.
+    // adaptation was needed for Vorbis at all), and MOV/MP4 (the same CanSeek-requiring
+    // "FileStream-widened-to-Stream" treatment WAV/AIFF/AU/CAF already got, via MovProbe.Probe(Stream)/
+    // MovDecoder.Decode(Stream, ...)). MP3 still throws NotSupportedException here -- NLayer's own
+    // MpegFile(Stream) constructor has no leaveOpen option, so it can't honor this type's own "never
+    // dispose the caller's stream" contract without further work -- see the roadmap item's own status
+    // note.
     public partial class NativeEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
@@ -51,6 +52,7 @@ namespace EggEncoder
                     AudioFormat.Opus => ProbeOpusStream(source),
                     AudioFormat.Vorbis => ProbeVorbisStream(source),
                     AudioFormat.Wma => ProbeWmaStream(source),
+                    AudioFormat.Mov => ProbeMovStream(source),
                     _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
                 };
 
@@ -482,6 +484,43 @@ namespace EggEncoder
                 PeakAmplitude = waveformCalculator?.GetNormalizedPeakAmplitude(),
                 RmsLevel = waveformCalculator?.GetNormalizedRmsLevel(),
                 IntegratedLoudness = waveformCalculator?.GetIntegratedLoudness()
+            };
+        }
+
+        // The Stream-based counterpart to NativeEncoder.cs's own path-based ProbeVideo -- same
+        // MovProbe/MovDecoder composition (video metadata plus, if present, a decodable mono AAC-LC
+        // audio track's own waveform/level data), via TryDecodeAudioTrackCore's shared delegate shape
+        // so that "decode, degrade to null on any failure, map to DecodedAudioTrack" logic isn't
+        // duplicated here. Unlike the path-based overload, there is no file extension to distinguish
+        // a MOV container from an MP4 one -- AudioFormat.Mov covers both -- so this always reports
+        // "mov"/"QuickTime / MOV", the same default the path-based overload itself falls back to for
+        // any extension other than ".mp4".
+        private static ProbeResult ProbeMovStream(Stream source)
+        {
+            var movProbeResult = MovProbe.Probe(source);
+            var audio = TryDecodeAudioTrackCore(onBlockDecoded => MovDecoder.Decode(source, onBlockDecoded));
+
+            return new ProbeResult
+            {
+                FormatName = "mov",
+                FormatLongName = "QuickTime / MOV",
+                SizeBytes = GetStreamLength(source),
+                DurationSeconds = movProbeResult.DurationSeconds,
+                CodecType = "video",
+                CodecName = movProbeResult.CodecFourCc,
+                Width = movProbeResult.Width,
+                Height = movProbeResult.Height,
+                SampleRate = audio?.SampleRate,
+                Channels = audio?.Channels,
+                ChannelLayout = audio is null ? null : DescribeChannelLayout(audio.Channels),
+                BitsPerSample = audio?.BitsPerSample,
+                BitRate = audio is null ? null : audio.SampleRate * audio.BitsPerSample * audio.Channels,
+                DurationInSamples = audio?.TotalSamples,
+                TimeBase = audio is not null && audio.SampleRate > 0 ? $"1/{audio.SampleRate}" : null,
+                Waveform = audio?.Waveform,
+                PeakAmplitude = audio?.PeakAmplitude,
+                RmsLevel = audio?.RmsLevel,
+                IntegratedLoudness = audio?.IntegratedLoudness
             };
         }
     }

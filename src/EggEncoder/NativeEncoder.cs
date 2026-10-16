@@ -690,12 +690,21 @@ namespace EggEncoder
 
         private static DecodedAudioTrack? TryDecodeAudioTrack(string filePath)
         {
+            return TryDecodeAudioTrackCore(onBlockDecoded => MovDecoder.Decode(filePath, onBlockDecoded));
+        }
+
+        // Shared by the path-based and Stream-based Probe entry points (NativeEncoder.Stream.cs's
+        // own ProbeMovStream) so the "decode, degrade to null on any failure, map to
+        // DecodedAudioTrack" logic isn't duplicated between them -- only how MovDecoder.Decode is
+        // actually invoked (path vs. Stream) differs, which the caller supplies as a delegate.
+        private static DecodedAudioTrack? TryDecodeAudioTrackCore(Func<AudioBlockDecodedCallback, MovStreamInfo> decode)
+        {
             WaveformCalculator? waveformCalculator = null;
             MovStreamInfo streamInfo;
 
             try
             {
-                streamInfo = MovDecoder.Decode(filePath, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+                streamInfo = decode((block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
                     waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
                     waveformCalculator.AddBlock(block);

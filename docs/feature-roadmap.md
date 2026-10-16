@@ -101,7 +101,7 @@ run synchronously against the given stream under the hood, same as how `Probe`/`
 already work today — genuine async I/O is its own, later roadmap item if real usage shows it's
 needed.
 
-**Status: eleven formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
+**Status: twelve formats done** (`IMediaEncoder.Probe(Stream, AudioFormat)`) — the `AudioFormat`
 enum, the interface method, and real `Stream` support across all four adaptation shapes this
 item's own design (and its own prior status notes) called out:
 `WavReader.Open(Stream)`/`AiffReader.Open(Stream)`/`AuReader.Open(Stream)`/`CafReader.Open(Stream)`
@@ -124,22 +124,24 @@ directly, not assumed, by feeding NVorbis's own `VorbisReader` a non-seekable st
 it throw `NotSupportedException` from its own internal seek call -- but needed no "widen"/"read
 fully into memory" adaptation of its own at all, since `VorbisReader`'s own constructor already
 supports not disposing the caller's stream directly via `closeOnDispose: false`, a first-class
-feature of that dependency this project didn't have to build itself).
+feature of that dependency this project didn't have to build itself); and `MovProbe.Probe(Stream)`/
+`MovDecoder.Decode(Stream, ...)` (the same `CanSeek`-requiring `FileStream`-widened-to-`Stream`
+treatment WAV/AIFF/AU/CAF already got -- `MovAtomReader`'s own atom-tree walk already used
+`stream.Position` assignments extensively for random access even before this change, so both
+widened mechanically once checked; `NativeEncoder.Stream.cs`'s own `ProbeMovStream` composes them
+the same way the path-based `ProbeVideo` already does, including the embedded-audio-track
+graceful-degradation behavior -- the one genuine difference from the path-based overload is that a
+`Stream` source has no file extension to distinguish a MOV container from an MP4 one, so this
+always reports `FormatName`/`FormatLongName` as `"mov"`/`"QuickTime / MOV"`, the same default the
+path-based overload itself already falls back to for any extension other than `.mp4`).
 
-MP3 and MOV/MP4 are what's left. MP3 is still specifically blocked on NLayer's own
+MP3 is what's left for `Probe`. It's still specifically blocked on NLayer's own
 `MpegFile(Stream)` constructor having no `leaveOpen` option, so it can't honor this type's own
 "never dispose the caller's stream" contract without further work (e.g. wrapping the stream in a
 disposal-suppressing adapter, or an upstream NLayer change) -- not attempted here, since that's a
-real design decision for the owner, not a mechanical port like the five formats this status note
-newly confirms. MOV/MP4 needs the same `CanSeek`-requiring `FileStream`-widened-to-`Stream`
-treatment WAV/AIFF/AU/CAF already got (`MovAtomReader`'s own atom-tree walk already uses
-`stream.Position` assignments extensively for random access, confirmed directly), it just hasn't
-been done yet -- a reasonable next slice of this same item, and more mechanical than MP3's own
-blocker, just untouched so far because it also means deciding how (or whether) `Probe`'s own
-video-track metadata interacts with a Stream source at all, not purely audio-codec work the way
-every other format in this item has been. `ConvertFile`/`CutFile`'s own `Stream` overloads (the
-destination-seekability half) are also still not started -- that, plus MP3/MOV above, are what's
-still open for this item.
+real design decision for the owner, not a mechanical port like every other format this item has
+confirmed. `ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) are
+also still not started -- that, plus MP3 above, are what's still open for this item.
 
 ## 2. Format-native metadata tags
 
