@@ -8,7 +8,32 @@ namespace EggEncoder.Codecs.Mov
         public static MovProbeResult Probe(string filePath)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return ProbeCore(stream, filePath);
+        }
 
+        /// <summary>
+        /// Probes a MOV/MP4 source from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a source that isn't a local file (an HTTP response body, blob storage, an in-memory
+        /// buffer). Requires <see cref="Stream.CanSeek"/>: the atom-tree walk this probe shares with
+        /// <see cref="MovDecoder"/> (via <see cref="MovAtomReader"/>) relies on <see cref="Stream.Position"/>/
+        /// <see cref="Stream.Seek"/> throughout, the same reasoning <see cref="Wav.WavReader.Open(Stream)"/>
+        /// already documents. Does NOT dispose <paramref name="source"/> -- the caller opened it, so
+        /// the caller is responsible for disposing it.
+        /// </summary>
+        public static MovProbeResult Probe(Stream source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+
+            if (!source.CanSeek)
+            {
+                throw new ArgumentException("MovProbe.Probe requires a seekable stream -- its atom-tree walk relies on Stream.Position/Seek throughout", nameof(source));
+            }
+
+            return ProbeCore(source, "<stream>");
+        }
+
+        private static MovProbeResult ProbeCore(Stream stream, string filePath)
+        {
             var moov = MovAtomReader.FindAtom(stream, "moov", 0, stream.Length)
                 ?? throw new InvalidDataException($"'{filePath}' is not a valid MOV/MP4 file: missing 'moov' atom");
 

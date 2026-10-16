@@ -1228,6 +1228,74 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_Stream_WithMovFormat_Should_Return_Correct_VideoMetadata()
+        {
+            using var stream = File.OpenRead(_movFixturePath);
+
+            var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Mov);
+
+            probeResult.FormatName.Should().Be("mov");
+            probeResult.CodecType.Should().Be("video");
+            probeResult.DurationSeconds.Should().BeApproximately(5, 0.1);
+            probeResult.Width.Should().Be(640);
+            probeResult.Height.Should().Be(360);
+            probeResult.Waveform.Should().BeNull();
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithMovFormat_WithAacAudio_Should_Return_AudioMetadata_And_Waveform()
+        {
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                const int sampleRate = 44100;
+                const int sampleCount = sampleRate;
+
+                var samples = new short[sampleCount];
+                for (var i = 0; i < sampleCount; i++)
+                {
+                    samples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                }
+
+                var aacPath = Path.Combine(tempDirectory, "source.aac");
+                AacEncoder.Encode(aacPath, samples, channels: 1, sampleRate);
+
+                var rawFrames = Mp4FileBuilder.ExtractRawAacFrames(aacPath);
+                var mp4Path = Path.Combine(tempDirectory, "source.mp4");
+                Mp4FileBuilder.Create(mp4Path, sampleRate, rawFrames);
+
+                using var stream = File.OpenRead(mp4Path);
+                var probeResult = await _nativeEncoder.Probe(stream, AudioFormat.Mov);
+
+                probeResult.CodecType.Should().Be("video");
+                probeResult.SampleRate.Should().Be(sampleRate);
+                probeResult.Channels.Should().Be(1);
+                probeResult.ChannelLayout.Should().Be("mono");
+                probeResult.BitsPerSample.Should().Be(16);
+                AssertNonEmptyWaveform(probeResult.Waveform);
+                probeResult.PeakAmplitude.Should().NotBeNull();
+                probeResult.PeakAmplitude!.Value.Should().BeInRange(0.0, 1.0).And.BeGreaterThan(0.0);
+                stream.CanRead.Should().BeTrue("Probe(Stream, AudioFormat) must not dispose the caller's stream");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public async Task Probe_Stream_WithMovFormat_WithNonSeekableStream_Should_Throw()
+        {
+            var bytes = File.ReadAllBytes(_movFixturePath);
+            using var nonSeekableStream = new NonSeekableStream(bytes);
+
+            var act = () => _nativeEncoder.Probe(nonSeekableStream, AudioFormat.Mov);
+
+            await act.Should().ThrowExactlyAsync<ArgumentException>().WithMessage("*seekable*");
+        }
+
+        [Fact]
         public async Task Probe_UnsupportedExtension_Should_Throw()
         {
             var act = () => _nativeEncoder.Probe("file.xyz");

@@ -70,5 +70,66 @@ namespace EggEncoder.UnitTests.Codecs.Mov
 
             act.Should().ThrowExactly<InvalidDataException>();
         }
+
+        [Fact]
+        public void Decode_Stream_Should_Match_PathBased_Result()
+        {
+            const int sampleRate = 44100;
+            const int sampleCount = sampleRate;
+
+            var originalSamples = new short[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                originalSamples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+
+            try
+            {
+                var aacPath = Path.Combine(tempDirectory, "source.aac");
+                AacEncoder.Encode(aacPath, originalSamples, channels: 1, sampleRate);
+
+                var rawFrames = Mp4FileBuilder.ExtractRawAacFrames(aacPath);
+                var mp4Path = Path.Combine(tempDirectory, "source.mp4");
+                Mp4FileBuilder.Create(mp4Path, sampleRate, rawFrames);
+
+                var pathSamples = new List<int>();
+                var pathStreamInfo = MovDecoder.Decode(mp4Path, (block, _, _, _, _) => pathSamples.AddRange(block.ToArray()));
+
+                var streamSamples = new List<int>();
+                using var stream = File.OpenRead(mp4Path);
+                var streamStreamInfo = MovDecoder.Decode(stream, (block, _, _, _, _) => streamSamples.AddRange(block.ToArray()));
+
+                streamStreamInfo.Channels.Should().Be(pathStreamInfo.Channels);
+                streamStreamInfo.SampleRate.Should().Be(pathStreamInfo.SampleRate);
+                streamStreamInfo.TotalSamples.Should().Be(pathStreamInfo.TotalSamples);
+                streamSamples.Should().Equal(pathSamples);
+                stream.CanRead.Should().BeTrue("Decode(Stream, ...) must not dispose the caller's stream");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Decode_WithNullStream_Should_Throw()
+        {
+            var act = () => MovDecoder.Decode((Stream)null!, (_, _, _, _, _) => { });
+            act.Should().ThrowExactly<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Decode_WithNonSeekableStream_Should_Throw()
+        {
+            var bytes = File.ReadAllBytes(_movFixturePath);
+            using var stream = new NonSeekableStream(bytes);
+
+            var act = () => MovDecoder.Decode(stream, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<ArgumentException>().WithMessage("*seekable*");
+        }
     }
 }
