@@ -479,6 +479,7 @@ public sealed class WavReader : IDisposable
 public sealed class WavWriter : IDisposable
 {
     public static WavWriter Create(string destFilePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null);
+    public static WavWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat = WavSampleFormat.Integer, IReadOnlyDictionary<string, string>? tags = null); // does NOT dispose destStream; no CanSeek requirement at all -- every header size field is already known from totalFrames up front, so it writes the complete header once and never seeks back. The destination-Stream primitive for docs/feature-roadmap.md item 1's own still-open ConvertFile/CutFile Stream overloads -- not yet wired into AudioCutter/IMediaEncoder itself
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
     public void Finish(); // flushes/pads a pending ADPCM block or trailing Yamaha ADPCM nibble
 }

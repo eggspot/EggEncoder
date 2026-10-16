@@ -132,6 +132,17 @@ file extension to check), so `Probe(Stream, AudioFormat.Mov)` always reports `Fo
 `FormatLongName` as `"mov"`/`"QuickTime / MOV"`, the same default the path-based overload itself
 already falls back to for any extension other than `.mp4`.
 
+`WavWriter.Create` also has a `Stream`-based overload now (`WavWriter.Create(Stream destStream,
+int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat =
+Integer, IReadOnlyDictionary<string, string>? tags = null)`) -- the destination-Stream codec
+primitive for `docs/feature-roadmap.md` item 1's own still-open "`ConvertFile`/`CutFile` Stream
+overloads" half. Unlike every reader above, it needs no `Stream.CanSeek` at all: a WAV header's
+every size field is already known from `totalFrames` up front, so it writes the complete header
+once and never seeks back. Does not dispose the caller's stream. Not yet wired into
+`AudioCutter`/`IMediaEncoder.ConvertFile`/`CutFile` themselves -- that needs its own
+`AudioFormat`-keyed destination dispatcher (today's dispatch is by file extension, which a
+`Stream` destination doesn't have), a separate, not-yet-done piece of the same roadmap item.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

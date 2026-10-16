@@ -140,8 +140,21 @@ MP3 is what's left for `Probe`. It's still specifically blocked on NLayer's own
 "never dispose the caller's stream" contract without further work (e.g. wrapping the stream in a
 disposal-suppressing adapter, or an upstream NLayer change) -- not attempted here, since that's a
 real design decision for the owner, not a mechanical port like every other format this item has
-confirmed. `ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) are
-also still not started -- that, plus MP3 above, are what's still open for this item.
+confirmed.
+
+`ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) have their
+first concrete piece: `WavWriter.Create(Stream, ...)`. Unlike every reader above, it turns out to
+need no `Stream.CanSeek` at all -- a WAV header's every size field is already known from
+`totalFrames` up front, so it writes the complete header once and never seeks back, unlike (for
+example) `FlacEncoderSession`'s own STREAMINFO patch-up, which does seek back and will need a real
+`CanSeek` requirement when its own turn comes. This PR deliberately stopped at the codec-level
+primitive -- `AudioCutter`/`IMediaEncoder.ConvertFile`/`CutFile` don't yet expose a
+Stream-to-Stream overload that uses it, since that needs its own `AudioFormat`-keyed destination
+dispatcher (today's `AudioCutter.DecodeSource` dispatches by file extension, which a `Stream`
+destination doesn't have) -- a reasonable next slice, not done here. That dispatcher, every other
+destination codec's own seekability (several, like FLAC, will need `CanSeek`; others may not, each
+to be confirmed per format rather than assumed), and MP3's own blocker above are all what's still
+open for this item.
 
 ## 2. Format-native metadata tags
 
