@@ -76,6 +76,44 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
+        public void Probe_WithXingHeaderTruncatedRightAfterItsFlags_Should_NotThrow_And_FallBackTo_FileSizeEstimate()
+        {
+            // vbr_q4.mp3's own real Xing header declares flags 0x0F (frame-count, byte-count, TOC,
+            // and VBR-quality all present) -- truncating the file to end exactly 8 bytes into that
+            // header (the "Xing" tag plus its 4-byte flags field, nothing more) means none of the
+            // four fields the flags claim to carry actually exist. TryReadVbrHeader must degrade
+            // gracefully to "no usable VBR info" the same way it already does for a file with no
+            // Xing/Info header at all, not throw EndOfStreamException from an unguarded ReadExactly
+            // on a field the flags promised but the file doesn't actually contain.
+            var tempPath = Path.Combine(Path.GetTempPath(), $"vbr_truncated_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                var bytes = File.ReadAllBytes(Path.GetFullPath("Codecs/Mp3/vbr_q4.mp3"));
+                var tagOffset = IndexOf(bytes, "Xing"u8);
+                tagOffset.Should().BeGreaterThan(0, "the fixture is expected to carry a real Xing header");
+
+                File.WriteAllBytes(tempPath, bytes[..(tagOffset + 8)]);
+
+                var act = () => Mp3Probe.Probe(tempPath);
+
+                act.Should().NotThrow();
+                var result = act();
+                result.IsVariableBitRate.Should().BeFalse();
+                result.EncoderDelaySamples.Should().BeNull();
+                result.EncoderPaddingSamples.Should().BeNull();
+            }
+            finally
+            {
+                File.Delete(tempPath);
+            }
+        }
+
+        private static int IndexOf(byte[] haystack, ReadOnlySpan<byte> needle)
+        {
+            return haystack.AsSpan().IndexOf(needle);
+        }
+
+        [Fact]
         public void Probe_WithSyntheticStreamHavingNoId3v2Tag_Should_Return_NullTags()
         {
             // None of this directory's own real fixtures lack an ID3v2 tag (every one of them

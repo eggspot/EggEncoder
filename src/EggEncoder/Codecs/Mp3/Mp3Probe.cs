@@ -166,6 +166,14 @@ namespace EggEncoder.Codecs.Mp3
             return new Mp3FrameHeader(sampleRate, bitrateKbps, channels, frameLengthBytes, sideInfoSize, hasCrc, isMpeg1);
         }
 
+        // Degrades gracefully to null -- the same "decorative/optional, stop at the first thing
+        // that isn't there" convention TryReadLameTagDelayAndPadding below already established --
+        // for a file whose Xing/Info flags claim a field (frame-count/byte-count/TOC/VBR-quality)
+        // that the file doesn't actually have room for, not just for a header that's missing
+        // entirely. Each of those four fields is individually length-guarded before being read for
+        // exactly that reason: a real-world file can declare more fields present in its flags than
+        // it actually contains (most commonly from truncation, but the flags and the bytes that
+        // follow are both just as untrusted as any other header value here).
         private static VbrInfo? TryReadVbrHeader(Stream stream, long frameOffset, Mp3FrameHeader header)
         {
             var vbrHeaderOffset = frameOffset + 4 + (header.HasCrc ? 2 : 0) + header.SideInfoSize;
@@ -193,6 +201,11 @@ namespace EggEncoder.Codecs.Mp3
 
             if ((flags & 0x01) != 0)
             {
+                if (stream.Position + 4 > stream.Length)
+                {
+                    return null;
+                }
+
                 Span<byte> frameCountBuffer = stackalloc byte[4];
                 stream.ReadExactly(frameCountBuffer);
                 frameCount = BinaryPrimitives.ReadUInt32BigEndian(frameCountBuffer);
@@ -200,6 +213,11 @@ namespace EggEncoder.Codecs.Mp3
 
             if ((flags & 0x02) != 0)
             {
+                if (stream.Position + 4 > stream.Length)
+                {
+                    return null;
+                }
+
                 Span<byte> byteCountBuffer = stackalloc byte[4];
                 stream.ReadExactly(byteCountBuffer);
                 byteCount = BinaryPrimitives.ReadUInt32BigEndian(byteCountBuffer);
@@ -207,11 +225,21 @@ namespace EggEncoder.Codecs.Mp3
 
             if ((flags & 0x04) != 0)
             {
+                if (stream.Position + 100 > stream.Length)
+                {
+                    return null;
+                }
+
                 stream.Position += 100; // TOC (seek table) -- not surfaced by this probe
             }
 
             if ((flags & 0x08) != 0)
             {
+                if (stream.Position + 4 > stream.Length)
+                {
+                    return null;
+                }
+
                 stream.Position += 4; // VBR quality -- not surfaced by this probe
             }
 
