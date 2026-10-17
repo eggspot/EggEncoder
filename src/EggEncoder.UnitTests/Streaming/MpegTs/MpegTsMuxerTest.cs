@@ -38,6 +38,27 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         }
 
         [Fact]
+        public void BuildSegment_Pat_And_Pmt_Crc32_Should_MatchIndependentlyComputedReferenceValues()
+        {
+            // Reference CRC-32/MPEG-2 values for this exact section content (table_id through the
+            // program/stream loop, for this muxer's own chosen transport_stream_id=1/program_number=1/
+            // PMT_PID=0x1000/PCR_PID=elementary_PID=0x0100), independently cross-checked against a
+            // real ffmpeg-produced .ts fixture that happens to choose the exact same values -- not
+            // just re-deriving the same algorithm this test is meant to verify.
+            const uint expectedPatCrc = 0x2ab104b2;
+            const uint expectedPmtCrc = 0xb69bc0d9;
+
+            var muxer = new MpegTsMuxer(Channels, SampleRate);
+            var segment = muxer.BuildSegment(BuildFrames([16]));
+
+            var patPacket = segment.AsSpan(0, TsPacketSize);
+            var pmtPacket = segment.AsSpan(TsPacketSize, TsPacketSize);
+
+            ReadCrc32(patPacket, sectionLength: 13).Should().Be(expectedPatCrc);
+            ReadCrc32(pmtPacket, sectionLength: 18).Should().Be(expectedPmtCrc);
+        }
+
+        [Fact]
         public void BuildSegment_Should_StartWithWellFormedPatThenPmt()
         {
             var muxer = new MpegTsMuxer(Channels, SampleRate);
@@ -142,6 +163,15 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         }
 
         private static int ReadPid(ReadOnlySpan<byte> packet) => ((packet[1] & 0x1F) << 8) | packet[2];
+
+        // CRC32 is always the last 4 bytes of a PSI section; section_length counts every byte
+        // after the section_length field itself (including the CRC), so it lands at
+        // pointer_field(1) + table_id(1) + section_length_field(2) + (sectionLength - 4) bytes in.
+        private static uint ReadCrc32(ReadOnlySpan<byte> packet, int sectionLength)
+        {
+            var offset = 4 + sectionLength;
+            return (uint)((packet[offset] << 24) | (packet[offset + 1] << 16) | (packet[offset + 2] << 8) | packet[offset + 3]);
+        }
 
         private static int ParsePatForPmtPid(ReadOnlySpan<byte> patPacket)
         {
