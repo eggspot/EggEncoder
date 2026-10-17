@@ -578,7 +578,8 @@ from here on).
 **Size**: small–medium, now that item 3a's own segment-cutting/playlist-writing machinery already
 exists to build on.
 
-**Status**: done (PR TBD). Added a second public `HlsSegmenter` constructor overload taking
+**Status**: done ([PR #113](https://github.com/eggspot/EggEncoder/pull/113)). Added a second public
+`HlsSegmenter` constructor overload taking
 `liveWindowSize` (the existing VOD constructor is untouched and still the default choice); both
 delegate to one shared private constructor so the two modes can't drift apart. `CutSegment` prunes
 the oldest segment(s) in a `while` loop once the retained count exceeds the window, calling
