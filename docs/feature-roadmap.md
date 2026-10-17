@@ -156,13 +156,15 @@ exactly the same way it already does for a path-based one (verified directly: a 
 `DeferredFixedHeaderSink`'s own buffer-then-patch path, the same as the path-based WAV case).
 `DecodeSourceStream` covers every source format `Probe(Stream, AudioFormat)` already does (every
 format except MP3, for the same NLayer `MpegFile(Stream)`-has-no-`leaveOpen` reason). `OpenSinkStream`
-is WAV-only so far, via `WavWriter.Create(Stream, ...)` -- the one destination primitive that
-happens to need no `Stream.CanSeek` at all, since a WAV header's every size field is already known
-from `totalFrames` up front (unlike, say, `FlacEncoderSession`'s own STREAMINFO patch-up, which does
-seek back and will need a real `CanSeek` requirement when its own turn comes). Every other
-destination codec's own `Stream` write side (and its own seekability requirement, to be confirmed
-per format rather than assumed) is what's still open for this item, alongside MP3's own blocker
-above.
+now covers WAV/AIFF/AU, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
+`AuWriter.Create(Stream, ...)` -- all three happen to need no `Stream.CanSeek` at all, since each
+one's header is a fixed size with every field already known from `totalFrames` up front (unlike,
+say, `FlacEncoderSession`'s own STREAMINFO patch-up, which does seek back and will need a real
+`CanSeek` requirement when its own turn comes). `AiffWriter`/`AuWriter` were widened mechanically,
+the same validate-then-write refactor `WavWriter` already went through -- neither needed any seek
+logic touched since they had none to begin with. Every other destination codec's own `Stream` write
+side (and its own seekability requirement, to be confirmed per format rather than assumed) is what's
+still open for this item, alongside MP3's own blocker above.
 
 ## 2. Format-native metadata tags
 

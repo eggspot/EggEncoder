@@ -21,7 +21,8 @@ namespace EggEncoder.Codecs.Aiff
     // fixtures: an encoder is not expected to populate this field, only to leave room for it).
     public sealed class AiffWriter : IAudioSink
     {
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _bytesPerDiskSample;
         private readonly AiffSampleFormat _sampleFormat;
@@ -30,9 +31,10 @@ namespace EggEncoder.Codecs.Aiff
         private byte[] _rawBytes = [];
         private bool _disposed;
 
-        private AiffWriter(FileStream stream, int channels, int bytesPerDiskSample, AiffSampleFormat sampleFormat, bool needsPadByte)
+        private AiffWriter(Stream stream, bool leaveOpen, int channels, int bytesPerDiskSample, AiffSampleFormat sampleFormat, bool needsPadByte)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _bytesPerDiskSample = bytesPerDiskSample;
             _sampleFormat = sampleFormat;
@@ -59,6 +61,20 @@ namespace EggEncoder.Codecs.Aiff
         }
 
         /// <summary>
+        /// Creates an AIFF destination from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a destination that isn't a local file (an HTTP request body, blob storage, an in-memory
+        /// buffer). No <see cref="Stream.CanSeek"/> requirement, the same reasoning as
+        /// <c>Wav.WavWriter.Create(Stream, ...)</c>'s own doc comment: every FORM/COMM/SSND size field
+        /// is already known from <paramref name="totalFrames"/> up front, so this writes the complete
+        /// header once and never seeks back. Does NOT dispose <paramref name="destStream"/> -- the
+        /// caller opened it, so the caller is responsible for disposing it.
+        /// </summary>
+        public static AiffWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            return Create(destStream, channels, sampleRate, bitsPerSample, totalFrames, AiffSampleFormat.Integer, tags);
+        }
+
+        /// <summary>
         /// Same as <see cref="Create(string, int, int, int, long, IReadOnlyDictionary{string, string}?)"/>,
         /// but additionally selects the on-disk sample representation (see <see cref="AiffSampleFormat"/>).
         /// <see cref="AiffSampleFormat.Integer"/> (the default) is byte-for-byte what the
@@ -69,10 +85,34 @@ namespace EggEncoder.Codecs.Aiff
         public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags = null)
         {
             var (compressionType, commSampleSize, bytesPerDiskSample) = DetermineAifcEncoding(filePath, sampleFormat, bitsPerSample);
-            var isAifc = sampleFormat != AiffSampleFormat.Integer;
             var tagChunkBytes = BuildTagChunks(tags);
 
+            // No outer try/catch needed here -- WriteAndCreate's own catch already disposes stream
+            // (since leaveOpen is false) before rethrowing.
             var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            return WriteAndCreate(stream, leaveOpen: false, channels, sampleRate, totalFrames, sampleFormat, compressionType, commSampleSize, bytesPerDiskSample, tagChunkBytes);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Create(string, int, int, int, long, AiffSampleFormat, IReadOnlyDictionary{string, string}?)"/>,
+        /// but from an already-open <see cref="Stream"/> -- see the four-parameter
+        /// <see cref="Create(Stream, int, int, int, long, IReadOnlyDictionary{string, string}?)"/>
+        /// overload's own doc comment for the ownership/seekability rationale.
+        /// </summary>
+        public static AiffWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+
+            var (compressionType, commSampleSize, bytesPerDiskSample) = DetermineAifcEncoding("<stream>", sampleFormat, bitsPerSample);
+            var tagChunkBytes = BuildTagChunks(tags);
+
+            return WriteAndCreate(destStream, leaveOpen: true, channels, sampleRate, totalFrames, sampleFormat, compressionType, commSampleSize, bytesPerDiskSample, tagChunkBytes);
+        }
+
+        private static AiffWriter WriteAndCreate(Stream stream, bool leaveOpen, int channels, int sampleRate, long totalFrames, AiffSampleFormat sampleFormat, string compressionType, int commSampleSize, int bytesPerDiskSample, byte[] tagChunkBytes)
+        {
+            var isAifc = sampleFormat != AiffSampleFormat.Integer;
+
             try
             {
                 var blockAlign = channels * bytesPerDiskSample;
@@ -125,11 +165,15 @@ namespace EggEncoder.Codecs.Aiff
                 WriteUInt32BigEndian(writer, 0); // offset
                 WriteUInt32BigEndian(writer, 0); // blockSize -- always 0 here; none of this writer's compressionTypes are block-structured
 
-                return new AiffWriter(stream, channels, bytesPerDiskSample, sampleFormat, needsPadByte);
+                return new AiffWriter(stream, leaveOpen, channels, bytesPerDiskSample, sampleFormat, needsPadByte);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -355,7 +399,10 @@ namespace EggEncoder.Codecs.Aiff
                 _stream.WriteByte(0);
             }
 
-            _stream.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
 
         private static void WriteUInt32BigEndian(BinaryWriter writer, uint value)

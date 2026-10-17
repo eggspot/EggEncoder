@@ -19,12 +19,15 @@ namespace EggEncoder.Codecs
     // OpenSink (extension-keyed) and AudioCutter.Pipeline.cs's own pipeline-aware Convert/Cut, which
     // this reuses CutOptions/BuildCutPipeline/ForwardOverlap/GetSampleRange/ScratchBuffer/
     // DeferredFixedHeaderSink from directly rather than duplicating any of that logic. Source: every
-    // format WavWriter.Create(Stream, ...)/this project's own Stream-based Probe already decodes from a
-    // Stream (see NativeEncoder.Stream.cs) -- MP3 is the one exception, still blocked on NLayer's own
-    // MpegFile(Stream) having no leaveOpen option. Destination: WAV only so far, via
-    // WavWriter.Create(Stream, ...) -- every other destination codec's own Stream write side (and its
-    // own seekability requirement, several of which will differ from WAV's own "no CanSeek needed at
-    // all") is still open, one format at a time, the same way Stream-based Probe itself was rolled out.
+    // format this project's own Stream-based Probe already decodes from a Stream (see
+    // NativeEncoder.Stream.cs) -- MP3 is the one exception, still blocked on NLayer's own
+    // MpegFile(Stream) having no leaveOpen option. Destination: WAV/AIFF/AU so far, via
+    // WavWriter.Create(Stream, ...)/AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...) --
+    // all three happen to need no Stream.CanSeek at all (each writes a fixed-size header with every
+    // size field already known from totalFrames up front, no patch-up on Finish()). Every other
+    // destination codec's own Stream write side (and its own seekability requirement -- several,
+    // like FLAC, will need CanSeek) is still open, one format at a time, the same way Stream-based
+    // Probe itself was rolled out.
     public static partial class AudioCutter
     {
         /// <summary>
@@ -282,14 +285,23 @@ namespace EggEncoder.Codecs
 
         private static IAudioSink OpenSinkStream(AudioFormat destFormat, Stream dest, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames)
         {
-            if (destFormat == AudioFormat.Wav)
+            switch (destFormat)
             {
-                return exactTotalFrames.HasValue
-                    ? WavWriter.Create(dest, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
-                    : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(dest, channels, sampleRate, bitsPerSample, totalFrames));
+                case AudioFormat.Wav:
+                    return exactTotalFrames.HasValue
+                        ? WavWriter.Create(dest, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
+                        : new DeferredFixedHeaderSink(channels, totalFrames => WavWriter.Create(dest, channels, sampleRate, bitsPerSample, totalFrames));
+                case AudioFormat.Aiff:
+                    return exactTotalFrames.HasValue
+                        ? AiffWriter.Create(dest, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
+                        : new DeferredFixedHeaderSink(channels, totalFrames => AiffWriter.Create(dest, channels, sampleRate, bitsPerSample, totalFrames));
+                case AudioFormat.Au:
+                    return exactTotalFrames.HasValue
+                        ? AuWriter.Create(dest, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
+                        : new DeferredFixedHeaderSink(channels, totalFrames => AuWriter.Create(dest, channels, sampleRate, bitsPerSample, totalFrames));
+                default:
+                    throw new NotSupportedException($"Converting to an AudioFormat.{destFormat} stream destination is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");
             }
-
-            throw new NotSupportedException($"Converting to an AudioFormat.{destFormat} stream destination is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");
         }
     }
 }

@@ -13,7 +13,8 @@ namespace EggEncoder.Codecs.Au
     // fixture whose data region ends at an odd byte offset), so Dispose has nothing to patch.
     public sealed class AuWriter : IAudioSink
     {
-        private readonly FileStream _stream;
+        private readonly Stream _stream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _bytesPerDiskSample;
         private readonly AuSampleFormat _sampleFormat;
@@ -21,9 +22,10 @@ namespace EggEncoder.Codecs.Au
         private byte[] _rawBytes = [];
         private bool _disposed;
 
-        private AuWriter(FileStream stream, int channels, int bytesPerDiskSample, AuSampleFormat sampleFormat)
+        private AuWriter(Stream stream, bool leaveOpen, int channels, int bytesPerDiskSample, AuSampleFormat sampleFormat)
         {
             _stream = stream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _bytesPerDiskSample = bytesPerDiskSample;
             _sampleFormat = sampleFormat;
@@ -40,6 +42,20 @@ namespace EggEncoder.Codecs.Au
         }
 
         /// <summary>
+        /// Creates an AU destination from an already-open <see cref="Stream"/> instead of a file path --
+        /// for a destination that isn't a local file (an HTTP request body, blob storage, an in-memory
+        /// buffer). No <see cref="Stream.CanSeek"/> requirement, the same reasoning as
+        /// <c>Wav.WavWriter.Create(Stream, ...)</c>'s own doc comment: the header's own dataSize field
+        /// is already known from <paramref name="totalFrames"/> up front, so this writes the complete
+        /// header once and never seeks back. Does NOT dispose <paramref name="destStream"/> -- the
+        /// caller opened it, so the caller is responsible for disposing it.
+        /// </summary>
+        public static AuWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames)
+        {
+            return Create(destStream, channels, sampleRate, bitsPerSample, totalFrames, AuSampleFormat.Integer);
+        }
+
+        /// <summary>
         /// Same as <see cref="Create(string, int, int, int, long)"/>, but additionally selects the
         /// on-disk sample representation (see <see cref="AuSampleFormat"/>).
         /// </summary>
@@ -47,7 +63,29 @@ namespace EggEncoder.Codecs.Au
         {
             var (encodingValue, bytesPerDiskSample) = DetermineEncoding(filePath, sampleFormat, bitsPerSample);
 
+            // No outer try/catch needed here -- WriteAndCreate's own catch already disposes stream
+            // (since leaveOpen is false) before rethrowing.
             var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            return WriteAndCreate(stream, leaveOpen: false, channels, sampleRate, totalFrames, sampleFormat, encodingValue, bytesPerDiskSample);
+        }
+
+        /// <summary>
+        /// Same as <see cref="Create(string, int, int, int, long, AuSampleFormat)"/>, but from an
+        /// already-open <see cref="Stream"/> -- see the four-parameter
+        /// <see cref="Create(Stream, int, int, int, long)"/> overload's own doc comment for the
+        /// ownership/seekability rationale.
+        /// </summary>
+        public static AuWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+
+            var (encodingValue, bytesPerDiskSample) = DetermineEncoding("<stream>", sampleFormat, bitsPerSample);
+
+            return WriteAndCreate(destStream, leaveOpen: true, channels, sampleRate, totalFrames, sampleFormat, encodingValue, bytesPerDiskSample);
+        }
+
+        private static AuWriter WriteAndCreate(Stream stream, bool leaveOpen, int channels, int sampleRate, long totalFrames, AuSampleFormat sampleFormat, uint encodingValue, int bytesPerDiskSample)
+        {
             try
             {
                 var blockAlign = channels * bytesPerDiskSample;
@@ -62,11 +100,15 @@ namespace EggEncoder.Codecs.Au
                 WriteUInt32BigEndian(writer, (uint)sampleRate);
                 WriteUInt32BigEndian(writer, (uint)channels);
 
-                return new AuWriter(stream, channels, bytesPerDiskSample, sampleFormat);
+                return new AuWriter(stream, leaveOpen, channels, bytesPerDiskSample, sampleFormat);
             }
             catch
             {
-                stream.Dispose();
+                if (!leaveOpen)
+                {
+                    stream.Dispose();
+                }
+
                 throw;
             }
         }
@@ -209,7 +251,11 @@ namespace EggEncoder.Codecs.Au
             }
 
             _disposed = true;
-            _stream.Dispose();
+
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
         }
 
         private static void WriteUInt32BigEndian(BinaryWriter writer, uint value)
