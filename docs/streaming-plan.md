@@ -248,15 +248,16 @@ requiring two different encoders for the same codec.
 |---|------|------------|
 | 1 | [Incremental streaming encoder API + AAC-LC session](#1-incremental-streaming-encoder-api--aac-lc-session) | none |
 | 2 | [fMP4/CMAF muxer (init + media segments)](#2-fmp4cmaf-muxer-init--media-segments) | 1, AAC encoder-delay prerequisite |
-| 3 | [HLS segmenter + m3u8 playlist writer (VOD + live) + sink abstraction](#3-hls-segmenter--m3u8-playlist-writer-vod--live--sink-abstraction) | 2 |
-| 4 | [MPEG-TS muxer (alternative segment format)](#4-mpeg-ts-muxer-alternative-segment-format) | 1, 3 |
-| 5 | [Master playlist (multi-bitrate)](#5-master-playlist-multi-bitrate) | 3 |
+| 3a | [HLS segmenter + m3u8 playlist writer (VOD only) + sink abstraction](#3a-hls-segmenter--m3u8-playlist-writer-vod-only--sink-abstraction) | 2 |
+| 3b | [HLS live sliding window](#3b-hls-live-sliding-window) | 3a |
+| 4 | [MPEG-TS muxer (alternative segment format)](#4-mpeg-ts-muxer-alternative-segment-format) | 1, 3a |
+| 5 | [Master playlist (multi-bitrate)](#5-master-playlist-multi-bitrate) | 3a |
 | 6 | [Live input source: PCM pump, timestamps, drift/silence-fill policy](#6-live-input-source-pcm-pump-timestamps-driftsilence-fill-policy) | 1 |
-| 7 | [Low-latency HLS (future sketch, not scheduled)](#7-low-latency-hls-future-sketch-not-scheduled) | 3 |
+| 7 | [Low-latency HLS (future sketch, not scheduled)](#7-low-latency-hls-future-sketch-not-scheduled) | 3a, 3b |
 | 8 | [Opus/MP3/FLAC streaming encoder sessions](#8-opusmp3flac-streaming-encoder-sessions) | 1 |
 
-Items 1→2→3 are a strict chain (each literally can't be tested without the previous one existing).
-4 and 5 both branch off 3 and don't depend on each other. 6 and 8 branch off 1 only and can be done
+Items 1→2→3a are a strict chain (each literally can't be tested without the previous one existing).
+3b, 4, and 5 all branch off 3a and don't depend on each other. 6 and 8 branch off 1 only and can be done
 in any order relative to 2–5 (they don't touch muxing/packaging at all). 7 is deliberately listed
 last and unscheduled — see its own section.
 
@@ -452,7 +453,7 @@ ffmpeg-decodable, but it does not block this item's own acceptance criteria or a
 this plan, since every later item's own oracle is either this project's own reader/decoder or
 `ffprobe`'s metadata reporting, neither of which this gap affects.
 
-## 3. HLS segmenter + m3u8 playlist writer (VOD + live) + sink abstraction
+## 3a. HLS segmenter + m3u8 playlist writer (VOD only) + sink abstraction
 
 **Problem**: item 2 can build one segment at a time, but nothing yet decides *when* to cut a
 segment, writes the resulting bytes anywhere real, or describes the resulting segments in a
@@ -486,29 +487,30 @@ playlist a player can actually fetch.
   satisfies as long as `targetDurationSeconds` already has reasonable headroom — document this
   explicitly rather than silently hoping no caller notices), then hands the accumulated frames to
   item 2's `FmpMediaSegmentWriter`, writes the result via `IStreamingSink.WriteMediaSegment`, and
-  appends a segment descriptor (`duration`, `sequenceNumber`) to its own internal list.
-  - **VOD mode**: every segment ever produced stays in the list; `Complete()` flushes the last
-    (possibly short) segment, writes the final playlist with `#EXT-X-ENDLIST`, and that's it.
-  - **Live mode**: constructed with a `liveWindowSize` (number of segments to keep *listed and
-    retained*); once the list exceeds that size, the oldest segment is dropped from the list (its
-    `sequenceNumber` is no longer described in the playlist, and `#EXT-X-MEDIA-SEQUENCE` advances
-    to match) and `IStreamingSink.DeleteMediaSegment` is called for it — matching real live HLS's
-    own sliding-window disk-usage behavior. No `#EXT-X-ENDLIST` is ever written in live mode until
-    an explicit `Complete()` call signals the live stream itself has ended.
+  appends a segment descriptor (`duration`, `sequenceNumber`) to its own internal list. **VOD mode
+  only in this item** (see item 3b for the live sliding window): every segment ever produced stays
+  in the list; `Complete()` flushes the last (possibly short) segment, writes the final playlist
+  with `#EXT-X-ENDLIST`, and that's it.
 - `src/EggEncoder/Streaming/Hls/M3u8PlaylistWriter.cs`: a stateless formatter, `BuildMediaPlaylist
-  (int version, int targetDurationSeconds, long mediaSequence, IReadOnlyList<HlsSegmentDescriptor>
-  segments, string? initSegmentUri, bool endList) -> string`. Emits, per `RFC 8216` §4.3.3/§4.4:
-  `#EXTM3U`, `#EXT-X-VERSION:{version}` (`6` — per `RFC 8216` §7's own compatibility table, the
-  minimum version an `EXT-X-MAP` tag requires when `EXT-X-I-FRAMES-ONLY` is absent, which is this
-  plan's own case; confirm against a real fMP4-based HLS stream's own playlist before shipping,
-  the same "don't ship a spec-table reading unverified" discipline every other numeric
-  container/protocol constant in this plan already gets), `#EXT-X-TARGETDURATION:{n}`, `#EXT-X-MEDIA-SEQUENCE:{mediaSequence}`, `#EXT-X-MAP:URI="
-  {initSegmentUri}"` (once, only when fMP4 segments are in use — MPEG-TS segments from item 4 don't
-  need it), then per segment `#EXTINF:{duration},` + the segment's own URI, with
-  `#EXT-X-DISCONTINUITY` emitted if a future caller ever needs to signal one (not actually produced
-  by anything in this plan yet, but the writer accepts the flag per-segment from day one so a later
-  item doesn't need a breaking signature change), and finally `#EXT-X-ENDLIST` only when `endList`
-  is true.
+  (int targetDurationSeconds, long mediaSequence, IReadOnlyList<HlsSegmentDescriptor> segments,
+  string? initSegmentUri, bool endList) -> string` (no `version` parameter -- this writer always
+  declares `Version = 6`, per `RFC 8216` §7's own compatibility table the minimum an `EXT-X-MAP` tag
+  requires when `EXT-X-I-FRAMES-ONLY` is absent, which is this plan's own only case -- a public
+  const rather than a configurable parameter, since nothing in this plan ever needs a different
+  value). Emits, per `RFC 8216` §4.3.3/§4.4: `#EXTM3U`, `#EXT-X-VERSION:6`, `#EXT-X-TARGETDURATION:
+  {n}`, `#EXT-X-MEDIA-SEQUENCE:{mediaSequence}`, `#EXT-X-MAP:URI="{initSegmentUri}"` (omitted when
+  `initSegmentUri` is `null` -- MPEG-TS segments from item 4 need no init segment at all), then per
+  segment `#EXTINF:{duration},` + the segment's own URI, and finally `#EXT-X-ENDLIST` only when
+  `endList` is true. `#EXT-X-DISCONTINUITY` is not implemented -- nothing in this plan produces a
+  genuine discontinuity yet (that would need a source-level concept, e.g. a live-input dropout from
+  item 6, to signal one); add it if/when something does, rather than threading an always-false flag
+  through every segment descriptor speculatively now.
+- `#EXT-X-TARGETDURATION`'s own value is **not** simply the configured `targetDurationSeconds`
+  echoed back -- since cutting on frame boundaries only can overshoot it, `HlsSegmenter` tracks the
+  real maximum segment duration observed so far and writes `ceil(max(configured, observed))` on
+  every playlist rewrite, so the tag can never be violated by a segment the playlist already lists
+  (RFC 8216 §4.3.3.1 requires `TARGETDURATION` be no shorter than any listed segment's own
+  duration) -- confirmed by a test that deliberately forces an overshoot.
 
 **Acceptance criteria**:
 
@@ -519,25 +521,61 @@ playlist a player can actually fetch.
   duration within the same one-frame tolerance.
 - Playlist grammar validation: every required tag (`#EXTM3U`, `#EXT-X-VERSION`,
   `#EXT-X-TARGETDURATION`, `#EXT-X-MEDIA-SEQUENCE`) present exactly once, `#EXTINF` lines paired
-  1:1 with segment URI lines, `#EXT-X-ENDLIST` present for VOD and absent for an in-progress live
-  playlist — checked by a small, test-only line-by-line validator (not a full m3u8 parser; that's
-  more machinery than this plan's own test needs justify).
-- Live-mode sliding window: after producing more segments than `liveWindowSize`, the playlist lists
-  exactly `liveWindowSize` segments, `#EXT-X-MEDIA-SEQUENCE` matches the oldest *retained* segment's
-  own sequence number, and `IStreamingSink.DeleteMediaSegment` was called exactly once per dropped
-  segment, each with the correct sequence number, in order.
-- `InMemoryStreamingSink` round-trip: segments/playlist written through it are byte-identical to
-  what `FileSystemStreamingSink` would have written to disk for the same session (proves the two
-  sink implementations are genuinely interchangeable, not just superficially similar).
-- `DelegateStreamingSink` forwards each call to the matching delegate exactly once, with the
-  correct arguments — a thin-wrapper correctness check, not a deep one.
+  1:1 with segment URI lines, `#EXT-X-ENDLIST` present for VOD and absent for an in-progress
+  (not-yet-`Complete()`d) playlist — checked by direct string/line assertions (not a full m3u8
+  parser; that's more machinery than this plan's own test needs justify).
+- `InMemoryStreamingSink`/`FileSystemStreamingSink`/`DelegateStreamingSink` each round-trip every
+  write correctly on their own terms (content equality for the first two, exact forwarding for the
+  third); `FileSystemStreamingSink` rejects a non-existent directory immediately, and
+  `DeleteMediaSegment` against an unwritten/already-deleted segment is a safe no-op on both
+  file-backed and in-memory sinks.
+- An end-to-end run through a real `AacStreamingEncoder` into a live `HlsSegmenter` (not just
+  directly-constructed synthetic frames) produces segments whose own `trun` sample counts sum back
+  to the exact total PCM sample count written.
 - 100% branch coverage across `HlsSegmenter`/`M3u8PlaylistWriter`/all three sink implementations.
 
-**Size**: large — this is the item where the most genuinely new policy logic (segment-boundary
-decisions, live-window bookkeeping) lives, on top of two other substantial new items underneath it.
-Consider splitting into two PRs (VOD-only first, live sliding window second) if it's genuinely too
-large for one — that split is explicitly fine per this plan's own "pick the first unchecked item"
-discipline; just check off a renamed/split pair instead of one item if you do.
+**Size**: large even after splitting off the live sliding window into its own item (3b) below —
+this is the item where the most genuinely new policy logic (segment-boundary decisions) lives, on
+top of two other substantial new items underneath it.
+
+**Status**: done ([PR TBD]). `IStreamingSink` + `FileSystemStreamingSink`/`InMemoryStreamingSink`/
+`DelegateStreamingSink` (`src/EggEncoder/Streaming/`), `HlsSegmenter`/`M3u8PlaylistWriter`/
+`HlsSegmentDescriptor` (`src/EggEncoder/Streaming/Hls/`). `HlsSegmenter.AddFrame` takes an
+`EncodedAudioFrame` directly (not a pre-converted `Mp4EncodedFrame`) -- it copies `Payload` into its
+own accumulating list internally, so a caller can wire `AacStreamingEncoder.Create(..., frame =>
+segmenter.AddFrame(frame))` directly with no manual conversion step. VOD-only, as this item's own
+title now reflects (split from the original combined item per this plan's own explicitly-allowed
+"split into two PRs" escape hatch) -- see item 3b for the live sliding window.
+
+## 3b. HLS live sliding window
+
+**Problem**: item 3a only ever grows its segment list and writes a single, final `#EXT-X-ENDLIST`
+playlist. A genuinely live stream needs a bounded playlist (so a player's own playlist fetch stays
+cheap and old segments can be reclaimed) that keeps growing at its live edge instead of ending.
+
+**Design**: extend `HlsSegmenter` with a live-mode constructor overload taking a `liveWindowSize`
+(the number of segments to keep *listed and retained*). Once the internal segment list exceeds that
+size after a cut, drop the oldest segment from the list (its `sequenceNumber` is no longer described
+in the playlist, and `#EXT-X-MEDIA-SEQUENCE` advances to match the new oldest-retained segment) and
+call `IStreamingSink.DeleteMediaSegment` for it — matching real live HLS's own sliding-window
+disk-usage behavior. No `#EXT-X-ENDLIST` is ever written in live mode until an explicit `Complete()`
+call signals the live stream itself has ended (at which point it behaves like VOD's own finalization
+from here on).
+
+**Acceptance criteria**:
+
+- After producing more segments than `liveWindowSize`, the playlist lists exactly `liveWindowSize`
+  segments, `#EXT-X-MEDIA-SEQUENCE` matches the oldest *retained* segment's own sequence number, and
+  `IStreamingSink.DeleteMediaSegment` was called exactly once per dropped segment, each with the
+  correct sequence number, in the order they aged out.
+- No `#EXT-X-ENDLIST` appears in any playlist write before `Complete()` is called in live mode; it
+  appears in the next write after.
+- `liveWindowSize` smaller than 1, or a VOD-mode call to whatever API surfaces live-only behavior,
+  throws a clear, typed exception rather than silently behaving like VOD or like an empty window.
+- 100% branch coverage of the new live-mode code paths.
+
+**Size**: small–medium, now that item 3a's own segment-cutting/playlist-writing machinery already
+exists to build on.
 
 **Status**: not started.
 

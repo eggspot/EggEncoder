@@ -817,6 +817,63 @@ existing plain ADTS file path) even though `ffprobe`'s own container-metadata re
 sample-rate/channels) is correct and this project's own `AacDecoder` decodes it fine -- see
 `docs/streaming-plan.md` item 2's own status note.
 
+An I/O-agnostic HLS output destination, and a VOD-mode segmenter/playlist-writer pair, sit on top:
+
+```csharp
+public interface IStreamingSink
+{
+    void WriteInitSegment(ReadOnlySpan<byte> bytes);
+    void WriteMediaSegment(long sequenceNumber, ReadOnlySpan<byte> bytes);
+    void WritePlaylist(ReadOnlySpan<byte> utf8Bytes); // called again every time the playlist changes
+    void DeleteMediaSegment(long sequenceNumber); // live sliding-window cleanup; never called in VOD mode
+}
+```
+
+Three implementations: `FileSystemStreamingSink(string directory, string filePrefix = "")` (writes
+`init.mp4`/`segment_{n}.m4s`/`playlist.m3u8`, throws `DirectoryNotFoundException` immediately if
+`directory` doesn't exist), `InMemoryStreamingSink` (no filesystem at all -- `InitSegment`/
+`MediaSegments`/`Playlist` properties expose what was written, the primary vehicle for this
+surface's own tests), and `DelegateStreamingSink` (four constructor-supplied delegates, one per
+interface member, each throwing `ArgumentNullException` if omitted -- the concrete answer to "a
+user callback for HTTP/S3 upload" without writing a full class).
+
+```csharp
+public readonly record struct HlsSegmentDescriptor(long SequenceNumber, double DurationSeconds, string Uri);
+
+public static class M3u8PlaylistWriter
+{
+    public const int Version = 6; // RFC 8216 §7's own minimum for EXT-X-MAP without EXT-X-I-FRAMES-ONLY
+
+    public static string BuildMediaPlaylist(int targetDurationSeconds, long mediaSequence,
+        IReadOnlyList<HlsSegmentDescriptor> segments, string? initSegmentUri, bool endList);
+}
+
+public sealed class HlsSegmenter // VOD mode only so far -- see docs/streaming-plan.md item 3b
+{
+    public const string InitSegmentUri = "init.mp4";
+
+    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink);
+    // writes the init segment immediately; throws ArgumentOutOfRangeException for a non-positive
+    // targetDurationSeconds, NotSupportedException for channels != 1 or an invalid sample rate
+
+    public void AddFrame(EncodedAudioFrame frame);
+    // takes the ref struct directly (copies Payload internally) -- wire
+    // AacStreamingEncoder.Create(..., frame => segmenter.AddFrame(frame)) with no conversion step;
+    // throws InvalidOperationException after Complete()
+
+    public void Complete(); // flushes the final (possibly short) segment and writes #EXT-X-ENDLIST; safe to call more than once
+}
+```
+
+`HlsSegmenter` accumulates frames and cuts a segment (via `FmpMediaSegmentWriter`) once their
+cumulative duration reaches `targetDurationSeconds` or more -- always on a frame boundary, so a real
+segment can overshoot the target by at most one frame's worth -- and rewrites the playlist through
+the sink after every cut. The playlist's own `#EXT-X-TARGETDURATION` is **not** simply the
+configured value echoed back: `HlsSegmenter` tracks the real maximum segment duration observed so
+far and writes `ceil(max(configured, observed))` on every rewrite, so the tag can never be violated
+by a segment the playlist already lists (RFC 8216 §4.3.3.1) -- confirmed by a test that deliberately
+forces an overshoot.
+
 ## AudioCutter — `EggEncoder.Codecs`
 
 Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:
