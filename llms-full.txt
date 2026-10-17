@@ -843,7 +843,7 @@ public readonly record struct HlsSegmentDescriptor(long SequenceNumber, double D
 
 public static class M3u8PlaylistWriter
 {
-    public const int Version = 6; // RFC 8216 §7's own minimum for EXT-X-MAP without EXT-X-I-FRAMES-ONLY
+    public const int Version = 7; // confirmed against a real ffmpeg-produced fMP4 HLS fixture using the same EXT-X-MAP combination, not derived from the spec's compatibility table alone
 
     public static string BuildMediaPlaylist(int targetDurationSeconds, long mediaSequence,
         IReadOnlyList<HlsSegmentDescriptor> segments, string? initSegmentUri, bool endList);
