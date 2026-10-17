@@ -817,7 +817,8 @@ existing plain ADTS file path) even though `ffprobe`'s own container-metadata re
 sample-rate/channels) is correct and this project's own `AacDecoder` decodes it fine -- see
 `docs/streaming-plan.md` item 2's own status note.
 
-An I/O-agnostic HLS output destination, and a VOD-mode segmenter/playlist-writer pair, sit on top:
+An I/O-agnostic HLS output destination, and a segmenter/playlist-writer pair (VOD and live sliding
+window), sit on top:
 
 ```csharp
 public interface IStreamingSink
@@ -848,13 +849,20 @@ public static class M3u8PlaylistWriter
         IReadOnlyList<HlsSegmentDescriptor> segments, string? initSegmentUri, bool endList);
 }
 
-public sealed class HlsSegmenter // VOD mode only so far -- see docs/streaming-plan.md item 3b
+public sealed class HlsSegmenter
 {
     public const string InitSegmentUri = "init.mp4";
 
     public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink);
-    // writes the init segment immediately; throws ArgumentOutOfRangeException for a non-positive
-    // targetDurationSeconds, NotSupportedException for channels != 1 or an invalid sample rate
+    // VOD mode: every segment ever produced stays in the playlist. Writes the init segment
+    // immediately; throws ArgumentOutOfRangeException for a non-positive targetDurationSeconds,
+    // NotSupportedException for channels != 1 or an invalid sample rate
+
+    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize);
+    // Live mode: once more segments exist than liveWindowSize retains, the oldest is dropped from
+    // the playlist (EXT-X-MEDIA-SEQUENCE advances to match) and IStreamingSink.DeleteMediaSegment
+    // is called for it; no EXT-X-ENDLIST is written until Complete() is actually called. Also
+    // throws ArgumentOutOfRangeException if liveWindowSize < 1
 
     public void AddFrame(EncodedAudioFrame frame);
     // takes the ref struct directly (copies Payload internally) -- wire
@@ -868,7 +876,8 @@ public sealed class HlsSegmenter // VOD mode only so far -- see docs/streaming-p
 `HlsSegmenter` accumulates frames and cuts a segment (via `FmpMediaSegmentWriter`) once their
 cumulative duration reaches `targetDurationSeconds` or more -- always on a frame boundary, so a real
 segment can overshoot the target by at most one frame's worth -- and rewrites the playlist through
-the sink after every cut. The playlist's own `#EXT-X-TARGETDURATION` is **not** simply the
+the sink after every cut. Both constructors delegate to one shared private constructor so the two
+modes can't drift apart. The playlist's own `#EXT-X-TARGETDURATION` is **not** simply the
 configured value echoed back: `HlsSegmenter` tracks the real maximum segment duration observed so
 far and writes `ceil(max(configured, observed))` on every rewrite, so the tag can never be violated
 by a segment the playlist already lists (RFC 8216 §4.3.3.1) -- confirmed by a test that deliberately

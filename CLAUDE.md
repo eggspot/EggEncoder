@@ -131,16 +131,21 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   -- the primary vehicle for this surface's own tests), and `DelegateStreamingSink` (four
   constructor-supplied delegates, one per interface member -- the concrete answer to "a user
   callback for HTTP/S3 upload" without writing a full class).
-- `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`) --
-  **VOD mode only so far** (see `docs/streaming-plan.md` item 3b for the live sliding window
-  follow-up). `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into
+- `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`).
+  `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into
   its own accumulating list internally), so a caller wires `AacStreamingEncoder.Create(..., frame =>
   segmenter.AddFrame(frame))` with no manual conversion step; it writes the init segment immediately
   at construction, accumulates frames until their cumulative duration reaches a configured
   `targetDurationSeconds` *or more* (segments are cut on frame boundaries only, so a real segment's
   duration is always >= target by at most one frame), cuts a segment via item 2's
-  `FmpMediaSegmentWriter`, and rewrites the playlist after every cut. `M3u8PlaylistWriter`'s own
-  `EXT-X-TARGETDURATION` value is **not** simply the configured target echoed back -- `HlsSegmenter`
+  `FmpMediaSegmentWriter`, and rewrites the playlist after every cut. Two modes, chosen by which
+  constructor is used (both delegate to one shared private constructor so they can't drift apart):
+  a VOD constructor (every segment ever produced stays in the playlist) and a live constructor
+  taking `liveWindowSize` (throws `ArgumentOutOfRangeException` if less than 1) -- once more
+  segments have been produced than that window retains, `CutSegment` drops the oldest in a `while`
+  loop, advancing `EXT-X-MEDIA-SEQUENCE` and calling `IStreamingSink.DeleteMediaSegment` for each;
+  no `EXT-X-ENDLIST` is written in live mode until `Complete()` is actually called. `M3u8PlaylistWriter`'s
+  own `EXT-X-TARGETDURATION` value is **not** simply the configured target echoed back -- `HlsSegmenter`
   tracks the real maximum segment duration observed so far and writes `ceil(max(configured,
   observed))` on every rewrite, so the tag can never be violated by a segment the playlist already
   lists (RFC 8216 §4.3.3.1).
