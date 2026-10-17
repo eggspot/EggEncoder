@@ -194,9 +194,6 @@ namespace EggEncoder.Codecs.Mov
 
         public static byte[] BuildEsdsBoxContent(byte[] audioSpecificConfig)
         {
-            const byte esDescriptorTag = EsDescriptorTag;
-            const byte decoderConfigDescriptorTag = DecoderConfigDescriptorTag;
-            const byte decoderSpecificInfoTag = DecoderSpecificInfoTag;
             const byte slConfigDescriptorTag = 0x06;
             const byte mpeg4AudioObjectTypeIndication = 0x40;
             const byte audioStreamTypeUpstreamReserved = 0x15; // streamType=5 (AudioStream), upStream=0, reserved=1
@@ -208,7 +205,7 @@ namespace EggEncoder.Codecs.Mov
                 .WriteUInt8(0).WriteUInt8(0).WriteUInt8(0) // bufferSizeDB(3) -- unknown/unspecified
                 .WriteUInt32(0) // maxBitrate -- unknown/unspecified
                 .WriteUInt32(0) // avgBitrate -- unknown/unspecified
-                .WriteUInt8(decoderSpecificInfoTag)
+                .WriteUInt8(DecoderSpecificInfoTag)
                 .WriteUInt8((byte)audioSpecificConfig.Length)
                 .WriteBytes(audioSpecificConfig)
                 .ToArray();
@@ -216,7 +213,7 @@ namespace EggEncoder.Codecs.Mov
             var esDescriptorContent = new Mp4BoxBuilder()
                 .WriteUInt16(0) // ES_ID
                 .WriteUInt8(0) // flags: no dependsOn/URL/OCR
-                .WriteUInt8(decoderConfigDescriptorTag)
+                .WriteUInt8(DecoderConfigDescriptorTag)
                 .WriteUInt8((byte)decoderConfigDescriptor.Length)
                 .WriteBytes(decoderConfigDescriptor)
                 .WriteUInt8(slConfigDescriptorTag)
@@ -226,7 +223,7 @@ namespace EggEncoder.Codecs.Mov
 
             return new Mp4BoxBuilder()
                 .WriteUInt32(0) // version(1) + flags(3)
-                .WriteUInt8(esDescriptorTag)
+                .WriteUInt8(EsDescriptorTag)
                 .WriteUInt8((byte)esDescriptorContent.Length)
                 .WriteBytes(esDescriptorContent)
                 .ToArray();
