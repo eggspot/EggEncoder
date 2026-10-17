@@ -243,7 +243,11 @@ namespace EggEncoder.Codecs.Flac
             _pendingFrameCount = 0;
         }
 
-        private static void WriteStreamInfoPayload(BitWriter writer, int channels, int bitsPerSample, int sampleRate, int minBlockSize, int maxBlockSize, long totalSamples, byte[] md5)
+        // internal rather than private so test code (and Streaming.Flac.FlacStreamingEncoder's own
+        // conformance tests specifically, which must build a real STREAMINFO out-of-band to make
+        // its own raw frames decodable at all -- see that type's own doc comment) can reuse this
+        // exact bit layout rather than duplicating it.
+        internal static void WriteStreamInfoPayload(BitWriter writer, int channels, int bitsPerSample, int sampleRate, int minBlockSize, int maxBlockSize, long totalSamples, byte[] md5)
         {
             writer.WriteBits((uint)minBlockSize, 16);
             writer.WriteBits((uint)maxBlockSize, 16);

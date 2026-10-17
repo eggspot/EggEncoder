@@ -193,7 +193,7 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   detecting drift at all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the
   pump can never disagree with it about either value.
 - `Streaming.Opus.OpusStreamingEncoder` (`Streaming/Opus/`) -- the second `IStreamingEncoder`
-  implementation (item 8's own Opus sub-item; FLAC still open), same scope as
+  implementation (item 8's own Opus sub-item), same scope as
   `Codecs.Opus.OpusEncoderSession` (fixed 48kHz, mono/stereo, 16-bit PCM), reusing that session's
   own Concentus-backed encode internals unchanged. Unlike `AacStreamingEncoder`,
   `EncoderDelaySamples` is a per-instance property reading the underlying encoder's own
@@ -207,7 +207,7 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   nothing remains pending afterward -- that exists in the file-based session purely to flag an Ogg
   page's own end-of-stream bit, a container-level concept this raw-packet encoder has none of.
 - `Streaming.Mp3.Mp3StreamingEncoder` (`Streaming/Mp3/`) -- the third `IStreamingEncoder`
-  implementation (item 8's own MP3 sub-item; FLAC still open), same scope as
+  implementation (item 8's own MP3 sub-item), same scope as
   `Codecs.Mp3.Mp3EncoderSession` (mono/stereo, 32000/44100/48000Hz, CBR only), reusing
   `Mp3FrameEncoder`'s own encode internals unchanged. Writes no dedicated "Info tag" (LAME-tag)
   header frame and no ID3v2 tag -- both are container/file-level conventions with no equivalent
@@ -222,6 +222,25 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   of `0`. Since MP3 frames are self-delimiting with no container needed at all, the streaming
   encoder's own raw frames are simply concatenated directly into a file for conformance testing,
   decoded through the project's own public `Mp3Decoder` (NLayer).
+- `Streaming.Flac.FlacStreamingEncoder` (`Streaming/Flac/`) -- the fourth and last
+  `IStreamingEncoder` implementation (item 8's own FLAC sub-item, completing it), same scope as
+  `Codecs.Flac.FlacEncoderSession` (any channel count, 1-32 bits per sample), reusing
+  `FlacFrameEncoder`'s own encode internals unchanged. Genuinely simpler than the other three, for
+  two real codec-level reasons: this encoder's own FIXED predictors are purely causal (never look
+  at "future" samples), so there is no lookahead to drain at all (`EncoderDelaySamples` is always
+  `0`); and FLAC's own frame format natively allows a final block shorter than the nominal size
+  with no padding, unlike AAC-LC/Opus/MP3's own fixed-or-padded sizes -- `Complete()` just flushes
+  whatever's pending, no mandatory extra frame. **Genuinely not independently decodable**, unlike
+  the other three: `FlacFrameEncoder`'s own existing frame header always defers sample-rate and
+  bits-per-sample to STREAMINFO (a pre-existing characteristic of this project's frame encoder, not
+  introduced here) -- building a STREAMINFO (a whole-stream, container-level concept) is out of
+  scope for this raw packet-level encoder, the same boundary every other `IStreamingEncoder` already
+  draws. `FlacEncoderSession.WriteStreamInfoPayload` was widened from `private` to `internal` (zero
+  behavior change) so this item's own conformance tests can build a real STREAMINFO out-of-band and
+  reuse that exact bit layout rather than duplicating it. Conformance: unlike the lossy AAC/Opus/MP3
+  sub-items' own SNR-floor checks, this verifies EXACT sample equality after a full decode (via the
+  project's own `FlacDecoder`) -- the same bar `docs/managed-codec-rewrite-plan.md` already holds
+  every lossless codec in this project to.
 
 ### Native binary packaging
 

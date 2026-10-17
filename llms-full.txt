@@ -999,8 +999,8 @@ public sealed class Mp3StreamingEncoder : IStreamingEncoder
 }
 ```
 
-The third `IStreamingEncoder` implementation (item 8's own MP3 sub-item; FLAC sub-item still
-open), reusing `Mp3FrameEncoder`'s own encode internals unchanged -- only how each encoded frame
+The third `IStreamingEncoder` implementation (item 8's own MP3 sub-item), reusing
+`Mp3FrameEncoder`'s own encode internals unchanged -- only how each encoded frame
 is delivered differs. Writes no dedicated "Info tag" (LAME-tag) header frame and no ID3v2 tag at
 all -- both are container/file-level conventions (gapless-playback metadata meant to be read back
 from a complete, seekable file) with no equivalent for a raw, open-ended frame stream.
@@ -1019,6 +1019,39 @@ stereo, and specifically re-confirming (via the same empirical-cross-correlation
 technique `Mp3EncoderSnrTest`'s own regression test for this exact fix already established) that
 this restructured, callback-based version of the flush-frame fix still preserves the true tail of
 real audio.
+
+```csharp
+public sealed class FlacStreamingEncoder : IStreamingEncoder
+{
+    public const int EncoderDelaySamples = 0; // FIXED predictors are purely causal -- no lookahead to drain, unlike AAC-LC/Opus/MP3
+
+    public static IStreamingEncoder Create(int channels, int sampleRate, int bitsPerSample, EncodedAudioFrameCallback onFrameEncoded);
+    // throws ArgumentNullException for a null callback, NotSupportedException for channels < 1
+    // or bitsPerSample outside 1-32 -- the same scope as Codecs.Flac.FlacEncoderSession
+}
+```
+
+The fourth and last `IStreamingEncoder` implementation (item 8's own FLAC sub-item, completing
+it), reusing `FlacFrameEncoder`'s own encode internals unchanged. Genuinely simpler than the other
+three, for two real codec-level reasons: FIXED predictors are purely causal (never look at
+"future" samples), so there is no lookahead to drain; and FLAC's own frame format natively allows
+a final block shorter than the nominal size with no padding at all, unlike AAC-LC/Opus/MP3's own
+fixed-or-padded sizes -- `Complete()` therefore just flushes whatever's left pending, no mandatory
+extra frame. **Genuinely not independently decodable**, unlike the other three:
+`FlacFrameEncoder`'s own existing frame header always defers sample-rate and bits-per-sample to
+STREAMINFO (writes code `0` for both -- a real, pre-existing characteristic of this project's
+frame encoder, not introduced here) rather than using FLAC's own available explicit escape codes.
+Building a STREAMINFO (a whole-stream, container-level concept: total duration, a whole-stream
+MD5, min/max block size) is out of scope for this raw packet-level encoder, the same "container
+concerns belong to a downstream muxer" boundary every other `IStreamingEncoder` already draws -- a
+caller needing a real, playable FLAC stream must construct one itself from `Channels`/
+`SampleRate`/the `bitsPerSample` it already passed to `Create`.
+`Codecs.Flac.FlacEncoderSession.WriteStreamInfoPayload` was widened from `private` to `internal`
+(zero behavior change) so this item's own conformance tests can build a real STREAMINFO
+out-of-band and reuse that exact bit layout rather than duplicating it. Conformance: unlike the
+lossy AAC/Opus/MP3 sub-items' own SNR-floor checks, this verifies EXACT sample equality after a
+full decode (via the project's own `FlacDecoder`) -- the same bar every lossless codec in this
+project is already held to.
 
 ## AudioCutter — `EggEncoder.Codecs`
 
