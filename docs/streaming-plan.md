@@ -644,7 +644,8 @@ the segmenter from item 3 a second segment-format option alongside fMP4.
 is the test-only parser needed to verify it (budget real time for that, it's not throwaway code —
 treat it with the same correctness bar as the production muxer it's checking).
 
-**Status**: done (PR TBD). `MpegTsMuxer`/`MpegTsCrc32` (`src/EggEncoder/Streaming/MpegTs/`),
+**Status**: done ([PR #114](https://github.com/eggspot/EggEncoder/pull/114)).
+`MpegTsMuxer`/`MpegTsCrc32` (`src/EggEncoder/Streaming/MpegTs/`),
 wired into `HlsSegmenter` via a new `SegmentFormat` parameter (default `Fmp4`, fully backward
 compatible). PAT/PMT byte layout (table_ids, `section_length`, `PCR_PID`/`stream_type` field
 positions) and the PES header's 5-byte PTS-only encoding were confirmed bit-for-bit against a real
