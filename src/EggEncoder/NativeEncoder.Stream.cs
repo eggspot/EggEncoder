@@ -1,3 +1,4 @@
+using EggEncoder.Codecs;
 using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Alac;
@@ -522,6 +523,134 @@ namespace EggEncoder
                 RmsLevel = audio?.RmsLevel,
                 IntegratedLoudness = audio?.IntegratedLoudness
             };
+        }
+
+        /// <summary>
+        /// Same as <see cref="ConvertFile(string, string)"/>, but between a source <see cref="Stream"/>
+        /// and a destination <see cref="Stream"/>, via <see cref="AudioCutter.Convert(Stream, AudioFormat, Stream, AudioFormat)"/>.
+        /// Not every <see cref="AudioFormat"/> is supported yet on either side -- see
+        /// <c>docs/feature-roadmap.md</c> item 1 for status.
+        /// </summary>
+        public Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(dest);
+
+            try
+            {
+                LogInformation($"Start native stream convert (source format {sourceFormat}, dest format {destFormat})");
+
+                AudioCutter.Convert(source, sourceFormat, dest, destFormat);
+
+                LogInformation($"Completed native stream convert (source format {sourceFormat}, dest format {destFormat})");
+
+                return Task.CompletedTask;
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to convert a stream (source format {sourceFormat}, dest format {destFormat}) {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Same as <see cref="ConvertFile(Stream, AudioFormat, Stream, AudioFormat)"/>, but observes
+        /// <paramref name="cancellationToken"/> once per decoded block via
+        /// <see cref="AudioCutter.Convert(Stream, AudioFormat, Stream, AudioFormat, CancellationToken)"/>
+        /// -- cancellation is logged at informational level, not as a failure, the same way
+        /// <see cref="ConvertFile(string, string, CancellationToken)"/> treats it.
+        /// </summary>
+        public Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(dest);
+
+            try
+            {
+                LogInformation($"Start native stream convert (source format {sourceFormat}, dest format {destFormat})");
+
+                AudioCutter.Convert(source, sourceFormat, dest, destFormat, cancellationToken);
+
+                LogInformation($"Completed native stream convert (source format {sourceFormat}, dest format {destFormat})");
+
+                return Task.CompletedTask;
+            }
+            catch (OperationCanceledException)
+            {
+                LogInformation($"Native stream convert (source format {sourceFormat}, dest format {destFormat}) was cancelled");
+                throw;
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to convert a stream (source format {sourceFormat}, dest format {destFormat}) {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Same as <see cref="CutFile(string, string, int, int)"/>, but between a source <see cref="Stream"/>
+        /// and a destination <see cref="Stream"/>, via <see cref="AudioCutter.Cut(Stream, AudioFormat, int, int, Stream, AudioFormat)"/>.
+        /// Not every <see cref="AudioFormat"/> is supported yet on either side -- see
+        /// <c>docs/feature-roadmap.md</c> item 1 for status.
+        /// </summary>
+        public Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(dest);
+
+            try
+            {
+                LogInformation($"Start native stream cut (source format {sourceFormat}, dest format {destFormat}) start {startInSeconds} end {endInSeconds}");
+
+                var produced = AudioCutter.Cut(source, sourceFormat, startInSeconds, endInSeconds, dest, destFormat);
+
+                LogInformation(produced
+                    ? $"Completed native stream cut (source format {sourceFormat}, dest format {destFormat})"
+                    : $"Completed native stream cut (source format {sourceFormat}, dest format {destFormat}): requested range was outside the source duration, nothing written");
+
+                return Task.FromResult(produced);
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to cut a stream (source format {sourceFormat}, dest format {destFormat}) {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Same as <see cref="CutFile(Stream, AudioFormat, int, int, Stream, AudioFormat)"/>, but observes
+        /// <paramref name="cancellationToken"/> once per decoded block via
+        /// <see cref="AudioCutter.Cut(Stream, AudioFormat, int, int, Stream, AudioFormat, CancellationToken)"/>
+        /// -- cancellation is logged at informational level, not as a failure, the same way
+        /// <see cref="CutFile(string, string, int, int, CancellationToken)"/> treats it.
+        /// </summary>
+        public Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(dest);
+
+            try
+            {
+                LogInformation($"Start native stream cut (source format {sourceFormat}, dest format {destFormat}) start {startInSeconds} end {endInSeconds}");
+
+                var produced = AudioCutter.Cut(source, sourceFormat, startInSeconds, endInSeconds, dest, destFormat, cancellationToken);
+
+                LogInformation(produced
+                    ? $"Completed native stream cut (source format {sourceFormat}, dest format {destFormat})"
+                    : $"Completed native stream cut (source format {sourceFormat}, dest format {destFormat}): requested range was outside the source duration, nothing written");
+
+                return Task.FromResult(produced);
+            }
+            catch (OperationCanceledException)
+            {
+                LogInformation($"Native stream cut (source format {sourceFormat}, dest format {destFormat}) was cancelled");
+                throw;
+            }
+            catch (Exception e)
+            {
+                LogError(e, $"Failed to cut a stream (source format {sourceFormat}, dest format {destFormat}) {e.Message}");
+                throw;
+            }
         }
     }
 }

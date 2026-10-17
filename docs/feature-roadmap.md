@@ -142,19 +142,27 @@ disposal-suppressing adapter, or an upstream NLayer change) -- not attempted her
 real design decision for the owner, not a mechanical port like every other format this item has
 confirmed.
 
-`ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) have their
-first concrete piece: `WavWriter.Create(Stream, ...)`. Unlike every reader above, it turns out to
-need no `Stream.CanSeek` at all -- a WAV header's every size field is already known from
-`totalFrames` up front, so it writes the complete header once and never seeks back, unlike (for
-example) `FlacEncoderSession`'s own STREAMINFO patch-up, which does seek back and will need a real
-`CanSeek` requirement when its own turn comes. This PR deliberately stopped at the codec-level
-primitive -- `AudioCutter`/`IMediaEncoder.ConvertFile`/`CutFile` don't yet expose a
-Stream-to-Stream overload that uses it, since that needs its own `AudioFormat`-keyed destination
-dispatcher (today's `AudioCutter.DecodeSource` dispatches by file extension, which a `Stream`
-destination doesn't have) -- a reasonable next slice, not done here. That dispatcher, every other
-destination codec's own seekability (several, like FLAC, will need `CanSeek`; others may not, each
-to be confirmed per format rather than assumed), and MP3's own blocker above are all what's still
-open for this item.
+`ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) are now wired
+up: `IMediaEncoder.ConvertFile(Stream, AudioFormat, Stream, AudioFormat)`/
+`CutFile(Stream, AudioFormat, int, int, Stream, AudioFormat)` (plus their own `CancellationToken`
+overloads), backed by `AudioCutter.Stream.cs`'s own `Convert`/`Cut` -- the `AudioFormat`-keyed
+counterpart to `AudioCutter.cs`'s own extension-keyed `DecodeSource`/`OpenSink`
+(`DecodeSourceStream`/`OpenSinkStream`), reusing `CutOptions`/`BuildCutPipeline`/`ForwardOverlap`/
+`GetSampleRange`/`ScratchBuffer`/`DeferredFixedHeaderSink` directly from `AudioCutter.Pipeline.cs`
+rather than duplicating any of that logic -- including the `PcmTransformPipeline` parameter, so a
+`ResamplingTransform`/`VolumeTransform`/etc. in the pipeline works for a `Stream` destination
+exactly the same way it already does for a path-based one (verified directly: a `Stream`-to-`Stream`
+`Convert` with a frame-count-changing `ResamplingTransform` correctly goes through
+`DeferredFixedHeaderSink`'s own buffer-then-patch path, the same as the path-based WAV case).
+`DecodeSourceStream` covers every source format `Probe(Stream, AudioFormat)` already does (every
+format except MP3, for the same NLayer `MpegFile(Stream)`-has-no-`leaveOpen` reason). `OpenSinkStream`
+is WAV-only so far, via `WavWriter.Create(Stream, ...)` -- the one destination primitive that
+happens to need no `Stream.CanSeek` at all, since a WAV header's every size field is already known
+from `totalFrames` up front (unlike, say, `FlacEncoderSession`'s own STREAMINFO patch-up, which does
+seek back and will need a real `CanSeek` requirement when its own turn comes). Every other
+destination codec's own `Stream` write side (and its own seekability requirement, to be confirmed
+per format rather than assumed) is what's still open for this item, alongside MP3's own blocker
+above.
 
 ## 2. Format-native metadata tags
 

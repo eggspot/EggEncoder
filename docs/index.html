@@ -151,6 +151,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc"><code>ConvertFile</code>/<code>CutFile</code> (and <code>Probe</code>) each have a <code>CancellationToken</code>-accepting overload; <code>ConvertFile</code>/<code>CutFile</code> check it once per decoded block for real, sub-second cancellation. See <a href="Advanced-Features.html#cancellation">Advanced Features</a>.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#127754;</div>
+          <div class="feature-title">Stream-based ConvertFile/CutFile</div>
+          <p class="feature-desc">Convert/cut between a source <code>Stream</code> and a destination <code>Stream</code> — any <code>Stream</code>-readable source format into a WAV <code>Stream</code> destination today, PCM transform pipeline included, more destination formats landing incrementally. See <a href="Advanced-Features.html#stream-based-convert-cut">Advanced Features</a>.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#128269;</div>
           <div class="feature-title">MOV/MP4 Probing + Audio Decode</div>
           <p class="feature-desc">Manual atom-tree walker reads duration, dimensions, and codec four-cc with no native dependency — plus decodes a mono AAC-LC audio track when one's present.</p>

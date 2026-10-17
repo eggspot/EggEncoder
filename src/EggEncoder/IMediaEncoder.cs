@@ -49,9 +49,36 @@ namespace EggEncoder
         /// </summary>
         Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken) => ConvertFile(sourceFilePath, destFilePath);
 
+        /// <summary>
+        /// Same as <see cref="ConvertFile(string, string)"/>, but between a source <see cref="Stream"/>
+        /// and a destination <see cref="Stream"/> -- for either side that isn't a local file (an HTTP
+        /// response body, blob storage, an in-memory buffer). Neither stream is disposed by this call --
+        /// the caller opened them, so the caller is responsible for disposing them. Unlike the path-based
+        /// overload, <paramref name="sourceFormat"/>/<paramref name="destFormat"/> must be given
+        /// explicitly, the same reason <see cref="Probe(Stream, AudioFormat)"/> needs one. Not every
+        /// <see cref="AudioFormat"/> is supported yet on either side (see <c>docs/feature-roadmap.md</c>
+        /// item 1 for status); an unsupported one throws <see cref="NotSupportedException"/>.
+        /// </summary>
+        Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat);
+
+        /// <summary>Same as <see cref="ConvertFile(Stream, AudioFormat, Stream, AudioFormat)"/>, but observes <paramref name="cancellationToken"/> once per decoded block, the same way <see cref="ConvertFile(string, string, System.Threading.CancellationToken)"/> does. A default interface method so an existing implementer other than <c>NativeEncoder</c> doesn't need to change.</summary>
+        Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken) => ConvertFile(source, sourceFormat, dest, destFormat);
+
         Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
 
         /// <summary>Same as <see cref="CutFile(string, string, int, int)"/>, but observes <paramref name="cancellationToken"/> the same per-block way <see cref="ConvertFile(string, string, System.Threading.CancellationToken)"/> does.</summary>
         Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken) => CutFile(sourceFilePath, destFilePath, startInSeconds, endInSeconds);
+
+        /// <summary>
+        /// Same as <see cref="CutFile(string, string, int, int)"/>, but between a source <see cref="Stream"/>
+        /// and a destination <see cref="Stream"/> -- see <see cref="ConvertFile(Stream, AudioFormat, Stream, AudioFormat)"/>'s
+        /// own doc comment for the ownership/format-parameter rationale, which applies identically here.
+        /// Returns whether a file was produced (the requested range may be entirely outside the source's
+        /// duration), the same as the path-based overload.
+        /// </summary>
+        Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat);
+
+        /// <summary>Same as <see cref="CutFile(Stream, AudioFormat, int, int, Stream, AudioFormat)"/>, but observes <paramref name="cancellationToken"/> once per decoded block. A default interface method so an existing implementer other than <c>NativeEncoder</c> doesn't need to change.</summary>
+        Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken) => CutFile(source, sourceFormat, startInSeconds, endInSeconds, dest, destFormat);
     }
 }
