@@ -227,6 +227,13 @@ the default `DriftPolicy.Ignore`, or whenever `captureTimestamp` is omitted on a
 policy), that call is pure pass-through. Reads `Channels`/`SampleRate` from the wrapped encoder
 directly.
 
+`EggEncoder.Streaming.Opus.OpusStreamingEncoder` is the second `IStreamingEncoder` implementation
+(item 8's Opus sub-item; MP3/FLAC still open), same scope as `Codecs.Opus.OpusEncoderSession`
+(fixed 48kHz, mono/stereo, 16-bit PCM), reusing that session's own Concentus-backed encode
+internals. Unlike `AacStreamingEncoder`: `EncoderDelaySamples` is a per-instance property (Opus's
+lookahead isn't fixed at one project-wide value the way AAC-LC's is), and every emitted frame's
+`SampleCount` is always `960` -- Opus has no bitstream-level short-final-frame concept.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

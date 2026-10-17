@@ -962,6 +962,34 @@ clock to compare against, and silently inventing one would be worse than not det
 all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the pump can never
 disagree with it about either value.
 
+```csharp
+public sealed class OpusStreamingEncoder : IStreamingEncoder
+{
+    public int EncoderDelaySamples { get; } // per-instance -- reads the underlying encoder's own Lookahead directly, unlike AacStreamingEncoder's fixed constant
+
+    public static IStreamingEncoder Create(int channels, int sampleRate, EncodedAudioFrameCallback onFrameEncoded);
+    // throws ArgumentNullException for a null callback, NotSupportedException for channels other
+    // than 1/2 or a sample rate other than 48000 -- the same scope as Codecs.Opus.OpusEncoderSession
+}
+```
+
+The second `IStreamingEncoder` implementation (item 8's own Opus sub-item; MP3/FLAC sub-items
+still open), reusing `OpusEncoderSession`'s own Concentus-backed encode internals unchanged --
+only how each encoded packet is delivered differs. Two differences from `AacStreamingEncoder`:
+`EncoderDelaySamples` is a per-instance property, since Opus's own lookahead isn't architecturally
+fixed at one value the way AAC-LC's one-MDCT-frame delay is here; and every emitted frame's own
+`SampleCount` is always the full `960` (Opus has no bitstream-level short-final-frame concept, so
+a partial tail's real-vs-padding distinction only matters at the container level, out of scope for
+this raw packet-level encoder). `Complete()` drains the encoder's own fixed lookahead through the
+normal buffering path (the only way to push the genuine tail of real input out of the encoder's
+internal state), but unlike `OpusEncoderSession.Finish()` does **not** unconditionally emit one
+final all-zero frame when nothing remains pending afterward -- that exists in the file-based
+session purely to flag an Ogg page's own end-of-stream bit, a container-level concept this
+raw-packet encoder has no equivalent of. Conformance: reconstructs a full OggOpus file from the
+streaming encoder's own raw packets (via the existing internal `OggPageWriter`/`OpusHeaderPackets`)
+and decodes it through the project's own public `OpusDecoder`, confirming round-trip SNR for both
+mono and stereo.
+
 ## AudioCutter — `EggEncoder.Codecs`
 
 Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:
