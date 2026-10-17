@@ -84,6 +84,46 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 **Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O; `float.NaN` maps to 0 (silence) rather than the unspecified result of a raw `(int)double.NaN` cast, and `float.PositiveInfinity`/`NegativeInfinity` clamp to ±1.0. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. A float WAV *source* has always decoded transparently into int PCM through `Convert`/`Cut`/`Mix`/`Concatenate` (`WavReader.IsFloatFormat` handles this on read); for a float WAV *destination*, `WavSampleFormat.Float32` (`Codecs/WavSampleFormat.cs`) can be passed to those same entry points (`Convert`/`Cut` via `CutOptions.DestinationWavFormat`/`Mix`/`Concatenate`) — it requires the destination's bit depth to already be 32 and throws `NotSupportedException` against a non-WAV destination. The default, `WavSampleFormat.Integer`, is unchanged from before this option existed.
 
+### Streaming (`src/EggEncoder/Streaming/`)
+
+A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
+infrastructure above -- genuinely independent of the `IMediaEncoder` file/`Stream` surface and of
+every per-codec `XxxEncoder`/`XxxEncoderSession` whole-file type (no destination file/`Stream` or
+known total length required anywhere in this surface). See `docs/streaming-plan.md` for the full
+ordered plan, acceptance criteria per item, and what's merged versus still open.
+
+- `IStreamingEncoder`/`EncodedAudioFrame`/`EncodedAudioFrameCallback` (`Streaming/IStreamingEncoder.cs`,
+  `Streaming/EncodedAudioFrame.cs`) — `Write(ReadOnlySpan<int>)` buffers PCM and invokes the callback
+  once per encoded frame as soon as a full codec-native frame's worth of samples has arrived;
+  `Complete()` flushes any partial trailing frame. `Streaming.Aac.AacStreamingEncoder` (`Streaming/Aac/
+  AacStreamingEncoder.cs`) is the only implementation so far -- mono AAC-LC, the same scope as
+  `Codecs.Aac.AacEncoderSession`, reusing that same codec's `AacFrameEncoder` MDCT/quantization logic
+  unchanged (see the `Aac/` row above for how that refactor is shared between both callers).
+  `EncoderDelaySamples` (`1024`) documents this encoder's own one-frame MDCT lookahead.
+- `Streaming.Mp4.FmpInitSegmentWriter`/`FmpMediaSegmentWriter` (`Streaming/Mp4/`) — build a
+  fragmented MP4 (fMP4/CMAF) init segment (`ftyp`+`moov`, once per rendition, no samples of its own)
+  and media segments (`moof`+`mdat`, one call per segment) for a single mono AAC-LC track.
+  `FmpMediaSegmentWriter` is stateful across calls (`sequence_number`/`baseMediaDecodeTime` both
+  carry forward, which is what makes segment N+1 play seamlessly after segment N) -- build a fresh
+  instance per rendition. `Mp4EncodedFrame` is the durable `(byte[] Payload, int SampleCount)` shape
+  a caller collects `EncodedAudioFrame`'s own `ref struct` payload into before handing a batch to
+  `BuildMediaSegment` (a `ref struct` can't itself live in a list spanning more than one callback
+  call). Backed by two new shared primitives placed alongside `MovAtomReader` in `Codecs.Mov` rather
+  than in `Streaming` itself, since both are low-level ISOBMFF plumbing, not streaming-specific:
+  `Mp4BoxBuilder` (a minimal big-endian box-content builder, the write-side counterpart to
+  `MovAtomReader`'s own read-side box-tree walk) and `Mp4EsdsParser.BuildAudioSpecificConfig`/
+  `BuildEsdsBoxContent` (the write-side counterpart to that type's existing `esds`-parsing methods).
+  `ftyp` brand values and every box's own field layout/ordering were confirmed against a real
+  ffmpeg-produced CMAF fMP4 fixture's own bytes, not assumed from the ISO/IEC 14496-12/23000-19 spec
+  text alone. Primary conformance oracle: self-parse the init segment via `MovAtomReader` directly
+  (works unchanged, zero new production reader code) and media segments via a small, test-only
+  moof/traf/tfhd/tfdt/trun reader (deliberately not folded into `Mp4SampleTable`, which only
+  understands the non-fragmented stsz/stco/stsc layout -- a genuinely different box set). A full
+  `ffmpeg`-decode attempt against this writer's own output surfaced a **pre-existing**, unrelated
+  gap in `AacFrameEncoder`'s own bitstream (reproducible identically from its existing ADTS file
+  output) -- `ffprobe`'s own container-metadata reporting (this item's actual acceptance bar) is
+  unaffected and passes; see `docs/streaming-plan.md` item 2's own status note for the full detail.
+
 ### Native binary packaging
 
 **There is none.** `docs/managed-codec-rewrite-plan.md` item 8 removed the last native binary

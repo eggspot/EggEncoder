@@ -425,7 +425,32 @@ mechanically adapt (unlike, say, widening an existing writer for `Stream` suppor
 accordingly, and don't be surprised if real-fixture verification (the `ftyp` brand values
 especially) takes real back-and-forth against an actual reference file's bytes.
 
-**Status**: not started.
+**Status**: done ([PR #111](https://github.com/eggspot/EggEncoder/pull/111)).
+`FmpInitSegmentWriter.BuildInitSegment`/`FmpMediaSegmentWriter.
+BuildMediaSegment` (`src/EggEncoder/Streaming/Mp4/`), backed by a new shared `Mp4BoxBuilder`
+(`Codecs.Mov`, alongside `MovAtomReader` -- both are low-level ISOBMFF plumbing) and
+`Mp4EsdsParser.BuildAudioSpecificConfig`/`BuildEsdsBoxContent` (the write-side counterpart to that
+type's existing parse methods). `ftyp` brand values, box field layout/ordering, and `tfhd`/`tfdt`/
+`trun` flag choices were all confirmed against a real ffmpeg-produced CMAF fMP4 fixture's own bytes
+(`ffmpeg ... -movflags +frag_keyframe+empty_moov+default_base_moof`), not assumed from the spec text
+alone -- see the acceptance-criteria note below for exactly what that comparison covered. Primary
+conformance oracle (self-parse via `MovAtomReader` for the init segment, a small test-only
+moof/traf/tfhd/tfdt/trun reader for media segments) passes, including multi-segment
+`sequence_number`/`baseMediaDecodeTime` continuity and a rejected zero-frame segment.
+
+**New finding, out of scope for this item**: `ffprobe` correctly reports this item's own produced
+container's `codec_name`/`sample_rate`/`channels` (the actual acceptance bar above) -- but a full
+`ffmpeg -i ... -f null -` decode attempt fails with `Input buffer exhausted before END element
+found`/`channel element 0.0 is not allocated`. Isolated (by testing both files side by side) to a
+**pre-existing** characteristic of `AacEncoder`/`AacFrameEncoder`'s own bitstream, reproducible
+identically from its existing ADTS `.aac` file output -- not something this item's fMP4 muxing
+introduced. `AacEncoderTest`'s own round-trip test has only ever verified against this project's
+own `AacDecoder`, never against ffmpeg's independent decoder, so this gap was simply never surfaced
+before now. Not investigated further here (a codec-bitstream-compliance question, not a
+container/muxing one) -- worth its own follow-up item if the owner wants AAC output to be
+ffmpeg-decodable, but it does not block this item's own acceptance criteria or anything later in
+this plan, since every later item's own oracle is either this project's own reader/decoder or
+`ffprobe`'s metadata reporting, neither of which this gap affects.
 
 ## 3. HLS segmenter + m3u8 playlist writer (VOD + live) + sink abstraction
 

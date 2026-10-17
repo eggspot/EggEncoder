@@ -168,6 +168,66 @@ namespace EggEncoder.Codecs.Mov
 
             return true;
         }
+
+        // Write side -- the inverse of ParseAudioSpecificConfigBytes/ParseAudioSpecificConfig above,
+        // used by Streaming.Mp4.FmpInitSegmentWriter to build an 'esds' box for a fragmented MP4/CMAF
+        // init segment. Confirmed against a real ffmpeg-produced fMP4 fixture's own esds bytes (same
+        // field values: objectTypeIndication 0x40, streamType/upStream/reserved 0x15, an SLConfigDescriptor
+        // with predefined=2) -- this writer uses the minimal single-byte descriptor-length encoding
+        // throughout rather than ffmpeg's own always-4-byte-padded one, since TryReadDescriptorHeader
+        // above already reads either form correctly and the minimal form is simpler to write.
+        public static byte[] BuildAudioSpecificConfig(int channels, int sampleRate)
+        {
+            var sampleRateIndex = Array.IndexOf(AacTables.SampleRates, sampleRate);
+            if (sampleRateIndex < 0)
+            {
+                throw new NotSupportedException($"Sample rate {sampleRate} is not a valid MPEG-4 AAC sample rate");
+            }
+
+            // audioObjectType(5)=2 (AAC-LC) + samplingFrequencyIndex(4) + channelConfiguration(4) +
+            // frameLengthFlag(1)=0 + dependsOnCoreCoder(1)=0 + extensionFlag(1)=0 = 16 bits exactly.
+            var b0 = (byte)((AacLowComplexityObjectType << 3) | (sampleRateIndex >> 1));
+            var b1 = (byte)(((sampleRateIndex & 0x01) << 7) | (channels << 3));
+
+            return [b0, b1];
+        }
+
+        public static byte[] BuildEsdsBoxContent(byte[] audioSpecificConfig)
+        {
+            const byte slConfigDescriptorTag = 0x06;
+            const byte mpeg4AudioObjectTypeIndication = 0x40;
+            const byte audioStreamTypeUpstreamReserved = 0x15; // streamType=5 (AudioStream), upStream=0, reserved=1
+            const byte slConfigPredefinedNull = 0x02; // "reserved for use in MP4 files" / no SL packet header
+
+            var decoderConfigDescriptor = new Mp4BoxBuilder()
+                .WriteUInt8(mpeg4AudioObjectTypeIndication)
+                .WriteUInt8(audioStreamTypeUpstreamReserved)
+                .WriteUInt8(0).WriteUInt8(0).WriteUInt8(0) // bufferSizeDB(3) -- unknown/unspecified
+                .WriteUInt32(0) // maxBitrate -- unknown/unspecified
+                .WriteUInt32(0) // avgBitrate -- unknown/unspecified
+                .WriteUInt8(DecoderSpecificInfoTag)
+                .WriteUInt8((byte)audioSpecificConfig.Length)
+                .WriteBytes(audioSpecificConfig)
+                .ToArray();
+
+            var esDescriptorContent = new Mp4BoxBuilder()
+                .WriteUInt16(0) // ES_ID
+                .WriteUInt8(0) // flags: no dependsOn/URL/OCR
+                .WriteUInt8(DecoderConfigDescriptorTag)
+                .WriteUInt8((byte)decoderConfigDescriptor.Length)
+                .WriteBytes(decoderConfigDescriptor)
+                .WriteUInt8(slConfigDescriptorTag)
+                .WriteUInt8(1)
+                .WriteUInt8(slConfigPredefinedNull)
+                .ToArray();
+
+            return new Mp4BoxBuilder()
+                .WriteUInt32(0) // version(1) + flags(3)
+                .WriteUInt8(EsDescriptorTag)
+                .WriteUInt8((byte)esDescriptorContent.Length)
+                .WriteBytes(esDescriptorContent)
+                .ToArray();
+        }
     }
 
     internal sealed class Mp4AudioConfig
