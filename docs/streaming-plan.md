@@ -821,7 +821,8 @@ lands:
   all — NLayer is decode-only, see "Prerequisites" above). MPEG-TS has a long-established native
   MP3-framing convention (unlike AAC's ADTS-via-wrapping approach, MP3 frames are already
   self-delimiting) worth confirming against a real reference file rather than assumed. **Done**
-  (PR TBD) -- `Streaming.Mp3.Mp3StreamingEncoder` (`src/EggEncoder/Streaming/Mp3/`), same scope as
+  ([PR #120](https://github.com/eggspot/EggEncoder/pull/120)) --
+  `Streaming.Mp3.Mp3StreamingEncoder` (`src/EggEncoder/Streaming/Mp3/`), same scope as
   `Mp3EncoderSession` (mono/stereo, 32000/44100/48000Hz, CBR only), reusing `Mp3FrameEncoder`'s own
   encode internals unchanged. Writes no dedicated "Info tag" (LAME-tag) header frame and no ID3v2
   tag at all -- both are container/file-level conventions with no equivalent for a raw, open-ended
