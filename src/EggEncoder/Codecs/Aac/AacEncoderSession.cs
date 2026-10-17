@@ -12,7 +12,11 @@ namespace EggEncoder.Codecs.Aac
         {
             _destStream = destStream;
             _channels = channels;
-            _frameEncoder = new AacFrameEncoder(destStream, channels, sampleRate);
+            var sampleRateIndex = AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);
+            _frameEncoder = new AacFrameEncoder(channels, sampleRate, (payload, _, _) =>
+            {
+                destStream.Write(AdtsFrameWriter.Wrap(payload, sampleRateIndex, channels));
+            });
         }
 
         public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate)

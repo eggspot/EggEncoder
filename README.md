@@ -24,6 +24,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream
 - 🌊 **Stream-based `Probe`** — `Probe(Stream, AudioFormat)` probes a source that isn't a local file (an HTTP response body, blob storage, an in-memory buffer); WAV/AIFF/AU/FLAC/AAC/WavPack/TTA/ALAC/Opus/Vorbis/WMA/MOV/MP4 today, more formats landing incrementally (see [docs/feature-roadmap.md](docs/feature-roadmap.md))
 - 🌊 **Stream-based `ConvertFile`/`CutFile`** — `ConvertFile(Stream, AudioFormat, Stream, AudioFormat)`/`CutFile(Stream, AudioFormat, int, int, Stream, AudioFormat)` convert/cut between a source `Stream` and a destination `Stream`, PCM transform pipeline included; any `Stream`-readable source format into a WAV, AIFF, or AU `Stream` destination today, more destination formats landing incrementally
+- 📡 **Live streaming (early)** — `IStreamingEncoder`/`AacStreamingEncoder.Create` push PCM in and get encoded AAC-LC access units out via a callback, with no destination file/`Stream` or known total length required; the first piece of a larger HLS/fMP4/MPEG-TS packaging effort — see [docs/streaming-plan.md](docs/streaming-plan.md) for what's done and what's next
 - 🏷️ **WAV metadata tags** — `Probe` surfaces a WAV file's `'LIST'`/`'INFO'` chunk (title, artist, etc.) via `ProbeResult.Tags`, and `WavWriter.Create` can write them back out too
 - 🎙️ **MP3 ID3v2 tags** — `Probe` surfaces an MP3 file's ID3v2.3/2.4 text frames (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `Mp3Encoder.Encode`/`OpenSession` can write a fresh ID3v2.4 tag back out too
 - 💬 **FLAC/Opus/Vorbis comment tags** — `Probe` surfaces a FLAC/Opus/Vorbis file's Vorbis comments (title, artist, album, etc.) via the same `ProbeResult.Tags`, and `FlacEncoder`/`OpusEncoder`/`VorbisEncoder`'s own `Encode`/`OpenSession` can write them back out too
@@ -106,6 +107,25 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 - True whole-file peak normalization needs `AudioCutter.MeasurePeakAmplitude` followed by `PeakNormalizationTransform.MeasurePeak` *before* the pipeline runs — otherwise it silently normalizes against only the first decode block.
 - `Mix`/`Concatenate` require every source to share the same channels/sample rate/bit depth. `Mix` decodes all sources fully into memory (clip-length material, not multi-hour streams).
 - `ResamplingTransform` is a Kaiser-windowed-sinc polyphase filter (anti-aliasing on downsample, band-limited reconstruction on upsample) — call `Flush()` (see above) to get its last few frames, which it can't produce until it either sees more input or is told there isn't any.
+
+## Live Streaming (early)
+
+`IStreamingEncoder` is a push-style incremental encoder: PCM in via `Write`, one encoded access unit out per callback invocation, with no destination file/`Stream` and no known total length required — the building block a live HLS/fMP4/MPEG-TS packaging pipeline needs underneath it. Only the AAC-LC encoder exists so far; see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (fMP4/CMAF muxer, MPEG-TS muxer, HLS segmenter, `.m3u8` playlist writer, master playlist) and what's merged versus still open.
+
+```csharp
+using EggEncoder.Streaming.Aac;
+
+using var encoder = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame =>
+{
+    // frame.Payload: one raw AAC-LC access unit (no ADTS/container framing)
+    // frame.SampleCount: real samples this frame represents (1024, except a short final frame)
+    SendToYourOwnMuxerOrDestination(frame.Payload);
+});
+
+encoder.Write(pcmSamplesAsTheyArrive);
+// ... more Write calls as PCM arrives, with no upper bound ...
+encoder.Complete(); // flushes any partial trailing frame
+```
 
 ## Supported Formats
 

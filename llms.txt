@@ -163,6 +163,22 @@ other destination codec's own `Stream` write side is still open, one format at a
 incremental way `Stream`-based `Probe` itself was rolled out; an unsupported `AudioFormat` on
 either side throws `NotSupportedException`.
 
+## Live Streaming (early)
+
+`EggEncoder.Streaming.IStreamingEncoder` is a push-style incremental encoder, independent of the
+`IMediaEncoder` file/Stream surface above -- `Write(ReadOnlySpan<int> interleavedSamples)` buffers
+PCM and invokes an `EncodedAudioFrameCallback` once per encoded frame as soon as a full codec-native
+frame's worth of samples has arrived; `Complete()` flushes any partial trailing frame. No
+destination file/`Stream` and no known total length required. Only
+`EggEncoder.Streaming.Aac.AacStreamingEncoder.Create(channels, sampleRate, onFrameEncoded)` exists
+so far (mono AAC-LC, 44100Hz/48000Hz, same scope as `AacEncoderSession`) -- the first piece of a
+larger HLS/fMP4/MPEG-TS packaging effort; see `docs/streaming-plan.md` for the full ordered plan
+and what's merged versus still open. Each `EncodedAudioFrame` carries the raw access unit bytes (no
+ADTS/container framing -- that's added by a muxer downstream), the real sample count for that frame
+(`1024` for every frame except a short final one from `Complete()`), and a 0-based frame index.
+`AacStreamingEncoder.EncoderDelaySamples` (`1024`) is this encoder's own fixed one-frame MDCT
+lookahead, confirmed empirically (not merely architecturally), for a muxer's own timestamp math.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

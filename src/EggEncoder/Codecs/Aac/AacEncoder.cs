@@ -6,10 +6,13 @@ namespace EggEncoder.Codecs.Aac
     {
         public static void Encode(string outputFilePath, IReadOnlyList<short> pcmSamples, int channels, int sampleRate)
         {
-            AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);
+            var sampleRateIndex = AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);
 
             using var outputStream = File.Create(outputFilePath);
-            using var frameEncoder = new AacFrameEncoder(outputStream, channels, sampleRate);
+            using var frameEncoder = new AacFrameEncoder(channels, sampleRate, (payload, _, _) =>
+            {
+                outputStream.Write(AdtsFrameWriter.Wrap(payload, sampleRateIndex, channels));
+            });
 
             foreach (var sample in pcmSamples)
             {
@@ -20,22 +23,19 @@ namespace EggEncoder.Codecs.Aac
         }
     }
 
-    // Encodes ADTS/AAC-LC frames one PCM sample at a time, emitting a frame as soon as a full
-    // 1024-sample block (plus the previous block, for the 50%-overlap MDCT window) is available.
-    // This lets callers stream PCM in and get compressed output out incrementally, instead of
-    // buffering an entire track in memory before any encoding happens.
+    // Encodes AAC-LC raw access units (no ADTS framing of its own) one PCM sample at a time, emitting
+    // a frame via the caller-supplied callback as soon as a full 1024-sample block (plus the
+    // previous block, for the 50%-overlap MDCT window) is available. This lets callers stream PCM in
+    // and get compressed output out incrementally, instead of buffering an entire track in memory
+    // before any encoding happens -- the ADTS-to-file callback below is just one such caller;
+    // Streaming.Aac.AacStreamingEncoder (docs/streaming-plan.md item 1) is another, emitting the raw
+    // access unit directly with no ADTS framing at all.
     internal sealed class AacFrameEncoder : IDisposable
     {
-        private const int CoefficientCount = 1024;
+        internal const int CoefficientCount = 1024;
         private const int BlockSize = CoefficientCount * 2;
         private const int MaxScalefactorBand = 49;
         private const int TargetMaxQuantizedMagnitude = 8;
-
-        private const uint AdtsSyncWord = 0xFFF;
-        private const uint AacLcProfile = 1;
-        private const uint NoCrcProtectionAbsent = 1;
-        private const int AdtsHeaderByteLength = 7;
-        private const uint AdtsBufferFullness = 0x7FF;
 
         private const uint SingleChannelElementSyntaxId = 0;
         private const uint DefaultGlobalGain = 100;
@@ -48,20 +48,26 @@ namespace EggEncoder.Codecs.Aac
 
         private static readonly ushort[] _swbOffsets = AacTables.ScalefactorBandOffsets1024_44100Or48000;
 
-        private readonly Stream _outputStream;
-        private readonly int _channels;
-        private readonly int _sampleRateIndex;
+        private readonly Action<byte[], int, long> _onFrameEncoded;
         private readonly double[] _window;
 
         private double[] _previousBlock = new double[CoefficientCount];
         private double[] _currentBlock = new double[CoefficientCount];
         private int _currentBlockCount;
+        private long _frameIndex;
 
-        public AacFrameEncoder(Stream outputStream, int channels, int sampleRate)
+        /// <param name="channels">Must be 1 -- see <see cref="ValidateAndGetSampleRateIndex"/>.</param>
+        /// <param name="sampleRate">Must be 44100 or 48000 -- see <see cref="ValidateAndGetSampleRateIndex"/>.</param>
+        /// <param name="onFrameEncoded">
+        /// Invoked once per encoded frame, synchronously, with the raw access unit bytes (no ADTS
+        /// framing), the real sample count this frame represents (always <see cref="CoefficientCount"/>
+        /// except for a final, zero-padded frame emitted by <see cref="Flush"/>), and a 0-based,
+        /// monotonically increasing frame index.
+        /// </param>
+        public AacFrameEncoder(int channels, int sampleRate, Action<byte[], int, long> onFrameEncoded)
         {
-            _sampleRateIndex = ValidateAndGetSampleRateIndex(channels, sampleRate);
-            _outputStream = outputStream;
-            _channels = channels;
+            ValidateAndGetSampleRateIndex(channels, sampleRate);
+            _onFrameEncoded = onFrameEncoded;
             _window = BuildSineWindow(BlockSize);
         }
 
@@ -134,7 +140,7 @@ namespace EggEncoder.Codecs.Aac
             var coefficients = Mdct.Forward(windowedInput);
             var payload = EncodeSingleChannelElement(coefficients);
 
-            WriteAdtsFrame(_outputStream, payload, _sampleRateIndex, _channels);
+            _onFrameEncoded(payload, _currentBlockCount, _frameIndex++);
         }
 
         private static double[] BuildSineWindow(int blockSize)
@@ -146,31 +152,6 @@ namespace EggEncoder.Codecs.Aac
             }
 
             return window;
-        }
-
-        private static void WriteAdtsFrame(Stream outputStream, byte[] payload, int sampleRateIndex, int channels)
-        {
-            var writer = new BitWriter();
-
-            writer.WriteBits(AdtsSyncWord, 12);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 2);
-            writer.WriteBits(NoCrcProtectionAbsent, 1);
-            writer.WriteBits(AacLcProfile, 2);
-            writer.WriteBits((uint)sampleRateIndex, 4);
-            writer.WriteBits(0, 1);
-            writer.WriteBits((uint)channels, 3);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits((uint)(AdtsHeaderByteLength + payload.Length), 13);
-            writer.WriteBits(AdtsBufferFullness, 11);
-            writer.WriteBits(0, 2);
-
-            var header = writer.ToArray();
-            outputStream.Write(header);
-            outputStream.Write(payload);
         }
 
         private static byte[] EncodeSingleChannelElement(double[] coefficients)
