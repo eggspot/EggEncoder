@@ -110,29 +110,23 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-`IStreamingEncoder` is a push-style incremental encoder: PCM in via `Write`, one encoded access unit out per callback invocation, with no destination file/`Stream` and no known total length required — the building block a live HLS/fMP4/MPEG-TS packaging pipeline needs underneath it. A fragmented MP4 (fMP4/CMAF) muxer builds on it. Only mono AAC-LC exists so far; see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (MPEG-TS muxer, HLS segmenter, `.m3u8` playlist writer, master playlist) and what's merged versus still open.
+A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`. Only mono AAC-LC exists so far, and `HlsSegmenter` is VOD-only for now (no live sliding window yet) -- see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (MPEG-TS muxer, live sliding window, master playlist) and what's merged versus still open.
 
 ```csharp
+using EggEncoder.Streaming;
 using EggEncoder.Streaming.Aac;
-using EggEncoder.Streaming.Mp4;
+using EggEncoder.Streaming.Hls;
 
-var initSegment = FmpInitSegmentWriter.BuildInitSegment(channels: 1, sampleRate: 44100);
-var segmentWriter = new FmpMediaSegmentWriter(); // one instance per rendition -- it carries state across calls
+Directory.CreateDirectory("hls-output");
+var sink = new FileSystemStreamingSink("hls-output"); // or InMemoryStreamingSink / DelegateStreamingSink
+var segmenter = new HlsSegmenter(channels: 1, sampleRate: 44100, targetDurationSeconds: 6, sink);
 
-var framesForThisSegment = new List<Mp4EncodedFrame>();
-using var encoder = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame =>
-{
-    // frame.Payload: one raw AAC-LC access unit (no ADTS/container framing)
-    // frame.SampleCount: real samples this frame represents (1024, except a short final frame)
-    // Payload is a ref struct's Span -- copy it out before it outlives this callback.
-    framesForThisSegment.Add(new Mp4EncodedFrame(frame.Payload.ToArray(), frame.SampleCount));
-});
+using var encoder = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame => segmenter.AddFrame(frame));
 
 encoder.Write(pcmSamplesAsTheyArrive);
 // ... more Write calls as PCM arrives, with no upper bound ...
-encoder.Complete(); // flushes any partial trailing frame
-
-var mediaSegment = segmentWriter.BuildMediaSegment(framesForThisSegment); // moof + mdat
+encoder.Complete(); // flushes any partial trailing encoded frame
+segmenter.Complete(); // flushes the final (possibly short) segment and writes #EXT-X-ENDLIST
 ```
 
 ## Supported Formats

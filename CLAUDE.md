@@ -123,6 +123,27 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   gap in `AacFrameEncoder`'s own bitstream (reproducible identically from its existing ADTS file
   output) -- `ffprobe`'s own container-metadata reporting (this item's actual acceptance bar) is
   unaffected and passes; see `docs/streaming-plan.md` item 2's own status note for the full detail.
+- `Streaming.IStreamingSink` (`Streaming/IStreamingSink.cs`) -- an I/O-agnostic HLS output
+  destination (init segment, media segments, a playlist rewritten on every change, and segment
+  deletion for a future live sliding window). Three implementations, all in `Streaming/`:
+  `FileSystemStreamingSink` (a directory on disk, `init.mp4`/`segment_{n}.m4s`/`playlist.m3u8`, an
+  optional file-name prefix for multi-rendition use), `InMemoryStreamingSink` (no filesystem at all
+  -- the primary vehicle for this surface's own tests), and `DelegateStreamingSink` (four
+  constructor-supplied delegates, one per interface member -- the concrete answer to "a user
+  callback for HTTP/S3 upload" without writing a full class).
+- `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`) --
+  **VOD mode only so far** (see `docs/streaming-plan.md` item 3b for the live sliding window
+  follow-up). `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into
+  its own accumulating list internally), so a caller wires `AacStreamingEncoder.Create(..., frame =>
+  segmenter.AddFrame(frame))` with no manual conversion step; it writes the init segment immediately
+  at construction, accumulates frames until their cumulative duration reaches a configured
+  `targetDurationSeconds` *or more* (segments are cut on frame boundaries only, so a real segment's
+  duration is always >= target by at most one frame), cuts a segment via item 2's
+  `FmpMediaSegmentWriter`, and rewrites the playlist after every cut. `M3u8PlaylistWriter`'s own
+  `EXT-X-TARGETDURATION` value is **not** simply the configured target echoed back -- `HlsSegmenter`
+  tracks the real maximum segment duration observed so far and writes `ceil(max(configured,
+  observed))` on every rewrite, so the tag can never be violated by a segment the playlist already
+  lists (RFC 8216 §4.3.3.1).
 
 ### Native binary packaging
 
