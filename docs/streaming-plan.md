@@ -795,7 +795,8 @@ lands:
   only the output plumbing, not the codec logic" principle item 1 established for AAC. Opus frames
   are naturally segment-boundary-friendly (fixed 20ms/960-sample frames at Opus's own fixed 48kHz),
   and CMAF has a defined Opus-in-fMP4 convention (`dOps` box) worth targeting directly rather than
-  inventing one. **Done** (PR TBD) -- `Streaming.Opus.OpusStreamingEncoder`
+  inventing one. **Done** ([PR #118](https://github.com/eggspot/EggEncoder/pull/118)) --
+  `Streaming.Opus.OpusStreamingEncoder`
   (`src/EggEncoder/Streaming/Opus/`), same scope as `OpusEncoderSession` (fixed 48kHz, mono/stereo,
   16-bit PCM). Unlike `AacStreamingEncoder`, `EncoderDelaySamples` (renamed from a fixed constant
   to an instance property reading `IOpusEncoder.Lookahead` directly) is per-instance, not a
