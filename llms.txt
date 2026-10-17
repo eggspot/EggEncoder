@@ -228,11 +228,21 @@ policy), that call is pure pass-through. Reads `Channels`/`SampleRate` from the 
 directly.
 
 `EggEncoder.Streaming.Opus.OpusStreamingEncoder` is the second `IStreamingEncoder` implementation
-(item 8's Opus sub-item; MP3/FLAC still open), same scope as `Codecs.Opus.OpusEncoderSession`
+(item 8's Opus sub-item; FLAC still open), same scope as `Codecs.Opus.OpusEncoderSession`
 (fixed 48kHz, mono/stereo, 16-bit PCM), reusing that session's own Concentus-backed encode
 internals. Unlike `AacStreamingEncoder`: `EncoderDelaySamples` is a per-instance property (Opus's
 lookahead isn't fixed at one project-wide value the way AAC-LC's is), and every emitted frame's
 `SampleCount` is always `960` -- Opus has no bitstream-level short-final-frame concept.
+
+`EggEncoder.Streaming.Mp3.Mp3StreamingEncoder` is the third `IStreamingEncoder` implementation
+(item 8's MP3 sub-item; FLAC still open), same scope as `Codecs.Mp3.Mp3EncoderSession`
+(mono/stereo, 32000/44100/48000Hz, CBR only), reusing `Mp3FrameEncoder`'s own encode internals.
+Writes no LAME-tag header frame or ID3v2 tag (both are container/file-level conventions with no
+equivalent for a raw frame stream); `Mp3Encoder.EncoderDelaySamples` (`1680`) remains the right
+value for a muxer to use. Unlike `OpusStreamingEncoder`, reports each frame's own *real* sample
+count (like `AacStreamingEncoder`) rather than always the nominal `1152` -- except `Complete()`'s
+own mandatory flush frame (draining the one-granule MDCT history), which is purely synthetic and
+reports `0`.
 
 ## MP3 ID3v2 Tags
 

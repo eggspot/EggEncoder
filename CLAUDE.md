@@ -193,7 +193,7 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   detecting drift at all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the
   pump can never disagree with it about either value.
 - `Streaming.Opus.OpusStreamingEncoder` (`Streaming/Opus/`) -- the second `IStreamingEncoder`
-  implementation (item 8's own Opus sub-item; MP3/FLAC still open), same scope as
+  implementation (item 8's own Opus sub-item; FLAC still open), same scope as
   `Codecs.Opus.OpusEncoderSession` (fixed 48kHz, mono/stereo, 16-bit PCM), reusing that session's
   own Concentus-backed encode internals unchanged. Unlike `AacStreamingEncoder`,
   `EncoderDelaySamples` is a per-instance property reading the underlying encoder's own
@@ -206,6 +206,22 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   `OpusEncoderSession.Finish()`) does **not** unconditionally emit a final all-zero frame when
   nothing remains pending afterward -- that exists in the file-based session purely to flag an Ogg
   page's own end-of-stream bit, a container-level concept this raw-packet encoder has none of.
+- `Streaming.Mp3.Mp3StreamingEncoder` (`Streaming/Mp3/`) -- the third `IStreamingEncoder`
+  implementation (item 8's own MP3 sub-item; FLAC still open), same scope as
+  `Codecs.Mp3.Mp3EncoderSession` (mono/stereo, 32000/44100/48000Hz, CBR only), reusing
+  `Mp3FrameEncoder`'s own encode internals unchanged. Writes no dedicated "Info tag" (LAME-tag)
+  header frame and no ID3v2 tag -- both are container/file-level conventions with no equivalent
+  for a raw, open-ended frame stream; `Mp3Encoder.EncoderDelaySamples` (the existing, already
+  empirically-measured `1680`) remains the right value for a muxer here to use directly. Unlike
+  `OpusStreamingEncoder`, this encoder reports each frame's own *real* sample count rather than
+  always the nominal `1152` -- tracking it costs nothing extra here, the same way it doesn't for
+  `AacStreamingEncoder`, since `Mp3EncoderSession.Finish`'s own existing design already computes
+  the real remaining count before padding it. `Complete()`'s own mandatory flush frame (draining
+  the one-granule MDCT history -- the same real, previously-found-and-fixed requirement
+  `Mp3EncoderSession.Finish` itself documents) is purely synthetic and reports a real sample count
+  of `0`. Since MP3 frames are self-delimiting with no container needed at all, the streaming
+  encoder's own raw frames are simply concatenated directly into a file for conformance testing,
+  decoded through the project's own public `Mp3Decoder` (NLayer).
 
 ### Native binary packaging
 
