@@ -6,7 +6,7 @@ namespace EggEncoder.Streaming
     /// (a directory on disk), <see cref="InMemoryStreamingSink"/> (no filesystem at all, for tests
     /// or for a caller that wants bytes directly), and <see cref="DelegateStreamingSink"/> (a thin
     /// wrapper over caller-supplied delegates, for a destination this library doesn't know about --
-    /// an HTTP PUT, an S3 upload). See docs/streaming-plan.md item 3.
+    /// an HTTP PUT, an S3 upload). See docs/streaming-plan.md item 3a.
     /// </summary>
     public interface IStreamingSink
     {

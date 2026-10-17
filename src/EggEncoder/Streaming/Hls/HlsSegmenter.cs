@@ -4,8 +4,8 @@ using EggEncoder.Streaming.Mp4;
 namespace EggEncoder.Streaming.Hls
 {
     /// <summary>
-    /// Cuts an fMP4/CMAF HLS stream (VOD mode only -- see docs/streaming-plan.md item 3's own
-    /// status note for the live-sliding-window follow-up) from a sequence of encoded audio frames:
+    /// Cuts an fMP4/CMAF HLS stream (VOD mode only -- see docs/streaming-plan.md item 3b for the
+    /// live-sliding-window follow-up) from a sequence of encoded audio frames:
     /// writes the init segment once at construction, accumulates frames and cuts a media segment
     /// once their cumulative duration reaches <c>targetDurationSeconds</c> (always on a frame
     /// boundary, so a real segment's duration is always &gt;= target by at most one frame), and
