@@ -4,13 +4,14 @@ using EggEncoder.Streaming.Mp4;
 namespace EggEncoder.Streaming.Hls
 {
     /// <summary>
-    /// Cuts an fMP4/CMAF HLS stream (VOD mode only -- see docs/streaming-plan.md item 3b for the
-    /// live-sliding-window follow-up) from a sequence of encoded audio frames:
-    /// writes the init segment once at construction, accumulates frames and cuts a media segment
-    /// once their cumulative duration reaches <c>targetDurationSeconds</c> (always on a frame
-    /// boundary, so a real segment's duration is always &gt;= target by at most one frame), and
-    /// rewrites the media playlist after every cut. <see cref="Complete"/> flushes the final,
-    /// possibly-short segment and writes <c>EXT-X-ENDLIST</c>.
+    /// Cuts an fMP4/CMAF HLS stream from a sequence of encoded audio frames: writes the init
+    /// segment once at construction, accumulates frames and cuts a media segment once their
+    /// cumulative duration reaches <c>targetDurationSeconds</c> (always on a frame boundary, so a
+    /// real segment's duration is always &gt;= target by at most one frame), and rewrites the media
+    /// playlist after every cut. <see cref="Complete"/> flushes the final, possibly-short segment
+    /// and writes <c>EXT-X-ENDLIST</c>. Two modes, chosen by which constructor is used: VOD (every
+    /// segment ever produced stays in the playlist) or live (a bounded sliding window of the most
+    /// recent segments -- see the live constructor's own doc comment).
     /// </summary>
     public sealed class HlsSegmenter
     {
@@ -21,14 +22,35 @@ namespace EggEncoder.Streaming.Hls
         private readonly List<Mp4EncodedFrame> _pendingFrames = [];
         private readonly List<HlsSegmentDescriptor> _segments = [];
 
+        private readonly int? _liveWindowSize;
+
         private long _accumulatedSampleCount;
         private long _nextSequenceNumber = 1;
         private double _maxObservedSegmentDurationSeconds;
         private bool _completed;
 
+        /// <summary>VOD mode: every segment ever produced stays in the playlist until <see cref="Complete"/> writes <c>EXT-X-ENDLIST</c>.</summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive.</exception>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink)
+            : this(channels, sampleRate, targetDurationSeconds, sink, liveWindowSize: null)
+        {
+        }
+
+        /// <summary>
+        /// Live mode: once more than <paramref name="liveWindowSize"/> segments have been produced,
+        /// the oldest is dropped from the playlist (<c>EXT-X-MEDIA-SEQUENCE</c> advances to match)
+        /// and <see cref="IStreamingSink.DeleteMediaSegment"/> is called for it. No <c>EXT-X-ENDLIST</c>
+        /// is written until <see cref="Complete"/> signals the live stream itself has ended.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
+        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize)
+            : this(channels, sampleRate, targetDurationSeconds, sink, (int?)liveWindowSize)
+        {
+        }
+
+        private HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int? liveWindowSize)
         {
             ArgumentNullException.ThrowIfNull(sink);
             if (targetDurationSeconds <= 0)
@@ -36,9 +58,15 @@ namespace EggEncoder.Streaming.Hls
                 throw new ArgumentOutOfRangeException(nameof(targetDurationSeconds), "Target duration must be positive.");
             }
 
+            if (liveWindowSize is < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(liveWindowSize), "Live window size must be at least 1.");
+            }
+
             _sampleRate = sampleRate;
             _targetDurationSeconds = targetDurationSeconds;
             _sink = sink;
+            _liveWindowSize = liveWindowSize;
 
             sink.WriteInitSegment(FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
         }
@@ -95,6 +123,13 @@ namespace EggEncoder.Streaming.Hls
             _sink.WriteMediaSegment(sequenceNumber, segmentBytes);
 
             _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, SegmentUri(sequenceNumber)));
+
+            while (_liveWindowSize is { } windowSize && _segments.Count > windowSize)
+            {
+                var oldest = _segments[0];
+                _segments.RemoveAt(0);
+                _sink.DeleteMediaSegment(oldest.SequenceNumber);
+            }
 
             _pendingFrames.Clear();
             _accumulatedSampleCount = 0;

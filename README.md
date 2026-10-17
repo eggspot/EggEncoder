@@ -110,7 +110,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`. Only mono AAC-LC exists so far, and `HlsSegmenter` is VOD-only for now (no live sliding window yet) -- see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (MPEG-TS muxer, live sliding window, master playlist) and what's merged versus still open.
+A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). Only mono AAC-LC exists so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (MPEG-TS muxer, master playlist) and what's merged versus still open.
 
 ```csharp
 using EggEncoder.Streaming;

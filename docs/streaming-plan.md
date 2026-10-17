@@ -578,7 +578,17 @@ from here on).
 **Size**: small–medium, now that item 3a's own segment-cutting/playlist-writing machinery already
 exists to build on.
 
-**Status**: not started.
+**Status**: done ([PR #113](https://github.com/eggspot/EggEncoder/pull/113)). Added a second public
+`HlsSegmenter` constructor overload taking
+`liveWindowSize` (the existing VOD constructor is untouched and still the default choice); both
+delegate to one shared private constructor so the two modes can't drift apart. `CutSegment` prunes
+the oldest segment(s) in a `while` loop once the retained count exceeds the window, calling
+`IStreamingSink.DeleteMediaSegment` for each. The "VOD-mode call to whatever API surfaces live-only
+behavior" criterion above doesn't apply to the actual design: there is no separate live-only method
+or property to call inappropriately -- live-vs-VOD is chosen entirely by which constructor is used,
+and every other method (`AddFrame`/`Complete`) behaves identically in either mode (the live-only
+`liveWindowSize < 1` validation lives in the live constructor itself, where it's the only
+constructor parameter specific to that mode).
 
 ## 4. MPEG-TS muxer (alternative segment format)
 

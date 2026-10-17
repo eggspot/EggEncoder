@@ -188,16 +188,20 @@ SampleCount)` is the durable shape a caller collects `EncodedAudioFrame`'s own r
 into (via `frame.Payload.ToArray()`) before batching frames into one segment.
 
 `EggEncoder.Streaming.IStreamingSink` is an I/O-agnostic HLS output destination (init segment,
-media segments, a playlist rewritten on every change, segment deletion for a future live sliding
-window) with three implementations: `FileSystemStreamingSink` (a directory on disk), `InMemoryStreamingSink`
+media segments, a playlist rewritten on every change, segment deletion for a live sliding window)
+with three implementations: `FileSystemStreamingSink` (a directory on disk), `InMemoryStreamingSink`
 (no filesystem, used by this library's own tests), and `DelegateStreamingSink` (four
 constructor-supplied delegates, for an HTTP/S3-upload-style destination with no new class needed).
-`EggEncoder.Streaming.Hls.HlsSegmenter` (VOD mode only so far -- no live sliding window yet) ties
-everything together: `AddFrame(EncodedAudioFrame frame)` (takes the ref struct directly, no manual
-conversion needed) accumulates frames and cuts an fMP4 media segment once their cumulative duration
-reaches a configured `targetDurationSeconds` or more, writing the segment and rewriting the
-`M3u8PlaylistWriter`-formatted media playlist through the sink after every cut; `Complete()` flushes
-the final (possibly short) segment and writes `#EXT-X-ENDLIST`.
+`EggEncoder.Streaming.Hls.HlsSegmenter` ties everything together: `AddFrame(EncodedAudioFrame
+frame)` (takes the ref struct directly, no manual conversion needed) accumulates frames and cuts an
+fMP4 media segment once their cumulative duration reaches a configured `targetDurationSeconds` or
+more, writing the segment and rewriting the `M3u8PlaylistWriter`-formatted media playlist through
+the sink after every cut; `Complete()` flushes the final (possibly short) segment and writes
+`#EXT-X-ENDLIST`. Two modes, chosen by which constructor is used: the default (VOD) constructor
+keeps every segment ever produced in the playlist; a second constructor takes `liveWindowSize` --
+once more segments exist than that window retains, the oldest is dropped from the playlist
+(`#EXT-X-MEDIA-SEQUENCE` advances to match) and `IStreamingSink.DeleteMediaSegment` is called for
+it, with no `#EXT-X-ENDLIST` written until `Complete()` is actually called.
 
 ## MP3 ID3v2 Tags
 
