@@ -538,7 +538,8 @@ playlist a player can actually fetch.
 this is the item where the most genuinely new policy logic (segment-boundary decisions) lives, on
 top of two other substantial new items underneath it.
 
-**Status**: done ([PR TBD]). `IStreamingSink` + `FileSystemStreamingSink`/`InMemoryStreamingSink`/
+**Status**: done ([PR #112](https://github.com/eggspot/EggEncoder/pull/112)).
+`IStreamingSink` + `FileSystemStreamingSink`/`InMemoryStreamingSink`/
 `DelegateStreamingSink` (`src/EggEncoder/Streaming/`), `HlsSegmenter`/`M3u8PlaylistWriter`/
 `HlsSegmentDescriptor` (`src/EggEncoder/Streaming/Hls/`). `HlsSegmenter.AddFrame` takes an
 `EncodedAudioFrame` directly (not a pre-converted `Mp4EncodedFrame`) -- it copies `Payload` into its
