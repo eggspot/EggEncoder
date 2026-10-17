@@ -59,6 +59,7 @@ namespace EggEncoder.Streaming.Hls
             if (_accumulatedSampleCount / (double)_sampleRate >= _targetDurationSeconds)
             {
                 CutSegment();
+                WritePlaylist(endList: false);
             }
         }
 
@@ -80,6 +81,10 @@ namespace EggEncoder.Streaming.Hls
             WritePlaylist(endList: true);
         }
 
+        // Builds and writes one media segment from _pendingFrames; does NOT write the playlist --
+        // each of this method's two callers writes it afterward with its own correct endList value
+        // (AddFrame: false; Complete: true), rather than writing it here unconditionally and having
+        // Complete immediately overwrite that same write again with the real, final value.
         private void CutSegment()
         {
             var sequenceNumber = _nextSequenceNumber++;
@@ -93,8 +98,6 @@ namespace EggEncoder.Streaming.Hls
 
             _pendingFrames.Clear();
             _accumulatedSampleCount = 0;
-
-            WritePlaylist(endList: false);
         }
 
         private void WritePlaylist(bool endList)
