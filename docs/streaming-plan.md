@@ -820,12 +820,34 @@ lands:
 - **MP3**: reuses `Mp3EncoderSession`'s own pure-managed encode internals (no NLayer involvement at
   all — NLayer is decode-only, see "Prerequisites" above). MPEG-TS has a long-established native
   MP3-framing convention (unlike AAC's ADTS-via-wrapping approach, MP3 frames are already
-  self-delimiting) worth confirming against a real reference file rather than assumed. Not started.
+  self-delimiting) worth confirming against a real reference file rather than assumed. **Done**
+  ([PR #120](https://github.com/eggspot/EggEncoder/pull/120)) --
+  `Streaming.Mp3.Mp3StreamingEncoder` (`src/EggEncoder/Streaming/Mp3/`), same scope as
+  `Mp3EncoderSession` (mono/stereo, 32000/44100/48000Hz, CBR only), reusing `Mp3FrameEncoder`'s own
+  encode internals unchanged. Writes no dedicated "Info tag" (LAME-tag) header frame and no ID3v2
+  tag at all -- both are container/file-level conventions with no equivalent for a raw, open-ended
+  frame stream, the same reasoning that already excluded fMP4/MPEG-TS-specific framing from
+  `AacStreamingEncoder`'s own raw access units and excluded Ogg/`pre_skip` from
+  `OpusStreamingEncoder`'s own raw packets. `Mp3Encoder.EncoderDelaySamples` (the existing, already
+  empirically-measured `1680`) remains the right value for a muxer here to use directly -- no new
+  measurement needed. Unlike `OpusStreamingEncoder`, this encoder reports each frame's own *real*
+  sample count rather than always the nominal `1152` -- tracking it costs nothing extra here, the
+  same way it doesn't for `AacStreamingEncoder`, since `Mp3EncoderSession.Finish`'s own existing
+  design already computes the real remaining count before padding it; `Complete()`'s own mandatory
+  flush frame (draining the one-granule MDCT history, the same real, previously-found-and-fixed
+  requirement `Mp3EncoderSession.Finish` itself documents) is purely synthetic and reports `0`.
+  Conformance: since MP3 frames are self-delimiting with no container needed at all, the streaming
+  encoder's own raw frames are simply concatenated directly into a file and decoded through the
+  project's own public `Mp3Decoder` (NLayer) -- confirming round-trip SNR for both mono and stereo,
+  and specifically re-confirming (via the same empirical-cross-correlation + tail-correlation
+  technique `Mp3EncoderSnrTest`'s own regression test for this exact fix already established) that
+  this restructured, callback-based version of the flush-frame fix still preserves the true tail of
+  real audio, not just an approximately-right duration.
 - **FLAC**: lossless streaming is a real but lower-demand case for a *live-streaming* plan
   specifically (FLAC-over-HLS is uncommon in practice vs. AAC/Opus/MP3); worth doing once the
   pattern is proven three times over, not before. Not started.
 
-**Status**: partially done -- Opus sub-item complete (see above), MP3 and FLAC sub-items not
+**Status**: partially done -- Opus and MP3 sub-items complete (see above), FLAC sub-item not
 started.
 
 ## Top-level test strategy (applies across every item above)

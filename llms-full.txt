@@ -973,8 +973,8 @@ public sealed class OpusStreamingEncoder : IStreamingEncoder
 }
 ```
 
-The second `IStreamingEncoder` implementation (item 8's own Opus sub-item; MP3/FLAC sub-items
-still open), reusing `OpusEncoderSession`'s own Concentus-backed encode internals unchanged --
+The second `IStreamingEncoder` implementation (item 8's own Opus sub-item; FLAC sub-item still
+open), reusing `OpusEncoderSession`'s own Concentus-backed encode internals unchanged --
 only how each encoded packet is delivered differs. Two differences from `AacStreamingEncoder`:
 `EncoderDelaySamples` is a per-instance property, since Opus's own lookahead isn't architecturally
 fixed at one value the way AAC-LC's one-MDCT-frame delay is here; and every emitted frame's own
@@ -989,6 +989,36 @@ raw-packet encoder has no equivalent of. Conformance: reconstructs a full OggOpu
 streaming encoder's own raw packets (via the existing internal `OggPageWriter`/`OpusHeaderPackets`)
 and decodes it through the project's own public `OpusDecoder`, confirming round-trip SNR for both
 mono and stereo.
+
+```csharp
+public sealed class Mp3StreamingEncoder : IStreamingEncoder
+{
+    public static IStreamingEncoder Create(int channels, int sampleRate, EncodedAudioFrameCallback onFrameEncoded, int bitRateKbps = Mp3Encoder.DefaultBitRateKbps);
+    // throws ArgumentNullException for a null callback, NotSupportedException for channels other
+    // than 1/2, a sample rate other than 32000/44100/48000, or an invalid MPEG-1 Layer III bitrate
+}
+```
+
+The third `IStreamingEncoder` implementation (item 8's own MP3 sub-item; FLAC sub-item still
+open), reusing `Mp3FrameEncoder`'s own encode internals unchanged -- only how each encoded frame
+is delivered differs. Writes no dedicated "Info tag" (LAME-tag) header frame and no ID3v2 tag at
+all -- both are container/file-level conventions (gapless-playback metadata meant to be read back
+from a complete, seekable file) with no equivalent for a raw, open-ended frame stream.
+`Mp3Encoder.EncoderDelaySamples` (the existing, already empirically-measured `1680`) remains the
+right value for a muxer here to use directly -- no new measurement needed. Unlike
+`OpusStreamingEncoder`, this encoder reports each frame's own *real* sample count rather than
+always the nominal `1152` -- tracking it costs nothing extra here, the same way it already doesn't
+for `AacStreamingEncoder`, since `Mp3EncoderSession.Finish`'s own existing design already computes
+the real remaining count before padding it. `Complete()`'s own mandatory flush frame (draining the
+one-granule MDCT history, the same real, previously-found-and-fixed requirement
+`Mp3EncoderSession.Finish` itself documents) is purely synthetic and reports a real sample count of
+`0`. Since MP3 frames are self-delimiting with no container needed at all, conformance testing
+simply concatenates the streaming encoder's own raw frames directly into a file, decoded through
+the project's own public `Mp3Decoder` (NLayer) -- confirming round-trip SNR for both mono and
+stereo, and specifically re-confirming (via the same empirical-cross-correlation + tail-correlation
+technique `Mp3EncoderSnrTest`'s own regression test for this exact fix already established) that
+this restructured, callback-based version of the flush-frame fix still preserves the true tail of
+real audio.
 
 ## AudioCutter — `EggEncoder.Codecs`
 
