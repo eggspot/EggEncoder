@@ -65,7 +65,7 @@ namespace EggEncoder.Codecs.Mov
             stream.Position = stss.Value.ContentStart + 4; // version+flags
             Span<byte> countBuffer = stackalloc byte[4];
             stream.ReadExactly(countBuffer);
-            var count = (int)BinaryPrimitives.ReadUInt32BigEndian(countBuffer);
+            var count = CheckedEntryCount(BinaryPrimitives.ReadUInt32BigEndian(countBuffer), entryBytes: 4, "'stss'");
 
             var buffer = new byte[count * 4];
             stream.ReadExactly(buffer);
@@ -104,7 +104,7 @@ namespace EggEncoder.Codecs.Mov
             stream.ReadExactly(header);
 
             var uniformSampleSize = BinaryPrimitives.ReadUInt32BigEndian(header[..4]);
-            var sampleCount = (int)BinaryPrimitives.ReadUInt32BigEndian(header[4..8]);
+            var sampleCount = CheckedEntryCount(BinaryPrimitives.ReadUInt32BigEndian(header[4..8]), entryBytes: 4, "'stsz'");
 
             var sizes = new List<int>(sampleCount);
 
@@ -134,9 +134,9 @@ namespace EggEncoder.Codecs.Mov
             stream.Position = chunkOffsetAtom.ContentStart + 4;
             Span<byte> countBuffer = stackalloc byte[4];
             stream.ReadExactly(countBuffer);
-            var count = (int)BinaryPrimitives.ReadUInt32BigEndian(countBuffer);
-
             var entrySize = is64Bit ? 8 : 4;
+            var count = CheckedEntryCount(BinaryPrimitives.ReadUInt32BigEndian(countBuffer), entrySize, is64Bit ? "'co64'" : "'stco'");
+
             var buffer = new byte[count * entrySize];
             stream.ReadExactly(buffer);
 
@@ -156,7 +156,7 @@ namespace EggEncoder.Codecs.Mov
             stream.Position = stsc.ContentStart + 4;
             Span<byte> countBuffer = stackalloc byte[4];
             stream.ReadExactly(countBuffer);
-            var count = (int)BinaryPrimitives.ReadUInt32BigEndian(countBuffer);
+            var count = CheckedEntryCount(BinaryPrimitives.ReadUInt32BigEndian(countBuffer), entryBytes: 12, "'stsc'");
 
             var buffer = new byte[count * 12];
             stream.ReadExactly(buffer);
@@ -171,6 +171,26 @@ namespace EggEncoder.Codecs.Mov
             }
 
             return entries;
+        }
+
+        // Every per-table entry count in this file (stsz's sampleCount, stco/co64's count, stsc's
+        // count, stss's count) is an untrusted 32-bit value straight from the file -- a corrupted or
+        // malicious one large enough that count * entryBytes overflows int32, while the raw count
+        // itself still narrows to a plausible-looking non-negative int, would otherwise reach
+        // `new byte[...]`/`Span.Slice` as a silently wrong (wrapped) buffer size or a raw
+        // OverflowException/ArgumentOutOfRangeException, rather than this codebase's own clear,
+        // InvalidDataException convention for malformed input (the same class of bug
+        // TtaReader.OpenCore's own totalFramesLong check already guards against). Checked in long
+        // arithmetic, which has far more headroom than int32 before precision loss matters here.
+        private static int CheckedEntryCount(uint rawCount, int entryBytes, string atomName)
+        {
+            var byteLength = (long)rawCount * entryBytes;
+            if (byteLength > int.MaxValue)
+            {
+                throw new InvalidDataException($"{atomName} atom declares {rawCount} entries, which would require {byteLength} bytes -- too large to be a valid sample table");
+            }
+
+            return (int)rawCount;
         }
     }
 }
