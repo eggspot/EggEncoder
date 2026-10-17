@@ -11,11 +11,15 @@ namespace EggEncoder.Streaming.Hls
     public static class M3u8PlaylistWriter
     {
         /// <summary>
-        /// The minimum <c>EXT-X-VERSION</c> an <c>EXT-X-MAP</c> tag requires without
-        /// <c>EXT-X-I-FRAMES-ONLY</c> present (RFC 8216 §7) -- the version every playlist this
-        /// writer produces declares, since every fMP4-segmented playlist needs <c>EXT-X-MAP</c>.
+        /// The <c>EXT-X-VERSION</c> every playlist this writer produces declares. Confirmed
+        /// against a real ffmpeg-produced fMP4 HLS fixture using the exact same combination this
+        /// writer itself needs (fMP4 segments + <c>EXT-X-MAP</c>, no <c>EXT-X-I-FRAMES-ONLY</c>) --
+        /// not derived from reading RFC 8216 §7's own compatibility table alone, since a prior
+        /// version of this constant (<c>6</c>) was "corrected" down from <c>7</c> based on exactly
+        /// that unverified reading and was wrong; real-world encoders consistently declare <c>7</c>
+        /// for this combination.
         /// </summary>
-        public const int Version = 6;
+        public const int Version = 7;
 
         /// <param name="targetDurationSeconds">
         /// <c>EXT-X-TARGETDURATION</c> -- an integer number of seconds no shorter than any segment's

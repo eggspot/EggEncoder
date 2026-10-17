@@ -494,10 +494,12 @@ playlist a player can actually fetch.
 - `src/EggEncoder/Streaming/Hls/M3u8PlaylistWriter.cs`: a stateless formatter, `BuildMediaPlaylist
   (int targetDurationSeconds, long mediaSequence, IReadOnlyList<HlsSegmentDescriptor> segments,
   string? initSegmentUri, bool endList) -> string` (no `version` parameter -- this writer always
-  declares `Version = 6`, per `RFC 8216` §7's own compatibility table the minimum an `EXT-X-MAP` tag
-  requires when `EXT-X-I-FRAMES-ONLY` is absent, which is this plan's own only case -- a public
-  const rather than a configurable parameter, since nothing in this plan ever needs a different
-  value). Emits, per `RFC 8216` §4.3.3/§4.4: `#EXTM3U`, `#EXT-X-VERSION:6`, `#EXT-X-TARGETDURATION:
+  declares `Version = 7`, confirmed against a real ffmpeg-produced fMP4 HLS fixture using the exact
+  same combination this writer needs (fMP4 + `EXT-X-MAP`, no `EXT-X-I-FRAMES-ONLY`) -- **not** the
+  spec-table-derived value `6` an earlier version of this plan/code shipped with; see this item's
+  own "Found during item 5" status-note addendum below for the correction -- a public const rather
+  than a configurable parameter, since nothing in this plan ever needs a different value). Emits,
+  per `RFC 8216` §4.3.3/§4.4: `#EXTM3U`, `#EXT-X-VERSION:7`, `#EXT-X-TARGETDURATION:
   {n}`, `#EXT-X-MEDIA-SEQUENCE:{mediaSequence}`, `#EXT-X-MAP:URI="{initSegmentUri}"` (omitted when
   `initSegmentUri` is `null` -- MPEG-TS segments from item 4 need no init segment at all), then per
   segment `#EXTINF:{duration},` + the segment's own URI, and finally `#EXT-X-ENDLIST` only when
@@ -547,6 +549,18 @@ own accumulating list internally, so a caller can wire `AacStreamingEncoder.Crea
 segmenter.AddFrame(frame))` directly with no manual conversion step. VOD-only, as this item's own
 title now reflects (split from the original combined item per this plan's own explicitly-allowed
 "split into two PRs" escape hatch) -- see item 3b for the live sliding window.
+
+**Found during item 5, fixed in its own PR**: `M3u8PlaylistWriter.Version` originally shipped as
+`6`, "corrected" down from an initial `7` during this PR's own self-review on the strength of a
+recollected (not verified) reading of RFC 8216 §7's compatibility table. While generating a real
+multi-variant HLS fixture for item 5's own `CODECS` string verification, a real, current ffmpeg's
+own `hls` muxer was observed declaring `EXT-X-VERSION:7` for the exact same fMP4+`EXT-X-MAP`/no-
+I-FRAMES-ONLY combination this project's own playlist writer produces -- contradicting the earlier
+"corrected" value. Fixed back to `7`, this time confirmed against that real fixture rather than a
+recollected spec reading, matching this plan's own "verify against a real fixture, not memory"
+discipline it should have followed the first time. A genuine process lesson, not just a trivia
+correction: a self-review "fix" is not automatically more correct than what it replaces -- it needs
+the same verification bar as the original code.
 
 ## 3b. HLS live sliding window
 

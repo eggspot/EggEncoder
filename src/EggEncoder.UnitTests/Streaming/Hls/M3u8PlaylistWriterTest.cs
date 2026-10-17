@@ -19,7 +19,7 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             var lines = playlist.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
             lines[0].Should().Be("#EXTM3U");
-            lines.Should().ContainSingle(l => l == "#EXT-X-VERSION:6");
+            lines.Should().ContainSingle(l => l == "#EXT-X-VERSION:7");
             lines.Should().ContainSingle(l => l == "#EXT-X-TARGETDURATION:6");
             lines.Should().ContainSingle(l => l == "#EXT-X-MEDIA-SEQUENCE:1");
             lines.Should().ContainSingle(l => l == "#EXT-X-MAP:URI=\"init.mp4\"");
