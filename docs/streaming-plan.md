@@ -425,7 +425,8 @@ mechanically adapt (unlike, say, widening an existing writer for `Stream` suppor
 accordingly, and don't be surprised if real-fixture verification (the `ftyp` brand values
 especially) takes real back-and-forth against an actual reference file's bytes.
 
-**Status**: done (PR TBD). `FmpInitSegmentWriter.BuildInitSegment`/`FmpMediaSegmentWriter.
+**Status**: done ([PR #111](https://github.com/eggspot/EggEncoder/pull/111)).
+`FmpInitSegmentWriter.BuildInitSegment`/`FmpMediaSegmentWriter.
 BuildMediaSegment` (`src/EggEncoder/Streaming/Mp4/`), backed by a new shared `Mp4BoxBuilder`
 (`Codecs.Mov`, alongside `MovAtomReader` -- both are low-level ISOBMFF plumbing) and
 `Mp4EsdsParser.BuildAudioSpecificConfig`/`BuildEsdsBoxContent` (the write-side counterpart to that
