@@ -27,8 +27,12 @@ public interface IMediaEncoder
     Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken); // same shallow check as above
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken); // checked once per decoded block, inside AudioCutter's own shared decode callback -- real, sub-second cancellation for every format
+    Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat); // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) supports; destination: Wav only so far, via WavWriter.Create(Stream, ...) -- see docs/feature-roadmap.md item 1
+    Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken); // checked once per decoded block, same as the path-based CancellationToken overload
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken); // same per-block check as ConvertFile above
+    Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat); // same source/destination format support as the Stream-based ConvertFile above
+    Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken);
 }
 
 public enum AudioFormat { Wav, Aiff, Au, Flac, Mp3, Aac, Wma, Caf, Tta, Opus, Vorbis, WavPack, Mov } // mirrors AudioCutter's own extension-dispatch switch 1:1
@@ -764,10 +768,20 @@ public static class AudioCutter
     // Convenience float[] entry points.
     public static (float[] Samples, int Channels, int SampleRate) ReadWavAsFloat(string sourceFilePath);
     public static void WriteWavFromFloat(string destFilePath, ReadOnlySpan<float> interleavedSamples, int channels, int sampleRate);
+
+    // Stream-to-Stream overloads (AudioCutter.Stream.cs, docs/feature-roadmap.md item 1) -- AudioFormat
+    // must be given explicitly on each side, the same reason Probe(Stream, AudioFormat) needs one;
+    // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) already supports
+    // (everything except MP3). Destination: Wav only so far, via WavWriter.Create(Stream, ...) -- an
+    // unsupported AudioFormat on either side throws NotSupportedException.
+    public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat);
+    public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, PcmTransformPipeline pipeline);
+    public static bool Cut(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat);
+    public static bool Cut(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat, CutOptions options);
 }
 ```
 
-`Cut` decodes any supported source and writes any supported destination extension -- source and destination don't need to match, so it can transcode while it trims. Returns `false` (and writes no file) if the requested range is entirely outside the source's duration.
+`Cut` decodes any supported source and writes any supported destination extension -- source and destination don't need to match, so it can transcode while it trims. Returns `false` (and writes no file) if the requested range is entirely outside the source's duration. The Stream-to-Stream overloads reuse the exact same `CutOptions`/`BuildCutPipeline`/`ForwardOverlap`/`GetSampleRange`/`ScratchBuffer`/`DeferredFixedHeaderSink` machinery the path-based pipeline-aware `Convert`/`Cut` use -- including `DeferredFixedHeaderSink`'s own buffer-then-patch handling for a frame-count-changing transform (e.g. `ResamplingTransform`) in the pipeline, verified directly against a `Stream` destination, not just assumed to carry over from the path-based case.
 
 ## Waveform Generation — `EggEncoder.Waveform`
 

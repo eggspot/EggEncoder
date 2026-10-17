@@ -135,13 +135,30 @@ already falls back to for any extension other than `.mp4`.
 `WavWriter.Create` also has a `Stream`-based overload now (`WavWriter.Create(Stream destStream,
 int channels, int sampleRate, int bitsPerSample, long totalFrames, WavSampleFormat sampleFormat =
 Integer, IReadOnlyDictionary<string, string>? tags = null)`) -- the destination-Stream codec
-primitive for `docs/feature-roadmap.md` item 1's own still-open "`ConvertFile`/`CutFile` Stream
-overloads" half. Unlike every reader above, it needs no `Stream.CanSeek` at all: a WAV header's
-every size field is already known from `totalFrames` up front, so it writes the complete header
-once and never seeks back. Does not dispose the caller's stream. Not yet wired into
-`AudioCutter`/`IMediaEncoder.ConvertFile`/`CutFile` themselves -- that needs its own
-`AudioFormat`-keyed destination dispatcher (today's dispatch is by file extension, which a
-`Stream` destination doesn't have), a separate, not-yet-done piece of the same roadmap item.
+primitive for `docs/feature-roadmap.md` item 1's own "`ConvertFile`/`CutFile` Stream overloads"
+half. Unlike every reader above, it needs no `Stream.CanSeek` at all: a WAV header's every size
+field is already known from `totalFrames` up front, so it writes the complete header once and
+never seeks back. Does not dispose the caller's stream.
+
+## Stream-based ConvertFile/CutFile
+
+`IMediaEncoder.ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat
+destFormat)`/`CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int
+endInSeconds, Stream dest, AudioFormat destFormat)` (plus their own `CancellationToken` overloads)
+convert/cut between a source `Stream` and a destination `Stream` -- neither is disposed by the
+call. Backed by `AudioCutter.Stream.cs`'s own `Convert`/`Cut`, the `AudioFormat`-keyed counterpart
+to `AudioCutter.cs`'s own extension-keyed `DecodeSource`/`OpenSink` (`DecodeSourceStream`/
+`OpenSinkStream`), reusing `CutOptions`/`BuildCutPipeline`/`ForwardOverlap`/`GetSampleRange`/
+`ScratchBuffer`/`DeferredFixedHeaderSink` directly from the pipeline-aware path-based `Convert`/
+`Cut` rather than duplicating any of that logic -- including a `PcmTransformPipeline` parameter,
+so `ResamplingTransform`/`VolumeTransform`/etc. work for a `Stream` destination exactly the same
+way they already do for a path-based one (a frame-count-changing transform like resampling
+correctly routes through `DeferredFixedHeaderSink`'s own buffer-then-patch path, not just the
+"exact count known up front" one). Source: every format `Probe(Stream, AudioFormat)` already
+supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV only so
+far, via `WavWriter.Create(Stream, ...)` -- every other destination codec's own `Stream` write
+side is still open, one format at a time, the same incremental way `Stream`-based `Probe` itself
+was rolled out; an unsupported `AudioFormat` on either side throws `NotSupportedException`.
 
 ## MP3 ID3v2 Tags
 

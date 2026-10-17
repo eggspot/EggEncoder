@@ -1303,6 +1303,65 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task ConvertFile_Stream_WavToWav_Should_Succeed()
+        {
+            using var sourceStream = File.OpenRead(_wavFixturePath);
+            using var destStream = new MemoryStream();
+
+            await _nativeEncoder.ConvertFile(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wav);
+
+            destStream.Length.Should().BeGreaterThan(0);
+        }
+
+        [Fact]
+        public async Task ConvertFile_Stream_WithUnsupportedDestFormat_Should_Throw()
+        {
+            using var sourceStream = File.OpenRead(_wavFixturePath);
+            using var destStream = new MemoryStream();
+
+            var act = () => _nativeEncoder.ConvertFile(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Flac);
+
+            await act.Should().ThrowExactlyAsync<NotSupportedException>();
+        }
+
+        [Fact]
+        public async Task ConvertFile_Stream_WithAlreadyCancelledToken_Should_Throw()
+        {
+            using var sourceStream = File.OpenRead(_wavFixturePath);
+            using var destStream = new MemoryStream();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var act = () => _nativeEncoder.ConvertFile(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wav, cts.Token);
+
+            await act.Should().ThrowExactlyAsync<OperationCanceledException>();
+        }
+
+        [Fact]
+        public async Task CutFile_Stream_WavToWav_Should_Succeed()
+        {
+            using var sourceStream = File.OpenRead(_wavFixturePath);
+            using var destStream = new MemoryStream();
+
+            var produced = await _nativeEncoder.CutFile(sourceStream, AudioFormat.Wav, 0, 1, destStream, AudioFormat.Wav);
+
+            produced.Should().BeTrue();
+            destStream.Length.Should().BeGreaterThan(0);
+        }
+
+        [Fact]
+        public async Task CutFile_Stream_WithRangeOutsideDuration_Should_ReturnFalse()
+        {
+            using var sourceStream = File.OpenRead(_wavFixturePath);
+            using var destStream = new MemoryStream();
+
+            var produced = await _nativeEncoder.CutFile(sourceStream, AudioFormat.Wav, 1000, 2000, destStream, AudioFormat.Wav);
+
+            produced.Should().BeFalse();
+            destStream.Length.Should().Be(0);
+        }
+
+        [Fact]
         public async Task ConvertFile_ToNestedMissingDirectory_Should_CreateDirectory_And_Convert()
         {
             var tempDirectory = CreateTempDirectory();
