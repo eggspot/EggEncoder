@@ -155,12 +155,16 @@ so `ResamplingTransform`/`VolumeTransform`/etc. work for a `Stream` destination 
 way they already do for a path-based one (a frame-count-changing transform like resampling
 correctly routes through `DeferredFixedHeaderSink`'s own buffer-then-patch path, not just the
 "exact count known up front" one). Source: every format `Probe(Stream, AudioFormat)` already
-supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV, AIFF, and
-AU so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
-`AuWriter.Create(Stream, ...)` -- all three happen to need no `Stream.CanSeek` at all, since each
-writes a fixed-size header with every field already known from `totalFrames` up front -- every
-other destination codec's own `Stream` write side is still open, one format at a time, the same
-incremental way `Stream`-based `Probe` itself was rolled out; an unsupported `AudioFormat` on
+supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV, AIFF, AU,
+and FLAC so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
+`AuWriter.Create(Stream, ...)`/`FlacEncoder.OpenSession(Stream, ...)` -- the first three need no
+`Stream.CanSeek` at all, since each writes a fixed-size header with every field already known from
+`totalFrames` up front; FLAC is the first of these that genuinely does require `CanSeek` (throwing
+`ArgumentException` up front if it isn't seekable), since `FlacEncoderSession.Finish()` still seeks
+back to patch STREAMINFO's provisional totalSamples/MD5/block-size-range fields once their real
+values are known, same as the path-based overload's own `FileStream` destination already does --
+every other destination codec's own `Stream` write side is still open, one format at a time, the
+same incremental way `Stream`-based `Probe` itself was rolled out; an unsupported `AudioFormat` on
 either side throws `NotSupportedException`.
 
 ## Live Streaming (early)

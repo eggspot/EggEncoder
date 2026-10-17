@@ -39,9 +39,60 @@ namespace EggEncoder.Codecs.Flac
         {
             _ = compressionLevel;
 
+            var commentListBytes = ValidateAndGetCommentListBytes(destFlacFilePath, channels, bitsPerSample, tags);
+
+            var destStream = File.Create(destFlacFilePath);
+            try
+            {
+                return FlacEncoderSession.Open(destStream, channels, bitsPerSample, sampleRate, commentListBytes, leaveOpen: false);
+            }
+            catch
+            {
+                destStream.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates a FLAC destination from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a destination that isn't a local file (an HTTP request body, blob storage,
+        /// an in-memory buffer). Unlike <see cref="Wav.WavWriter"/>'s/<see cref="Aiff.AiffWriter"/>'s/
+        /// <see cref="Au.AuWriter"/>'s own <c>Create(Stream, ...)</c> overloads, this genuinely requires
+        /// <paramref name="destStream"/> to be seekable: <see cref="FlacEncoderSession.Finish"/>
+        /// seeks back to a fixed byte offset to patch STREAMINFO's provisional totalSamples/MD5/
+        /// block-size-range fields with their real values once they're known, exactly the way the
+        /// path-based overload's own <see cref="FileStream"/> destination already does -- a
+        /// non-seekable stream (e.g. an HTTP response body) cannot support that patch-up at all, so
+        /// this throws <see cref="ArgumentException"/> up front rather than failing confusingly
+        /// partway through <see cref="FlacEncoderSession.Finish"/>. Does NOT dispose
+        /// <paramref name="destStream"/> -- the caller opened it, so the caller is responsible for
+        /// disposing it.
+        /// </summary>
+        public static FlacEncoderSession OpenSession(Stream destStream, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+
+            if (!destStream.CanSeek)
+            {
+                throw new ArgumentException("FlacEncoderSession requires a seekable stream -- Finish() seeks back to patch STREAMINFO with the real totalSamples/MD5 once they're known.", nameof(destStream));
+            }
+
+            _ = compressionLevel;
+
+            var commentListBytes = ValidateAndGetCommentListBytes("<stream>", channels, bitsPerSample, tags);
+
+            return FlacEncoderSession.Open(destStream, channels, bitsPerSample, sampleRate, commentListBytes, leaveOpen: true);
+        }
+
+        // Shared by both OpenSession overloads so path-based and Stream-based destinations can
+        // never drift apart on what's a valid channel count/bit depth/tag set -- flacFilePathForErrors
+        // is "<stream>" for the Stream-based overload, the same placeholder WavWriter/AiffWriter/
+        // AuWriter's own Stream-based Create overloads already use for their error messages.
+        private static byte[]? ValidateAndGetCommentListBytes(string flacFilePathForErrors, int channels, int bitsPerSample, IReadOnlyDictionary<string, string>? tags)
+        {
             if (channels < 1)
             {
-                throw new NotSupportedException($"'{destFlacFilePath}' requests {channels} channels; FLAC requires at least 1.");
+                throw new NotSupportedException($"'{flacFilePathForErrors}' requests {channels} channels; FLAC requires at least 1.");
             }
 
             // STREAMINFO's bits-per-sample field is 5 bits wide, storing (bitsPerSample - 1) --
@@ -49,12 +100,13 @@ namespace EggEncoder.Codecs.Flac
             // wrong-but-valid-looking bit depth rather than failing, so this is checked explicitly.
             if (bitsPerSample is < 1 or > 32)
             {
-                throw new NotSupportedException($"'{destFlacFilePath}' requests {bitsPerSample} bits per sample; FLAC's STREAMINFO can only represent 1-32.");
+                throw new NotSupportedException($"'{flacFilePathForErrors}' requests {bitsPerSample} bits per sample; FLAC's STREAMINFO can only represent 1-32.");
             }
 
-            // Validate (and build) the Vorbis comment bytes before creating the destination file at
-            // all -- an invalid tag field name should fail loudly up front, not after a partial file
-            // is already on disk (same precedent as Mp3Encoder.OpenSession's own tag validation).
+            // Validate (and build) the Vorbis comment bytes before creating/touching the destination
+            // at all -- an invalid tag field name should fail loudly up front, not after a partial
+            // file (or a partially-written caller-owned stream) already exists (same precedent as
+            // Mp3Encoder.OpenSession's own tag validation).
             var commentListBytes = tags is { Count: > 0 } ? VorbisCommentWriter.BuildCommentListBytes(tags) : null;
 
             // The VORBIS_COMMENT metadata block's own length field is 24 bits wide, the same
@@ -64,19 +116,10 @@ namespace EggEncoder.Codecs.Flac
             const int MaxMetadataBlockLength = (1 << 24) - 1;
             if (commentListBytes is { Length: > MaxMetadataBlockLength })
             {
-                throw new NotSupportedException($"'{destFlacFilePath}' requests a VORBIS_COMMENT block of {commentListBytes.Length} bytes; FLAC's metadata block length field can only represent up to {MaxMetadataBlockLength}.");
+                throw new NotSupportedException($"'{flacFilePathForErrors}' requests a VORBIS_COMMENT block of {commentListBytes.Length} bytes; FLAC's metadata block length field can only represent up to {MaxMetadataBlockLength}.");
             }
 
-            var destStream = File.Create(destFlacFilePath);
-            try
-            {
-                return FlacEncoderSession.Open(destStream, channels, bitsPerSample, sampleRate, commentListBytes);
-            }
-            catch
-            {
-                destStream.Dispose();
-                throw;
-            }
+            return commentListBytes;
         }
     }
 
@@ -91,7 +134,8 @@ namespace EggEncoder.Codecs.Flac
         // since this encoder never writes any other metadata block.
         private const int StreamInfoPayloadOffset = 8;
 
-        private readonly FileStream _destStream;
+        private readonly Stream _destStream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _bitsPerSample;
         private readonly int _sampleRate;
@@ -104,9 +148,10 @@ namespace EggEncoder.Codecs.Flac
         private int _lastBlockSize;
         private bool _disposed;
 
-        private FlacEncoderSession(FileStream destStream, int channels, int bitsPerSample, int sampleRate)
+        private FlacEncoderSession(Stream destStream, bool leaveOpen, int channels, int bitsPerSample, int sampleRate)
         {
             _destStream = destStream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _bitsPerSample = bitsPerSample;
             _sampleRate = sampleRate;
@@ -114,7 +159,11 @@ namespace EggEncoder.Codecs.Flac
             _md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
         }
 
-        internal static FlacEncoderSession Open(FileStream destStream, int channels, int bitsPerSample, int sampleRate, byte[]? commentListBytes = null)
+        // leaveOpen mirrors WavWriter/AiffWriter/AuWriter's own Stream-based Create overloads:
+        // false for the path-based OpenSession (this type owns the FileStream it opened, so Dispose
+        // closes it), true for the Stream-based one (the caller opened destStream, so the caller is
+        // responsible for disposing it).
+        internal static FlacEncoderSession Open(Stream destStream, int channels, int bitsPerSample, int sampleRate, byte[]? commentListBytes, bool leaveOpen)
         {
             var writer = new BitWriter();
             writer.WriteBits('f', 8);
@@ -145,7 +194,7 @@ namespace EggEncoder.Codecs.Flac
 
             destStream.Write(writer.ToArray());
 
-            return new FlacEncoderSession(destStream, channels, bitsPerSample, sampleRate);
+            return new FlacEncoderSession(destStream, leaveOpen, channels, bitsPerSample, sampleRate);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -215,7 +264,11 @@ namespace EggEncoder.Codecs.Flac
             }
 
             _disposed = true;
-            _destStream.Dispose();
+
+            if (!_leaveOpen)
+            {
+                _destStream.Dispose();
+            }
         }
 
         private void FlushPendingBlock()

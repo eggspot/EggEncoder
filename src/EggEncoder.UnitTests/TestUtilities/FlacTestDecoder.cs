@@ -11,5 +11,13 @@ namespace EggEncoder.UnitTests.TestUtilities
 
             return (streamInfo, [.. samples]);
         }
+
+        public static (FlacStreamInfo StreamInfo, int[] InterleavedSamples) DecodeAll(Stream flacStream)
+        {
+            var samples = new List<int>();
+            var streamInfo = FlacDecoder.Decode(flacStream, (block, _, _, _, _) => samples.AddRange(block.ToArray()));
+
+            return (streamInfo, [.. samples]);
+        }
     }
 }

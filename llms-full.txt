@@ -405,6 +405,7 @@ public static class FlacEncoder
 public sealed class FlacEncoderSession : IDisposable
 {
     public static FlacEncoderSession OpenSession(string destFlacFilePath, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null);
+    public static FlacEncoderSession OpenSession(Stream destStream, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = FlacEncoder.DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null); // requires destStream.CanSeek -- Finish() seeks back to patch STREAMINFO; does NOT dispose destStream
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 
@@ -1101,10 +1102,12 @@ public static class AudioCutter
     // Stream-to-Stream overloads (AudioCutter.Stream.cs, docs/feature-roadmap.md item 1) -- AudioFormat
     // must be given explicitly on each side, the same reason Probe(Stream, AudioFormat) needs one;
     // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) already supports
-    // (everything except MP3). Destination: Wav/Aiff/Au so far, via WavWriter.Create(Stream, ...)/
-    // AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...) -- all three happen to need no
-    // CanSeek at all, since each writes a fixed-size header with every field already known from
-    // totalFrames up front. An unsupported AudioFormat on either side throws NotSupportedException.
+    // (everything except MP3). Destination: Wav/Aiff/Au/Flac so far, via WavWriter.Create(Stream, ...)/
+    // AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...)/FlacEncoder.OpenSession(Stream, ...)
+    // -- the first three need no CanSeek at all, since each writes a fixed-size header with every
+    // field already known from totalFrames up front; Flac is the first that genuinely does require
+    // CanSeek (FlacEncoderSession.Finish() seeks back to patch STREAMINFO), throwing ArgumentException
+    // up front if dest isn't seekable. An unsupported AudioFormat on either side throws NotSupportedException.
     public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat);
     public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, PcmTransformPipeline pipeline);
     public static bool Cut(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat);
