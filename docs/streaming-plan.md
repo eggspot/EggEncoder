@@ -757,7 +757,8 @@ against, and silently inventing one would be worse than not detecting drift at a
 
 **Size**: small–medium.
 
-**Status**: done (PR TBD). `LiveAudioPump`/`DriftPolicy` (`src/EggEncoder/Streaming/`).
+**Status**: done ([PR #117](https://github.com/eggspot/EggEncoder/pull/117)).
+`LiveAudioPump`/`DriftPolicy` (`src/EggEncoder/Streaming/`).
 `PushSamples` validates its own interleaved-sample-count-is-a-multiple-of-channels invariant
 (`ArgumentException` otherwise) before anything else. Gap detection reads `IStreamingEncoder.
 Channels`/`SampleRate` directly from the wrapped encoder rather than needing them passed in
