@@ -110,7 +110,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). A top-level master playlist (`M3u8MasterPlaylistWriter`) lists multiple audio-bitrate renditions for a player to choose from. `LiveAudioPump` feeds PCM from a genuinely live source (not neat, exactly-on-time blocks) into an encoder, with an optional silence-fill policy for real gaps in arrival. AAC-LC (`AacStreamingEncoder`), Opus (`OpusStreamingEncoder`), and MP3 (`Mp3StreamingEncoder`) all implement `IStreamingEncoder`; the muxer/segmenter/playlist layers above are AAC-LC-only so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan and what's merged versus still open.
+A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). A top-level master playlist (`M3u8MasterPlaylistWriter`) lists multiple audio-bitrate renditions for a player to choose from. `LiveAudioPump` feeds PCM from a genuinely live source (not neat, exactly-on-time blocks) into an encoder, with an optional silence-fill policy for real gaps in arrival. AAC-LC (`AacStreamingEncoder`), Opus (`OpusStreamingEncoder`), MP3 (`Mp3StreamingEncoder`), and FLAC (`FlacStreamingEncoder`) all implement `IStreamingEncoder`; the muxer/segmenter/playlist layers above are AAC-LC-only so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan and what's merged versus still open.
 
 ```csharp
 using EggEncoder.Streaming;
@@ -171,6 +171,18 @@ using var mp3Encoder = Mp3StreamingEncoder.Create(channels: 1, sampleRate: 44100
     // frame.SampleCount reports the real sample count, like AAC-LC -- except the mandatory flush
     // frame Complete() emits, which is purely synthetic and reports 0
 }, bitRateKbps: 192);
+```
+
+`FlacStreamingEncoder` is the fourth and last, lossless, with no encoder lookahead at all -- but its raw frames, unlike the other three, are not independently decodable without a real STREAMINFO built out-of-band (a container-level concept this raw encoder deliberately leaves out of scope):
+
+```csharp
+using EggEncoder.Streaming.Flac;
+
+using var flacEncoder = FlacStreamingEncoder.Create(channels: 1, sampleRate: 44100, bitsPerSample: 16, frame =>
+{
+    // frame.SampleCount reports the real sample count for every frame, including a genuinely
+    // short final one -- FLAC needs no padding at all, unlike AAC-LC/Opus/MP3
+});
 ```
 
 ## Supported Formats

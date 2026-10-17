@@ -235,7 +235,7 @@ lookahead isn't fixed at one project-wide value the way AAC-LC's is), and every 
 `SampleCount` is always `960` -- Opus has no bitstream-level short-final-frame concept.
 
 `EggEncoder.Streaming.Mp3.Mp3StreamingEncoder` is the third `IStreamingEncoder` implementation
-(item 8's MP3 sub-item; FLAC still open), same scope as `Codecs.Mp3.Mp3EncoderSession`
+(item 8's MP3 sub-item), same scope as `Codecs.Mp3.Mp3EncoderSession`
 (mono/stereo, 32000/44100/48000Hz, CBR only), reusing `Mp3FrameEncoder`'s own encode internals.
 Writes no LAME-tag header frame or ID3v2 tag (both are container/file-level conventions with no
 equivalent for a raw frame stream); `Mp3Encoder.EncoderDelaySamples` (`1680`) remains the right
@@ -243,6 +243,16 @@ value for a muxer to use. Unlike `OpusStreamingEncoder`, reports each frame's ow
 count (like `AacStreamingEncoder`) rather than always the nominal `1152` -- except `Complete()`'s
 own mandatory flush frame (draining the one-granule MDCT history), which is purely synthetic and
 reports `0`.
+
+`EggEncoder.Streaming.Flac.FlacStreamingEncoder` is the fourth and last `IStreamingEncoder`
+implementation (item 8's FLAC sub-item, completing it), same scope as
+`Codecs.Flac.FlacEncoderSession` (any channel count, 1-32 bits per sample), reusing
+`FlacFrameEncoder`'s own encode internals. Simpler than the other three: FIXED predictors are
+purely causal (no lookahead to drain -- `EncoderDelaySamples` is always `0`), and FLAC's own frame
+format allows a short final block with no padding at all, so `Complete()` just flushes whatever's
+pending. Genuinely **not** independently decodable (unlike the other three): its frame header
+defers sample-rate/bits-per-sample to STREAMINFO, a whole-stream container concept this raw
+encoder leaves out of scope -- a caller needing a real FLAC stream must build one itself.
 
 ## MP3 ID3v2 Tags
 

@@ -845,10 +845,36 @@ lands:
   real audio, not just an approximately-right duration.
 - **FLAC**: lossless streaming is a real but lower-demand case for a *live-streaming* plan
   specifically (FLAC-over-HLS is uncommon in practice vs. AAC/Opus/MP3); worth doing once the
-  pattern is proven three times over, not before. Not started.
+  pattern is proven three times over, not before. **Done** ([PR #121](https://github.com/eggspot/EggEncoder/pull/121)) --
+  `Streaming.Flac.FlacStreamingEncoder` (`src/EggEncoder/Streaming/Flac/`), same scope as
+  `FlacEncoderSession` (any channel count, 1-32 bits per sample), reusing `FlacFrameEncoder`'s own
+  encode internals unchanged. Genuinely simpler than the other three sub-items, for two real,
+  codec-level reasons rather than a shortcut: this encoder's own FIXED predictors are purely
+  causal (only ever look at already-encoded samples within the same block, never "future" ones),
+  so there is no encoder lookahead to drain at all (`EncoderDelaySamples` is `0`, not merely
+  omitted); and FLAC's own frame format natively allows a final block shorter than the nominal
+  size with no padding, unlike AAC-LC/Opus/MP3's own fixed-or-padded frame sizes -- `Complete()`
+  therefore just flushes whatever's left pending, nothing more, no mandatory extra frame.
+  **Genuinely not independently decodable, unlike the other three sub-items**: `FlacFrameEncoder`'s
+  own existing frame header (unchanged here) always defers sample-rate and bits-per-sample to
+  STREAMINFO (writes code `0` for both, rather than using FLAC's own available explicit escape
+  codes) -- a real, pre-existing characteristic of this project's frame encoder, not introduced by
+  this item. Building a STREAMINFO (a whole-stream, container-level concept -- total duration, a
+  whole-stream MD5, min/max block size) is out of scope here, the same "container concerns belong
+  to a downstream muxer" boundary every other `IStreamingEncoder` already draws; a caller needing a
+  real, playable FLAC stream must construct one itself from `Channels`/`SampleRate`/the
+  `bitsPerSample` it already passed to `Create`. `FlacEncoderSession.WriteStreamInfoPayload` was
+  widened from `private` to `internal` (zero behavior change, confirmed by the full existing
+  `FlacEncoderTest` suite still passing unchanged) so this item's own conformance tests can build a
+  real STREAMINFO out-of-band and reuse the exact same bit layout rather than duplicating it.
+  Conformance: unlike the lossy AAC/Opus/MP3 sub-items' own SNR-floor checks, this verifies EXACT
+  sample equality after a full decode (via the project's own `FlacDecoder`) of a real file built
+  from the streaming encoder's own raw frames plus that out-of-band STREAMINFO -- the same "exact
+  original samples reproduced" bar `docs/managed-codec-rewrite-plan.md` already holds every
+  lossless codec in this project to.
 
-**Status**: partially done -- Opus and MP3 sub-items complete (see above), FLAC sub-item not
-started.
+**Status**: done -- Opus, MP3, and FLAC sub-items all complete (see above). Item 8 is now fully
+done.
 
 ## Top-level test strategy (applies across every item above)
 
