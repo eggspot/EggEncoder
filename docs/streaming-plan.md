@@ -598,30 +598,42 @@ the segmenter from item 3 a second segment-format option alongside fMP4.
 
 **Design**:
 
-- `src/EggEncoder/Streaming/MpegTs/MpegTsMuxer.cs`: given a list of `EncodedAudioFrame`-shaped
-  payloads for one segment (the same input shape item 3 already hands to item 2's media-segment
-  writer), wraps each in ADTS via the `AdtsFrameWriter.Wrap` helper described in "Architecture
-  overview," packetizes into PES packets (one PES per AAC frame is the simplest, spec-legal choice;
-  PES header carries a `PTS` in the MPEG-TS-mandated 90kHz clock — a *different* timescale from
-  fMP4's own configurable one, computed from the running sample count via `pts = sampleCount *
-  90000 / sampleRate`, truncated/wrapped to 33 bits per the spec's own clock-rollover rules), splits
-  each PES into 188-byte TS packets with the mandatory sync byte (`0x47`)/PID/continuity-counter
-  fields, and emits a PAT (once per segment or once per stream — real encoders repeat PAT/PMT
-  periodically for mid-stream tuning-in; repeating them at the start of every segment is the
-  simplest correct choice here) + PMT (declaring one AAC audio stream) ahead of the actual PES
-  packets.
-- The HLS segmenter (item 3) gains a `SegmentFormat` enum (`Fmp4`, `MpegTs`) constructor parameter;
-  when `MpegTs` is selected, it calls this muxer instead of item 2's, skips the `#EXT-X-MAP` tag
-  (MPEG-TS segments carry no separate init segment — PAT/PMT travel inside every segment instead),
-  and uses a `.ts` file extension convention instead of `.m4s`.
+- `src/EggEncoder/Streaming/MpegTs/MpegTsMuxer.cs`: given a list of `Mp4EncodedFrame`-shaped
+  payloads for one segment (the same durable shape item 3's own `HlsSegmenter.AddFrame` already
+  builds for item 2's media-segment writer), wraps each in ADTS via `AdtsFrameWriter.Wrap`,
+  packetizes into PES packets (one PES per AAC frame is the simplest, spec-legal choice; PES header
+  carries a `PTS` in the MPEG-TS-mandated 90kHz clock — a *different* timescale from fMP4's own
+  configurable one). **PTS is computed from the running TOTAL sample count, not accumulated as a
+  fixed per-frame delta**: `1024 * 90000 / 44100` is not an integer, so a naive per-frame delta
+  would drift over a long enough stream; instead each frame's PTS is independently
+  `round(cumulativeSamplesBeforeThisFrame * 90000.0 / sampleRate)`, wrapped to 33 bits per the
+  spec's own clock-rollover rule -- bounded to at most ±0.5 ticks of rounding error at any point,
+  never unboundedly drifting. Splits each PES into 188-byte TS packets with the mandatory sync byte
+  (`0x47`)/PID/continuity-counter fields (confirmed against a real ffmpeg-produced `.ts` fixture:
+  every packet uses `adaptation_field_control`=01/payload-only, even a short final one, with plain
+  `0xFF` stuffing bytes rather than an adaptation field's own stuffing mechanism), and emits a PAT +
+  PMT (declaring one `stream_type=0x0F`/ADTS-AAC stream) at the start of every segment -- every
+  segment is an independently-parseable file with its own fresh continuity counters, matching real
+  HLS TS segmenters' own convention (PTS continuity is preserved across segments by the muxer's own
+  internal running sample-count state instead, the same role `FmpMediaSegmentWriter`'s own
+  `baseMediaDecodeTime` state plays for fMP4). PAT/PMT CRC-32 uses ISO/IEC 13818-1 Annex B's own
+  variant (`MpegTsCrc32`): same polynomial and bit direction as `Codecs.Opus.OggCrc32`, but a
+  different initial value (0xFFFFFFFF vs. 0) -- not interchangeable, so it gets its own small
+  implementation rather than reusing that one with the wrong seed. PCR is **not** implemented (a
+  deliberate MVP scope limitation -- see the status note below).
+- The HLS segmenter (item 3) gains a `SegmentFormat` enum (`Fmp4`, `MpegTs`) constructor parameter
+  (defaulting to `Fmp4`, so every existing call site is unaffected); when `MpegTs` is selected, no
+  init segment is written at all, `CutSegment` calls this muxer instead of item 2's, the playlist
+  omits `#EXT-X-MAP` entirely, and segment URIs use a `.ts` extension instead of `.m4s`.
 
 **Acceptance criteria**:
 
 - **Primary conformance oracle**: a hand-written (test-only) minimal MPEG-TS/PES/ADTS parser —
   not a general-purpose one, just enough to walk TS packets, reassemble PES payloads, strip ADTS
   headers, and recover the original frame payload bytes and PTS values — confirms every frame
-  round-trips byte-for-byte and PTS values are monotonically increasing by exactly `SamplesPerFrame
-  * 90000 / sampleRate` per frame.
+  round-trips byte-for-byte and every PTS value exactly matches
+  `round(cumulativeSamplesBeforeThisFrame * 90000.0 / sampleRate)` (not a fixed per-frame delta --
+  see the design note above on why that would drift).
 - **Secondary oracle, environment-gated**: if `ffprobe` is found on `PATH`, confirm it accepts a
   produced `.ts` segment and reports the expected codec/sample rate/channel count.
 - PAT/PMT are present and well-formed (correct sync byte, correct table IDs) at the start of every
@@ -632,7 +644,26 @@ the segmenter from item 3 a second segment-format option alongside fMP4.
 is the test-only parser needed to verify it (budget real time for that, it's not throwaway code —
 treat it with the same correctness bar as the production muxer it's checking).
 
-**Status**: not started.
+**Status**: done ([PR #114](https://github.com/eggspot/EggEncoder/pull/114)).
+`MpegTsMuxer`/`MpegTsCrc32` (`src/EggEncoder/Streaming/MpegTs/`),
+wired into `HlsSegmenter` via a new `SegmentFormat` parameter (default `Fmp4`, fully backward
+compatible). PAT/PMT byte layout (table_ids, `section_length`, `PCR_PID`/`stream_type` field
+positions) and the PES header's 5-byte PTS-only encoding were confirmed bit-for-bit against a real
+ffmpeg-produced `.ts` fixture (`ffmpeg ... -f mpegts`), not assumed from the spec text alone.
+Self-conformance (byte-for-byte frame round-trip + exact PTS values + multi-segment PTS continuity
+with independently-reset PAT/PMT/audio continuity counters per segment) passes. A full `ffmpeg`
+decode of this muxer's own real output shows *more* decode errors than the equivalent plain-ADTS
+file (799 vs. 245 error lines for the same content) -- investigated directly: this project's own
+self-conformance parser recovers byte-for-byte identical ADTS frames from both the `.ts` file and
+the plain `.aac` file (0 mismatches across all 87 frames), proving the TS muxing itself is correct;
+the extra ffmpeg errors are a downstream effect of how its AAC decoder's own error-recovery
+resyncs differently depending on how data arrives from its TS demuxer vs. a flat file, layered on
+top of the same pre-existing, already-documented `AacFrameEncoder` bitstream gap from item 2's own
+status note -- not a new defect introduced here. PCR is not implemented (PMT's `PCR_PID` still
+points at the audio stream, matching real convention, but no adaptation-field PCR values are ever
+inserted) -- a real, stated MVP scope limitation that could affect a strict broadcast-grade
+decoder's buffering model, though file-based players generally tolerate deriving timing from PTS
+alone; add it as its own follow-up if a real player is found that needs it.
 
 ## 5. Master playlist (multi-bitrate)
 

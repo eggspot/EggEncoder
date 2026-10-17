@@ -853,12 +853,13 @@ public sealed class HlsSegmenter
 {
     public const string InitSegmentUri = "init.mp4";
 
-    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink);
+    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4);
     // VOD mode: every segment ever produced stays in the playlist. Writes the init segment
-    // immediately; throws ArgumentOutOfRangeException for a non-positive targetDurationSeconds,
+    // immediately (Fmp4 only -- MpegTs writes none, since PAT/PMT travel inside every segment
+    // instead); throws ArgumentOutOfRangeException for a non-positive targetDurationSeconds,
     // NotSupportedException for channels != 1 or an invalid sample rate
 
-    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize);
+    public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4);
     // Live mode: once more segments exist than liveWindowSize retains, the oldest is dropped from
     // the playlist (EXT-X-MEDIA-SEQUENCE advances to match) and IStreamingSink.DeleteMediaSegment
     // is called for it; no EXT-X-ENDLIST is written until Complete() is actually called. Also
@@ -871,17 +872,50 @@ public sealed class HlsSegmenter
 
     public void Complete(); // flushes the final (possibly short) segment and writes #EXT-X-ENDLIST; safe to call more than once
 }
+
+public enum SegmentFormat { Fmp4, MpegTs } // which container CutSegment builds; MpegTs omits EXT-X-MAP and uses a .ts segment URI extension
 ```
 
-`HlsSegmenter` accumulates frames and cuts a segment (via `FmpMediaSegmentWriter`) once their
-cumulative duration reaches `targetDurationSeconds` or more -- always on a frame boundary, so a real
-segment can overshoot the target by at most one frame's worth -- and rewrites the playlist through
-the sink after every cut. Both constructors delegate to one shared private constructor so the two
-modes can't drift apart. The playlist's own `#EXT-X-TARGETDURATION` is **not** simply the
-configured value echoed back: `HlsSegmenter` tracks the real maximum segment duration observed so
-far and writes `ceil(max(configured, observed))` on every rewrite, so the tag can never be violated
-by a segment the playlist already lists (RFC 8216 §4.3.3.1) -- confirmed by a test that deliberately
-forces an overshoot.
+`HlsSegmenter` accumulates frames and cuts a segment (via `FmpMediaSegmentWriter` or
+`MpegTsMuxer`, depending on `segmentFormat`) once their cumulative duration reaches
+`targetDurationSeconds` or more -- always on a frame boundary, so a real segment can overshoot the
+target by at most one frame's worth -- and rewrites the playlist through the sink after every cut.
+Both VOD/live constructors delegate to one shared private constructor so the modes can't drift
+apart. The playlist's own `#EXT-X-TARGETDURATION` is **not** simply the configured value echoed
+back: `HlsSegmenter` tracks the real maximum segment duration observed so far and writes
+`ceil(max(configured, observed))` on every rewrite, so the tag can never be violated by a segment
+the playlist already lists (RFC 8216 §4.3.3.1) -- confirmed by a test that deliberately forces an
+overshoot.
+
+```csharp
+public sealed class MpegTsMuxer
+{
+    public MpegTsMuxer(int channels, int sampleRate);
+    // throws NotSupportedException for channels != 1 or an invalid MPEG-4 AAC sample rate
+
+    public byte[] BuildSegment(IReadOnlyList<Mp4EncodedFrame> frames);
+    // one complete, independently-parseable .ts file per call: PAT + PMT (stream_type=0x0F, ADTS
+    // AAC) repeated at the start, then one PES packet per frame, split across 188-byte TS packets.
+    // Throws ArgumentException for an empty frames list.
+}
+```
+
+The alternative, ADTS-framed segment format to `FmpMediaSegmentWriter`'s own fMP4/CMAF one. Every
+segment gets its own fresh PAT/PMT/continuity counters (matching real HLS TS segmenters'
+convention that every segment is a standalone file), but PTS continuity across segments is
+preserved via the muxer's own internal running sample-count state -- build a fresh instance per
+rendition. Each PES's own PTS (the MPEG-TS-mandated 90kHz clock, different from fMP4's own
+configurable timescale) is `round(cumulativeSamplesBeforeThisFrame * 90000.0 / sampleRate)`,
+computed from the running total rather than accumulated as a fixed per-frame delta -- `1024 *
+90000 / 44100` isn't an integer, so a naive delta would drift unboundedly over a long stream, while
+this bounds the error to at most ±0.5 ticks at any point. PCR is not implemented (a deliberate,
+documented MVP scope limitation -- `docs/streaming-plan.md` item 4's own status note has the
+detail); `ffprobe` still correctly reports this muxer's own output's codec/sample-rate/channels.
+Field layout (PAT/PMT table_ids and section fields, the PES header's 5-byte PTS-only encoding) was
+confirmed bit-for-bit against a real ffmpeg-produced `.ts` fixture. `MpegTsCrc32`
+(`EggEncoder.Streaming.MpegTs`, internal) is ISO/IEC 13818-1 Annex B's own PSI-table CRC-32 -- same
+polynomial and bit direction as `Codecs.Opus.OggCrc32`, but a different initial value (0xFFFFFFFF
+vs. 0), so it isn't reused directly.
 
 ## AudioCutter — `EggEncoder.Codecs`
 

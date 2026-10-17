@@ -148,7 +148,30 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   own `EXT-X-TARGETDURATION` value is **not** simply the configured target echoed back -- `HlsSegmenter`
   tracks the real maximum segment duration observed so far and writes `ceil(max(configured,
   observed))` on every rewrite, so the tag can never be violated by a segment the playlist already
-  lists (RFC 8216 §4.3.3.1).
+  lists (RFC 8216 §4.3.3.1). A `SegmentFormat` constructor parameter (`Fmp4`, the default, or
+  `MpegTs`) picks which container `CutSegment` builds -- `MpegTs` skips writing an init segment at
+  all, omits `EXT-X-MAP` from the playlist, and uses a `.ts` segment URI extension instead of
+  `.m4s`, since MPEG-TS carries its own PAT/PMT inside every segment.
+- `Streaming.MpegTs.MpegTsMuxer`/`MpegTsCrc32` (`Streaming/MpegTs/`) -- the alternative,
+  ADTS-framed segment format to `FmpMediaSegmentWriter`'s own fMP4/CMAF one. Every call to
+  `BuildSegment` produces one complete, independently-parseable `.ts` file: PAT + PMT (declaring
+  one `stream_type=0x0F`/ADTS-AAC stream) repeated at the start, then one PES packet per frame,
+  split across 188-byte TS packets (`adaptation_field_control`=01/payload-only always, even for a
+  short final packet -- plain `0xFF` stuffing, never an adaptation field, confirmed against a real
+  ffmpeg-produced `.ts` fixture). Each PES's own PTS (the MPEG-TS-mandated 90kHz clock, a different
+  timescale from fMP4's own configurable one) is `round(cumulativeSamplesBeforeThisFrame * 90000.0
+  / sampleRate)`, computed from the running TOTAL sample count rather than accumulated as a fixed
+  per-frame delta -- `1024 * 90000 / 44100` isn't an integer, so a naive delta would drift
+  unboundedly over a long stream, while this bounds the error to at most ±0.5 ticks at any point.
+  Every segment is an independently-parseable file with its own fresh PAT/PMT/continuity counters
+  (matching real HLS TS segmenters' own convention), but PTS continuity across segments is still
+  preserved via the muxer's own internal running sample count -- build a fresh instance per
+  rendition, the same "stateful, one per rendition" shape `FmpMediaSegmentWriter` already
+  established. `MpegTsCrc32` is ISO/IEC 13818-1 Annex B's own PSI-table CRC-32: same polynomial and
+  bit direction as `Codecs.Opus.OggCrc32`, but a different initial value (0xFFFFFFFF vs. 0) -- not
+  interchangeable despite the shared shape, so it's its own small implementation. PCR is not
+  implemented (a deliberate, documented MVP scope limitation -- see docs/streaming-plan.md item 4's
+  own status note for what this could affect and why it wasn't pursued further).
 
 ### Native binary packaging
 
