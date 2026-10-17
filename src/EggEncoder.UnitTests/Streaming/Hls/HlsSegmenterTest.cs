@@ -273,6 +273,62 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             deletedInOrder.Should().Equal(1L, 2L);
         }
 
+        [Fact]
+        public void MpegTsFormat_Constructor_Should_NotWriteAnInitSegment()
+        {
+            var sink = new InMemoryStreamingSink();
+
+            _ = new HlsSegmenter(1, SampleRate, targetDurationSeconds: 6, sink, SegmentFormat.MpegTs);
+
+            sink.InitSegment.Should().BeNull("MPEG-TS carries PAT/PMT inside every segment, so there is no separate init segment");
+        }
+
+        [Fact]
+        public void MpegTsFormat_Playlist_Should_OmitExtXMap_AndUseTsExtension()
+        {
+            var sink = new InMemoryStreamingSink();
+            var segmenter = new HlsSegmenter(1, SampleRate, targetDurationSeconds: 1, sink, SegmentFormat.MpegTs);
+
+            for (var i = 0; i < 44; i++)
+            {
+                segmenter.AddFrame(Frame(SamplesPerFrame, i));
+            }
+
+            segmenter.Complete();
+
+            var playlistText = Encoding.UTF8.GetString(sink.Playlist!);
+            playlistText.Should().NotContain("#EXT-X-MAP");
+            playlistText.Should().Contain("segment_1.ts");
+        }
+
+        [Fact]
+        public void MpegTsFormat_EndToEnd_RealAacStreamingEncoder_Should_ProduceWellFormedTsSegments()
+        {
+            var sink = new InMemoryStreamingSink();
+            var segmenter = new HlsSegmenter(1, SampleRate, targetDurationSeconds: 1, sink, SegmentFormat.MpegTs);
+
+            using (var encoder = AacStreamingEncoder.Create(1, SampleRate, frame => segmenter.AddFrame(frame)))
+            {
+                var samples = new int[SampleRate * 2];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    samples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / SampleRate));
+                }
+
+                encoder.Write(samples);
+                encoder.Complete();
+            }
+
+            segmenter.Complete();
+
+            sink.MediaSegments.Should().NotBeEmpty();
+            foreach (var segmentBytes in sink.MediaSegments.Values)
+            {
+                (segmentBytes.Length % 188).Should().Be(0, "every TS segment must be a whole number of 188-byte packets");
+                segmentBytes[0].Should().Be(0x47, "every TS segment starts with the sync byte");
+            }
+        }
+
         private static EncodedAudioFrame Frame(int sampleCount, long frameIndex) =>
             new(new byte[] { 0xAA, 0xBB, 0xCC }, sampleCount, frameIndex);
 

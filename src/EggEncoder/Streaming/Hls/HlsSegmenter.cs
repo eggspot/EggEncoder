@@ -1,24 +1,29 @@
 using System.Text;
 using EggEncoder.Streaming.Mp4;
+using EggEncoder.Streaming.MpegTs;
 
 namespace EggEncoder.Streaming.Hls
 {
     /// <summary>
-    /// Cuts an fMP4/CMAF HLS stream from a sequence of encoded audio frames: writes the init
-    /// segment once at construction, accumulates frames and cuts a media segment once their
-    /// cumulative duration reaches <c>targetDurationSeconds</c> (always on a frame boundary, so a
-    /// real segment's duration is always &gt;= target by at most one frame), and rewrites the media
-    /// playlist after every cut. <see cref="Complete"/> flushes the final, possibly-short segment
-    /// and writes <c>EXT-X-ENDLIST</c>. Two modes, chosen by which constructor is used: VOD (every
-    /// segment ever produced stays in the playlist) or live (a bounded sliding window of the most
-    /// recent segments -- see the live constructor's own doc comment).
+    /// Cuts an HLS stream from a sequence of encoded audio frames, in either <see cref="SegmentFormat.Fmp4"/>
+    /// (the default -- writes an init segment once at construction, referenced from the playlist
+    /// via <c>EXT-X-MAP</c>) or <see cref="SegmentFormat.MpegTs"/> (no init segment at all; PAT/PMT
+    /// travel inside every media segment instead). Accumulates frames and cuts a media segment once
+    /// their cumulative duration reaches <c>targetDurationSeconds</c> (always on a frame boundary,
+    /// so a real segment's duration is always &gt;= target by at most one frame), and rewrites the
+    /// media playlist after every cut. <see cref="Complete"/> flushes the final, possibly-short
+    /// segment and writes <c>EXT-X-ENDLIST</c>. Two further modes, chosen by which constructor is
+    /// used: VOD (every segment ever produced stays in the playlist) or live (a bounded sliding
+    /// window of the most recent segments -- see the live constructor's own doc comment).
     /// </summary>
     public sealed class HlsSegmenter
     {
         private readonly int _sampleRate;
         private readonly int _targetDurationSeconds;
         private readonly IStreamingSink _sink;
-        private readonly FmpMediaSegmentWriter _mediaSegmentWriter = new();
+        private readonly SegmentFormat _segmentFormat;
+        private readonly FmpMediaSegmentWriter? _fmp4Writer;
+        private readonly MpegTsMuxer? _mpegTsMuxer;
         private readonly List<Mp4EncodedFrame> _pendingFrames = [];
         private readonly List<HlsSegmentDescriptor> _segments = [];
 
@@ -32,8 +37,8 @@ namespace EggEncoder.Streaming.Hls
         /// <summary>VOD mode: every segment ever produced stays in the playlist until <see cref="Complete"/> writes <c>EXT-X-ENDLIST</c>.</summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive.</exception>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
-        public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink)
-            : this(channels, sampleRate, targetDurationSeconds, sink, liveWindowSize: null)
+        public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
+            : this(channels, sampleRate, targetDurationSeconds, sink, liveWindowSize: null, segmentFormat)
         {
         }
 
@@ -45,12 +50,12 @@ namespace EggEncoder.Streaming.Hls
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
-        public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize)
-            : this(channels, sampleRate, targetDurationSeconds, sink, (int?)liveWindowSize)
+        public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
+            : this(channels, sampleRate, targetDurationSeconds, sink, (int?)liveWindowSize, segmentFormat)
         {
         }
 
-        private HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int? liveWindowSize)
+        private HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int? liveWindowSize, SegmentFormat segmentFormat)
         {
             ArgumentNullException.ThrowIfNull(sink);
             if (targetDurationSeconds <= 0)
@@ -67,8 +72,19 @@ namespace EggEncoder.Streaming.Hls
             _targetDurationSeconds = targetDurationSeconds;
             _sink = sink;
             _liveWindowSize = liveWindowSize;
+            _segmentFormat = segmentFormat;
 
-            sink.WriteInitSegment(FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
+            if (segmentFormat == SegmentFormat.Fmp4)
+            {
+                _fmp4Writer = new FmpMediaSegmentWriter();
+                sink.WriteInitSegment(FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
+            }
+            else
+            {
+                // MPEG-TS carries its own PAT/PMT inside every segment -- no separate init segment
+                // or EXT-X-MAP tag needed (see WritePlaylist).
+                _mpegTsMuxer = new MpegTsMuxer(channels, sampleRate);
+            }
         }
 
         public const string InitSegmentUri = "init.mp4";
@@ -119,7 +135,9 @@ namespace EggEncoder.Streaming.Hls
             var durationSeconds = _accumulatedSampleCount / (double)_sampleRate;
             _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
 
-            var segmentBytes = _mediaSegmentWriter.BuildMediaSegment(_pendingFrames);
+            var segmentBytes = _segmentFormat == SegmentFormat.Fmp4
+                ? _fmp4Writer!.BuildMediaSegment(_pendingFrames)
+                : _mpegTsMuxer!.BuildSegment(_pendingFrames);
             _sink.WriteMediaSegment(sequenceNumber, segmentBytes);
 
             _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, SegmentUri(sequenceNumber)));
@@ -145,11 +163,12 @@ namespace EggEncoder.Streaming.Hls
             // just echoing the configured value back, which a long-enough-running stream could
             // eventually violate.
             var targetDurationTagValue = (int)Math.Ceiling(Math.Max(_targetDurationSeconds, _maxObservedSegmentDurationSeconds));
+            var initSegmentUri = _segmentFormat == SegmentFormat.Fmp4 ? InitSegmentUri : null;
 
-            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, InitSegmentUri, endList);
+            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, initSegmentUri, endList);
             _sink.WritePlaylist(Encoding.UTF8.GetBytes(playlistText));
         }
 
-        private static string SegmentUri(long sequenceNumber) => $"segment_{sequenceNumber}.m4s";
+        private string SegmentUri(long sequenceNumber) => _segmentFormat == SegmentFormat.Fmp4 ? $"segment_{sequenceNumber}.m4s" : $"segment_{sequenceNumber}.ts";
     }
 }
