@@ -708,7 +708,8 @@ rather than building it speculatively now).
 **Size**: small. The simplest item in this plan — a pure, stateless string formatter with no
 muxing/timestamp concerns at all.
 
-**Status**: done (PR TBD). `M3u8MasterPlaylistWriter.BuildMasterPlaylist`/`HlsRenditionDescriptor`
+**Status**: done ([PR #116](https://github.com/eggspot/EggEncoder/pull/116)).
+`M3u8MasterPlaylistWriter.BuildMasterPlaylist`/`HlsRenditionDescriptor`
 (`src/EggEncoder/Streaming/Hls/`). Reuses `M3u8PlaylistWriter.Version` directly (no separate
 version constant) so the two writers can never disagree about which `EXT-X-VERSION` to declare.
 `"mp4a.40.2"` and the overall `#EXT-X-STREAM-INF:BANDWIDTH={n},CODECS="{s}"` + URI shape (no
