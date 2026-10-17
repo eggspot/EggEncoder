@@ -110,21 +110,29 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-`IStreamingEncoder` is a push-style incremental encoder: PCM in via `Write`, one encoded access unit out per callback invocation, with no destination file/`Stream` and no known total length required — the building block a live HLS/fMP4/MPEG-TS packaging pipeline needs underneath it. Only the AAC-LC encoder exists so far; see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (fMP4/CMAF muxer, MPEG-TS muxer, HLS segmenter, `.m3u8` playlist writer, master playlist) and what's merged versus still open.
+`IStreamingEncoder` is a push-style incremental encoder: PCM in via `Write`, one encoded access unit out per callback invocation, with no destination file/`Stream` and no known total length required — the building block a live HLS/fMP4/MPEG-TS packaging pipeline needs underneath it. A fragmented MP4 (fMP4/CMAF) muxer builds on it. Only mono AAC-LC exists so far; see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (MPEG-TS muxer, HLS segmenter, `.m3u8` playlist writer, master playlist) and what's merged versus still open.
 
 ```csharp
 using EggEncoder.Streaming.Aac;
+using EggEncoder.Streaming.Mp4;
 
+var initSegment = FmpInitSegmentWriter.BuildInitSegment(channels: 1, sampleRate: 44100);
+var segmentWriter = new FmpMediaSegmentWriter(); // one instance per rendition -- it carries state across calls
+
+var framesForThisSegment = new List<Mp4EncodedFrame>();
 using var encoder = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame =>
 {
     // frame.Payload: one raw AAC-LC access unit (no ADTS/container framing)
     // frame.SampleCount: real samples this frame represents (1024, except a short final frame)
-    SendToYourOwnMuxerOrDestination(frame.Payload);
+    // Payload is a ref struct's Span -- copy it out before it outlives this callback.
+    framesForThisSegment.Add(new Mp4EncodedFrame(frame.Payload.ToArray(), frame.SampleCount));
 });
 
 encoder.Write(pcmSamplesAsTheyArrive);
 // ... more Write calls as PCM arrives, with no upper bound ...
 encoder.Complete(); // flushes any partial trailing frame
+
+var mediaSegment = segmentWriter.BuildMediaSegment(framesForThisSegment); // moof + mdat
 ```
 
 ## Supported Formats

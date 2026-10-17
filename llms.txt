@@ -179,6 +179,14 @@ ADTS/container framing -- that's added by a muxer downstream), the real sample c
 `AacStreamingEncoder.EncoderDelaySamples` (`1024`) is this encoder's own fixed one-frame MDCT
 lookahead, confirmed empirically (not merely architecturally), for a muxer's own timestamp math.
 
+`EggEncoder.Streaming.Mp4.FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate)` and
+`FmpMediaSegmentWriter.BuildMediaSegment(IReadOnlyList<Mp4EncodedFrame> frames)` build a fragmented
+MP4 (fMP4/CMAF) init segment (once per rendition) and media segments (one call per segment) for a
+single mono AAC-LC track. `FmpMediaSegmentWriter` carries `sequence_number`/`baseMediaDecodeTime`
+state across calls -- build a fresh instance per rendition. `Mp4EncodedFrame(byte[] Payload, int
+SampleCount)` is the durable shape a caller collects `EncodedAudioFrame`'s own ref-struct payload
+into (via `frame.Payload.ToArray()`) before batching frames into one segment.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

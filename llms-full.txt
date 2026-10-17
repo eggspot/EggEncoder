@@ -781,6 +781,42 @@ differs. `AdtsFrameWriter` (`EggEncoder.Codecs.Aac`, internal) now holds the ADT
 standalone, used by the existing ADTS-to-file path and reusable by a future MPEG-TS muxer, instead
 of being inlined once per caller.
 
+A fragmented MP4 (fMP4/CMAF) muxer builds on `IStreamingEncoder`'s own output:
+
+```csharp
+public readonly record struct Mp4EncodedFrame(byte[] Payload, int SampleCount);
+// the durable shape a caller collects EncodedAudioFrame's own ref-struct Payload into (via
+// frame.Payload.ToArray()) before batching frames spanning more than one callback call.
+
+public static class FmpInitSegmentWriter
+{
+    public static byte[] BuildInitSegment(int channels, int sampleRate);
+    // builds ftyp+moov once per rendition, holding no samples of its own; throws
+    // NotSupportedException for channels != 1 or an invalid MPEG-4 AAC sample rate
+}
+
+public sealed class FmpMediaSegmentWriter
+{
+    public byte[] BuildMediaSegment(IReadOnlyList<Mp4EncodedFrame> frames);
+    // builds one moof+mdat pair per call; sequence_number/baseMediaDecodeTime both carry forward
+    // across calls -- build a fresh instance per rendition. Throws ArgumentException for an empty
+    // frames list.
+}
+```
+
+Backed by `Mp4BoxBuilder` and `Mp4EsdsParser.BuildAudioSpecificConfig`/`BuildEsdsBoxContent`
+(`EggEncoder.Codecs.Mov`, internal, alongside the existing `MovAtomReader`/`Mp4EsdsParser` read-side
+types -- both are low-level ISOBMFF plumbing, not streaming-specific). Box field values (`ftyp`
+brand set, `tfhd`/`tfdt`/`trun` flag choices) are confirmed against a real ffmpeg-produced CMAF
+fMP4 fixture's own bytes. Self-conformance is checked by parsing the init segment back with
+`MovAtomReader` directly (no new production reader code needed) and media segments with a small,
+test-only moof/traf/trun reader (`Mp4SampleTable` only understands the non-fragmented stsz/stco/stsc
+layout, a genuinely different box set). A known, pre-existing, unrelated gap: `ffmpeg`'s own
+independent AAC decoder fails on this project's AAC bitstream (both via this muxer and via the
+existing plain ADTS file path) even though `ffprobe`'s own container-metadata reporting (codec/
+sample-rate/channels) is correct and this project's own `AacDecoder` decodes it fine -- see
+`docs/streaming-plan.md` item 2's own status note.
+
 ## AudioCutter — `EggEncoder.Codecs`
 
 Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:
