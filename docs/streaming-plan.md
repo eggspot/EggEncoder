@@ -54,11 +54,13 @@ created this file. Here is everything you need:
 6. **Commit to a feature branch, open a PR, self-review (two passes, per `CLAUDE.md`), merge, run
    `dotnet test --configuration Release` on `main`.** Exactly the workflow the rest of this repo's
    history already uses.
-7. **Check the item off in this file** (`- [ ]` → `- [x]`) **in the same PR**, with a one-line
-   "Status" note after it (merged PR link + anything genuinely left out of scope — see
-   `docs/managed-codec-rewrite-plan.md`'s own checked items for the exact format to copy). If
-   genuinely blocked, don't silently skip it — leave it unchecked, write exactly why, and move to
-   the next unblocked item instead.
+7. **Update the item's own `**Status**` line in this file, in the same PR** (unlike
+   `docs/managed-codec-rewrite-plan.md`/`docs/video-support-backlog.md`'s `- [ ]`/`- [x]` checkbox
+   convention, this plan's own backlog items are numbered `##` headings, each already ending in a
+   `**Status**: not started.` line — replace that line with a one-line note: merged PR link, plus
+   anything genuinely left out of scope). If genuinely blocked, don't silently mark it done — leave
+   the line as `not started` (or `blocked: <reason>`), state exactly why, and move to the next
+   unblocked item instead.
 8. **Do not touch PR #50** (the Sponsors badge) — unrelated to this initiative.
 
 ## Scope philosophy
@@ -330,7 +332,18 @@ all yet."
 **Size**: small–medium. The hard part (MDCT/quantization) already exists and is reused verbatim;
 this is a refactor of the output plumbing plus a new public surface and its own tests.
 
-**Status**: not started.
+**Status**: done ([PR #110](https://github.com/eggspot/EggEncoder/pull/110)).
+`IStreamingEncoder`/`EncodedAudioFrame`/`EncodedAudioFrameCallback`
+(`src/EggEncoder/Streaming/`) plus `Streaming.Aac.AacStreamingEncoder`, backed by a refactored
+`AacFrameEncoder` that emits each frame's raw access unit, real sample count, and frame index via a
+callback instead of writing ADTS bytes to a fixed `Stream`; `AacEncoder.Encode`/`AacEncoderSession`
+now supply that callback themselves (building an ADTS frame via the newly-extracted
+`AdtsFrameWriter.Wrap`, reused later by item 4's own MPEG-TS muxer) rather than `AacFrameEncoder`
+writing ADTS directly, with byte-for-byte parity confirmed against the pre-refactor output.
+`EncoderDelaySamples` (`1024`) reuses the empirical confirmation already in
+`AacEncoderTest.Encode_ThenDecode_Should_ReconstructToneSignal_UpToScale`'s own cross-correlation
+(that test only reaches an acceptable SNR once this exact one-frame offset is compensated for) --
+no new measurement code was needed since this was already established.
 
 ## 2. fMP4/CMAF muxer (init + media segments)
 

@@ -382,6 +382,10 @@ public sealed class AacEncoderSession : IDisposable
 }
 ```
 
+See "Live Streaming (early)" below for `EggEncoder.Streaming.Aac.AacStreamingEncoder` -- the same
+mono AAC-LC encoder, but emitting raw access units via a callback instead of writing ADTS-framed
+bytes to a destination file/`Stream`.
+
 ### FLAC — `EggEncoder.Codecs.Flac`
 
 ```csharp
@@ -727,6 +731,55 @@ public static class MovDecoder
 ```
 
 `MovProbe` is metadata-only (no native dependency, no decode). `MovDecoder` decodes a mono AAC-LC audio track when present; video frames are never decoded.
+
+## Live Streaming (early) — `EggEncoder.Streaming`
+
+A push-style incremental encoder surface, independent of the `IMediaEncoder` file/`Stream` surface
+above and of every per-codec `XxxEncoder`/`XxxEncoderSession` type in "Codec Reference" -- PCM in
+via `Write`, one encoded access unit out per callback invocation, no destination file/`Stream` and
+no known total length required. The first piece of a larger live HLS/fMP4/MPEG-TS packaging effort
+(fMP4/CMAF muxer, MPEG-TS muxer, HLS segmenter, `.m3u8` playlist writer, master playlist); see
+`docs/streaming-plan.md` for the full ordered plan, acceptance criteria per item, and what's merged
+versus still open.
+
+```csharp
+public readonly ref struct EncodedAudioFrame
+{
+    public ReadOnlySpan<byte> Payload { get; } // raw access unit -- no ADTS/container framing
+    public int SampleCount { get; } // real samples this frame represents (nominal frame size, except a short final frame from Complete())
+    public long FrameIndex { get; } // 0-based, monotonically increasing
+}
+
+public delegate void EncodedAudioFrameCallback(EncodedAudioFrame frame);
+
+public interface IStreamingEncoder : IDisposable
+{
+    int Channels { get; }
+    int SampleRate { get; }
+    int SamplesPerFrame { get; } // nominal, fixed frame size (1024 for AAC-LC)
+    void Write(ReadOnlySpan<int> interleavedSamples); // throws InvalidOperationException after Complete()
+    void Complete(); // flushes any partial trailing frame; safe to call more than once
+}
+```
+
+Only one codec implements it so far:
+
+```csharp
+public sealed class AacStreamingEncoder : IStreamingEncoder
+{
+    public const int EncoderDelaySamples = 1024; // this encoder's fixed one-frame MDCT lookahead, confirmed empirically
+
+    public static IStreamingEncoder Create(int channels, int sampleRate, EncodedAudioFrameCallback onFrameEncoded);
+    // throws ArgumentNullException for a null callback, NotSupportedException for channels != 1
+    // or a sample rate other than 44100/48000 -- the same scope as AacEncoderSession
+}
+```
+
+Internally reuses `AacFrameEncoder`'s own MDCT/quantization logic unchanged (shared with the
+existing whole-file `AacEncoder`/`AacEncoderSession`) -- only how each encoded frame is delivered
+differs. `AdtsFrameWriter` (`EggEncoder.Codecs.Aac`, internal) now holds the ADTS-framing logic
+standalone, used by the existing ADTS-to-file path and reusable by a future MPEG-TS muxer, instead
+of being inlined once per caller.
 
 ## AudioCutter — `EggEncoder.Codecs`
 
