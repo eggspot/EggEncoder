@@ -708,7 +708,15 @@ rather than building it speculatively now).
 **Size**: small. The simplest item in this plan — a pure, stateless string formatter with no
 muxing/timestamp concerns at all.
 
-**Status**: not started.
+**Status**: done ([PR #116](https://github.com/eggspot/EggEncoder/pull/116)).
+`M3u8MasterPlaylistWriter.BuildMasterPlaylist`/`HlsRenditionDescriptor`
+(`src/EggEncoder/Streaming/Hls/`). Reuses `M3u8PlaylistWriter.Version` directly (no separate
+version constant) so the two writers can never disagree about which `EXT-X-VERSION` to declare.
+`"mp4a.40.2"` and the overall `#EXT-X-STREAM-INF:BANDWIDTH={n},CODECS="{s}"` + URI shape (no
+`AVERAGE-BANDWIDTH`, which is optional per spec and this writer has no meaningful value to supply
+for) were confirmed against a real multi-variant HLS master playlist generated via ffmpeg's own
+`-var_stream_map` -- the same run that also reconfirmed `EXT-X-VERSION:7` (see item 3a's own
+"Found during item 5" addendum).
 
 ## 6. Live input source: PCM pump, timestamps, drift/silence-fill policy
 
