@@ -181,6 +181,17 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   for AAC-LC and the overall `#EXT-X-STREAM-INF:BANDWIDTH={n},CODECS="{s}"` + URI shape were
   confirmed against a real multi-variant HLS master playlist (ffmpeg's own `-var_stream_map`
   output).
+- `Streaming.LiveAudioPump`/`DriftPolicy` (`Streaming/`) -- feeds PCM from a genuinely live source
+  (a microphone callback, an incoming network stream) into an `IStreamingEncoder` on the source's
+  own schedule. `PushSamples(ReadOnlySpan<int> interleavedSamples, DateTimeOffset?
+  captureTimestamp = null)`: under `DriftPolicy.SilenceFill`, once actual-so-far falls more than a
+  configurable threshold behind wall-clock-implied-so-far (computed from the first captured
+  timestamp), it inserts exactly enough zero-valued samples to close the gap before the next real
+  samples go through; under the default `DriftPolicy.Ignore`, or whenever `captureTimestamp` is
+  omitted on a given call (regardless of policy), that call is pure pass-through -- drift detection
+  needs a real clock to compare against, and silently inventing one would be worse than not
+  detecting drift at all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the
+  pump can never disagree with it about either value.
 
 ### Native binary packaging
 

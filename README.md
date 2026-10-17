@@ -110,7 +110,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). A top-level master playlist (`M3u8MasterPlaylistWriter`) lists multiple audio-bitrate renditions for a player to choose from. Only mono AAC-LC exists so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (live input sources) and what's merged versus still open.
+A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). A top-level master playlist (`M3u8MasterPlaylistWriter`) lists multiple audio-bitrate renditions for a player to choose from. `LiveAudioPump` feeds PCM from a genuinely live source (not neat, exactly-on-time blocks) into an encoder, with an optional silence-fill policy for real gaps in arrival. Only mono AAC-LC exists so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan and what's merged versus still open.
 
 ```csharp
 using EggEncoder.Streaming;
@@ -139,6 +139,15 @@ var master = M3u8MasterPlaylistWriter.BuildMasterPlaylist([
     new HlsRenditionDescriptor("low/playlist.m3u8", BandwidthBitsPerSecond: 64_000, CodecsString: "mp4a.40.2"),
     new HlsRenditionDescriptor("high/playlist.m3u8", BandwidthBitsPerSecond: 128_000, CodecsString: "mp4a.40.2"),
 ]);
+```
+
+For a genuinely live source (a microphone callback, an incoming stream) rather than a file read on your own schedule, wrap the encoder in `LiveAudioPump`:
+
+```csharp
+var pump = new LiveAudioPump(encoder, DriftPolicy.SilenceFill); // or DriftPolicy.Ignore (the default) to disable gap detection
+
+// Called by your own capture source, on its own schedule, as PCM becomes available:
+pump.PushSamples(capturedSamples, DateTimeOffset.UtcNow);
 ```
 
 ## Supported Formats
