@@ -845,7 +845,7 @@ lands:
   real audio, not just an approximately-right duration.
 - **FLAC**: lossless streaming is a real but lower-demand case for a *live-streaming* plan
   specifically (FLAC-over-HLS is uncommon in practice vs. AAC/Opus/MP3); worth doing once the
-  pattern is proven three times over, not before. **Done** (PR TBD) --
+  pattern is proven three times over, not before. **Done** ([PR #121](https://github.com/eggspot/EggEncoder/pull/121)) --
   `Streaming.Flac.FlacStreamingEncoder` (`src/EggEncoder/Streaming/Flac/`), same scope as
   `FlacEncoderSession` (any channel count, 1-32 bits per sample), reusing `FlacFrameEncoder`'s own
   encode internals unchanged. Genuinely simpler than the other three sub-items, for two real,
