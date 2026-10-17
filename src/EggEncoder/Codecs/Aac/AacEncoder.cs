@@ -100,7 +100,8 @@ namespace EggEncoder.Codecs.Aac
 
         public void Dispose()
         {
-            // The output stream's lifetime is owned by the caller.
+            // Holds no unmanaged/disposable resource of its own -- onFrameEncoded's own destination
+            // (a Stream, a list, anything else), if it has one, is owned and disposed by the caller.
         }
 
         internal static int ValidateAndGetSampleRateIndex(int channels, int sampleRate)
