@@ -1,4 +1,6 @@
 using EggEncoder.Codecs;
+using EggEncoder.Codecs.Aiff;
+using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
@@ -136,6 +138,83 @@ namespace EggEncoder.UnitTests.Codecs
             var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Mp3, destStream, AudioFormat.Wav);
 
             act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Convert_Stream_WavSourceToAiffDest_Should_Decode_And_Encode_Correctly()
+        {
+            var (sourcePath, samples) = CreateRampWavFile(totalFrames: 300, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aiff);
+
+                destStream.Position = 0;
+                using var reader = AiffReader.Open(destStream);
+                reader.Channels.Should().Be(2);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length / 2);
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WavSourceToAuDest_Should_Decode_And_Encode_Correctly()
+        {
+            var (sourcePath, samples) = CreateRampWavFile(totalFrames: 300, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Au);
+
+                destStream.Position = 0;
+                using var reader = AuReader.Open(destStream);
+                reader.Channels.Should().Be(2);
+                reader.SampleRate.Should().Be(8000);
+                reader.BitsPerSample.Should().Be(16);
+
+                var buffer = new int[samples.Length];
+                reader.ReadInterleavedSamples(buffer, samples.Length / 2);
+                buffer.Should().Equal(samples);
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WithResamplingPipeline_AiffDest_Should_Use_DeferredSink_And_WriteCorrectTotalFrames()
+        {
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 8000, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 8000, targetRate: 16000, channels: 2));
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aiff, pipeline);
+
+                destStream.Position = 0;
+                using var reader = AiffReader.Open(destStream);
+                reader.SampleRate.Should().Be(16000);
+                reader.TotalSamples.Should().Be(16000);
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
         }
 
         [Fact]

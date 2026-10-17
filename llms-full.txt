@@ -540,7 +540,9 @@ public sealed class AiffReader : IDisposable
 public sealed class AiffWriter : IDisposable
 {
     public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, IReadOnlyDictionary<string, string>? tags = null);
+    public static AiffWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, IReadOnlyDictionary<string, string>? tags = null); // does NOT dispose destStream; no CanSeek requirement -- every FORM/COMM/SSND size field is already known from totalFrames up front
     public static AiffWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags = null);
+    public static AiffWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, AiffSampleFormat sampleFormat, IReadOnlyDictionary<string, string>? tags = null);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 ```
@@ -569,7 +571,9 @@ public sealed class AuReader : IDisposable
 public sealed class AuWriter : IDisposable
 {
     public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames);
+    public static AuWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames); // does NOT dispose destStream; no CanSeek requirement, the same reasoning as AiffWriter.Create(Stream, ...)/WavWriter.Create(Stream, ...)
     public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat);
+    public static AuWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }
 ```
@@ -772,8 +776,10 @@ public static class AudioCutter
     // Stream-to-Stream overloads (AudioCutter.Stream.cs, docs/feature-roadmap.md item 1) -- AudioFormat
     // must be given explicitly on each side, the same reason Probe(Stream, AudioFormat) needs one;
     // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) already supports
-    // (everything except MP3). Destination: Wav only so far, via WavWriter.Create(Stream, ...) -- an
-    // unsupported AudioFormat on either side throws NotSupportedException.
+    // (everything except MP3). Destination: Wav/Aiff/Au so far, via WavWriter.Create(Stream, ...)/
+    // AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...) -- all three happen to need no
+    // CanSeek at all, since each writes a fixed-size header with every field already known from
+    // totalFrames up front. An unsupported AudioFormat on either side throws NotSupportedException.
     public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat);
     public static void Convert(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, PcmTransformPipeline pipeline);
     public static bool Cut(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat);

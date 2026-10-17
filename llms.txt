@@ -155,10 +155,13 @@ so `ResamplingTransform`/`VolumeTransform`/etc. work for a `Stream` destination 
 way they already do for a path-based one (a frame-count-changing transform like resampling
 correctly routes through `DeferredFixedHeaderSink`'s own buffer-then-patch path, not just the
 "exact count known up front" one). Source: every format `Probe(Stream, AudioFormat)` already
-supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV only so
-far, via `WavWriter.Create(Stream, ...)` -- every other destination codec's own `Stream` write
-side is still open, one format at a time, the same incremental way `Stream`-based `Probe` itself
-was rolled out; an unsupported `AudioFormat` on either side throws `NotSupportedException`.
+supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV, AIFF, and
+AU so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
+`AuWriter.Create(Stream, ...)` -- all three happen to need no `Stream.CanSeek` at all, since each
+writes a fixed-size header with every field already known from `totalFrames` up front -- every
+other destination codec's own `Stream` write side is still open, one format at a time, the same
+incremental way `Stream`-based `Probe` itself was rolled out; an unsupported `AudioFormat` on
+either side throws `NotSupportedException`.
 
 ## MP3 ID3v2 Tags
 

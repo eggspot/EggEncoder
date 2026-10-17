@@ -8,6 +8,78 @@ namespace EggEncoder.UnitTests.Codecs.Au
 {
     public class AuWriterTest
     {
+        // -------- Stream-based Create --------
+
+        [Fact]
+        public void Create_Stream_Should_Round_Trip_Through_AuReader_Same_As_Path_Based_Create()
+        {
+            var samples = new[] { 0, 1000, -1000, 32767, -32768 };
+
+            using var memoryStream = new MemoryStream();
+            using (var writer = AuWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: samples.Length))
+            {
+                writer.WriteInterleavedSamples(samples, samples.Length);
+            }
+
+            memoryStream.Position = 0;
+            using var reader = AuReader.Open(memoryStream);
+
+            reader.Channels.Should().Be(1);
+            reader.SampleRate.Should().Be(8000);
+            reader.BitsPerSample.Should().Be(16);
+
+            var buffer = new int[samples.Length];
+            reader.ReadInterleavedSamples(buffer, samples.Length);
+            buffer.Should().Equal(samples);
+        }
+
+        [Fact]
+        public void Create_Stream_Should_Produce_TheExactSameBytes_As_PathBased_Create()
+        {
+            var samples = new[] { 0, 500, -500, 32000, -32000, 100, -100, 7777 };
+            var filePath = Path.GetTempFileName();
+            try
+            {
+                using (var writer = AuWriter.Create(filePath, channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length / 2, AuSampleFormat.ALaw))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length / 2);
+                }
+
+                var pathBasedBytes = File.ReadAllBytes(filePath);
+
+                using var memoryStream = new MemoryStream();
+                using (var writer = AuWriter.Create(memoryStream, channels: 2, sampleRate: 44100, bitsPerSample: 16, totalFrames: samples.Length / 2, AuSampleFormat.ALaw))
+                {
+                    writer.WriteInterleavedSamples(samples, samples.Length / 2);
+                }
+
+                memoryStream.ToArray().Should().Equal(pathBasedBytes);
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Fact]
+        public void Create_Stream_Then_Dispose_Should_NotDispose_TheCallersStream()
+        {
+            using var memoryStream = new MemoryStream();
+            var writer = AuWriter.Create(memoryStream, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1);
+            writer.WriteInterleavedSamples([0], 1);
+            writer.Dispose();
+
+            var act = () => memoryStream.Position;
+            act.Should().NotThrow();
+        }
+
+        [Fact]
+        public void Create_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => AuWriter.Create((Stream)null!, channels: 1, sampleRate: 8000, bitsPerSample: 16, totalFrames: 1);
+            act.Should().Throw<ArgumentNullException>();
+        }
+
         [Theory]
         [InlineData(8, new[] { 0, 127, -128, -64 })]
         [InlineData(16, new[] { 0, short.MaxValue, short.MinValue, -1 })]
