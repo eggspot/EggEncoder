@@ -917,6 +917,26 @@ confirmed bit-for-bit against a real ffmpeg-produced `.ts` fixture. `MpegTsCrc32
 polynomial and bit direction as `Codecs.Opus.OggCrc32`, but a different initial value (0xFFFFFFFF
 vs. 0), so it isn't reused directly.
 
+```csharp
+public readonly record struct HlsRenditionDescriptor(string Uri, int BandwidthBitsPerSecond, string CodecsString);
+
+public static class M3u8MasterPlaylistWriter
+{
+    public static string BuildMasterPlaylist(IReadOnlyList<HlsRenditionDescriptor> renditions);
+    // throws ArgumentNullException if renditions is null
+}
+```
+
+A top-level playlist listing multiple audio-bitrate renditions, each a complete, independent audio
+rendition rather than an `EXT-X-MEDIA:TYPE=AUDIO` alternate-track-alongside-video grouping (a
+deliberately deferred option -- the simpler structure real-world podcast/radio HLS output commonly
+uses). Emits one `#EXT-X-STREAM-INF:BANDWIDTH={n},CODECS="{s}"` + URI pair per rendition. Reuses
+`M3u8PlaylistWriter.Version` directly rather than a separate constant, so the two writers can never
+disagree about which `EXT-X-VERSION` to declare. `CODECS="mp4a.40.2"` for AAC-LC and the overall
+shape were confirmed against a real multi-variant HLS master playlist (ffmpeg's own
+`-var_stream_map` output) -- the same run that also reconfirmed `M3u8PlaylistWriter.Version` itself
+should be `7`, not an earlier, incorrectly "corrected" `6` (see that type's own doc comment).
+
 ## AudioCutter — `EggEncoder.Codecs`
 
 Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:

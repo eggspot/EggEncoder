@@ -172,6 +172,15 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   interchangeable despite the shared shape, so it's its own small implementation. PCR is not
   implemented (a deliberate, documented MVP scope limitation -- see docs/streaming-plan.md item 4's
   own status note for what this could affect and why it wasn't pursued further).
+- `Streaming.Hls.M3u8MasterPlaylistWriter`/`HlsRenditionDescriptor` (`Streaming/Hls/`) -- a
+  top-level playlist listing multiple audio-bitrate renditions, each a complete, independent
+  audio rendition (not an `EXT-X-MEDIA:TYPE=AUDIO` alternate-track-alongside-video grouping, a
+  deliberately deferred option -- the simpler structure real-world podcast/radio HLS output
+  commonly uses). Reuses `M3u8PlaylistWriter.Version` directly rather than a separate constant, so
+  the two writers can never disagree about which `EXT-X-VERSION` to declare. `CODECS="mp4a.40.2"`
+  for AAC-LC and the overall `#EXT-X-STREAM-INF:BANDWIDTH={n},CODECS="{s}"` + URI shape were
+  confirmed against a real multi-variant HLS master playlist (ffmpeg's own `-var_stream_map`
+  output).
 
 ### Native binary packaging
 

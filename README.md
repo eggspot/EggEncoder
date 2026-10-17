@@ -110,7 +110,7 @@ Covers **resampling** (`ResamplingTransform`), **gain / peak normalization** (`V
 
 ## Live Streaming (early)
 
-A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). Only mono AAC-LC exists so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (master playlist, live input sources) and what's merged versus still open.
+A push-style, incremental HLS packaging pipeline, genuinely independent of the `IMediaEncoder` file/`Stream` surface above. `IStreamingEncoder` encodes PCM into frames via a callback; a fragmented MP4 (fMP4/CMAF) muxer or an MPEG-TS muxer packages frames into segments; `HlsSegmenter` decides segment boundaries and writes segments + an `.m3u8` playlist through an `IStreamingSink`, in either VOD mode (every segment stays in the playlist) or live mode (a bounded sliding window of the most recent segments, old ones reclaimed via the sink). A top-level master playlist (`M3u8MasterPlaylistWriter`) lists multiple audio-bitrate renditions for a player to choose from. Only mono AAC-LC exists so far — see [docs/streaming-plan.md](docs/streaming-plan.md) for the full ordered plan (live input sources) and what's merged versus still open.
 
 ```csharp
 using EggEncoder.Streaming;
@@ -128,6 +128,17 @@ encoder.Write(pcmSamplesAsTheyArrive);
 // ... more Write calls as PCM arrives, with no upper bound ...
 encoder.Complete(); // flushes any partial trailing encoded frame
 segmenter.Complete(); // flushes the final (possibly short) segment and writes #EXT-X-ENDLIST
+```
+
+For multiple bitrates, write each rendition's own media playlist with its own `HlsSegmenter`, then list them in one master playlist:
+
+```csharp
+using EggEncoder.Streaming.Hls;
+
+var master = M3u8MasterPlaylistWriter.BuildMasterPlaylist([
+    new HlsRenditionDescriptor("low/playlist.m3u8", BandwidthBitsPerSecond: 64_000, CodecsString: "mp4a.40.2"),
+    new HlsRenditionDescriptor("high/playlist.m3u8", BandwidthBitsPerSecond: 128_000, CodecsString: "mp4a.40.2"),
+]);
 ```
 
 ## Supported Formats

@@ -210,6 +210,14 @@ PTS (a 90kHz clock, different from fMP4's own configurable timescale) computed f
 total sample count -- not a fixed per-frame delta, since `1024 * 90000 / 44100` isn't an integer
 and a naive delta would drift -- bounding rounding error to at most ±0.5 ticks at any point.
 
+`EggEncoder.Streaming.Hls.M3u8MasterPlaylistWriter.BuildMasterPlaylist(IReadOnlyList<
+HlsRenditionDescriptor> renditions)` formats a top-level master playlist listing multiple
+audio-bitrate renditions, each a complete independent audio rendition (not an alternate track
+alongside video). `HlsRenditionDescriptor(string Uri, int BandwidthBitsPerSecond, string
+CodecsString)` -- e.g. `"mp4a.40.2"` for AAC-LC, confirmed against a real multi-variant HLS master
+playlist. Reuses `M3u8PlaylistWriter.Version` directly, so the two writers can't disagree about
+`EXT-X-VERSION`.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own
