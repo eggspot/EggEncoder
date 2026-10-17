@@ -332,7 +332,8 @@ all yet."
 **Size**: small–medium. The hard part (MDCT/quantization) already exists and is reused verbatim;
 this is a refactor of the output plumbing plus a new public surface and its own tests.
 
-**Status**: done (PR TBD). `IStreamingEncoder`/`EncodedAudioFrame`/`EncodedAudioFrameCallback`
+**Status**: done ([PR #110](https://github.com/eggspot/EggEncoder/pull/110)).
+`IStreamingEncoder`/`EncodedAudioFrame`/`EncodedAudioFrameCallback`
 (`src/EggEncoder/Streaming/`) plus `Streaming.Aac.AacStreamingEncoder`, backed by a refactored
 `AacFrameEncoder` that emits each frame's raw access unit, real sample count, and frame index via a
 callback instead of writing ADTS bytes to a fixed `Stream`; `AacEncoder.Encode`/`AacEncoderSession`
