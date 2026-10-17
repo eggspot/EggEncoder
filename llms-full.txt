@@ -937,6 +937,31 @@ shape were confirmed against a real multi-variant HLS master playlist (ffmpeg's 
 `-var_stream_map` output) -- the same run that also reconfirmed `M3u8PlaylistWriter.Version` itself
 should be `7`, not an earlier, incorrectly "corrected" `6` (see that type's own doc comment).
 
+```csharp
+public enum DriftPolicy { Ignore, SilenceFill }
+
+public sealed class LiveAudioPump
+{
+    public LiveAudioPump(IStreamingEncoder encoder, DriftPolicy driftPolicy = DriftPolicy.Ignore, double silenceFillThresholdSeconds = 0.1);
+    // encoder is not owned/disposed by this pump; throws ArgumentOutOfRangeException for a
+    // non-positive silenceFillThresholdSeconds
+
+    public void PushSamples(ReadOnlySpan<int> interleavedSamples, DateTimeOffset? captureTimestamp = null);
+    // throws ArgumentException if interleavedSamples.Length isn't a whole multiple of encoder.Channels
+}
+```
+
+Feeds PCM from a genuinely live source (a microphone callback, an incoming network stream) into an
+`IStreamingEncoder` on the source's own schedule, rather than in neat, exactly-on-time blocks.
+Under `DriftPolicy.SilenceFill`, once actual-so-far falls more than `silenceFillThresholdSeconds`
+behind wall-clock-implied-so-far (measured from the first call that carries a `captureTimestamp`),
+it inserts exactly enough zero-valued samples to close the gap before the next real samples go
+through. Under the default `DriftPolicy.Ignore`, or whenever `captureTimestamp` is omitted on a
+given call regardless of policy, that call is pure pass-through -- drift detection needs a real
+clock to compare against, and silently inventing one would be worse than not detecting drift at
+all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the pump can never
+disagree with it about either value.
+
 ## AudioCutter — `EggEncoder.Codecs`
 
 Format-dispatching convert/cut/mix/concatenate used internally by `NativeEncoder`; also usable directly:

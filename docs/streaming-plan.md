@@ -757,7 +757,15 @@ against, and silently inventing one would be worse than not detecting drift at a
 
 **Size**: small–medium.
 
-**Status**: not started.
+**Status**: done (PR TBD). `LiveAudioPump`/`DriftPolicy` (`src/EggEncoder/Streaming/`).
+`PushSamples` validates its own interleaved-sample-count-is-a-multiple-of-channels invariant
+(`ArgumentException` otherwise) before anything else. Gap detection reads `IStreamingEncoder.
+Channels`/`SampleRate` directly from the wrapped encoder rather than needing them passed in
+separately, so the pump can never disagree with the encoder it's feeding about either value.
+Tested with a small, test-only `IStreamingEncoder` fake (not the real `AacStreamingEncoder`) so
+every test can assert exact written sample values, including that inserted silence is genuinely
+all-zero -- real AAC encoding has no bearing on this item's own actual logic (sample-count/timing
+bookkeeping), so a fake keeps the tests fast and precise rather than needing real codec output.
 
 ## 7. Low-latency HLS (future sketch, not scheduled)
 

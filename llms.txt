@@ -218,6 +218,15 @@ CodecsString)` -- e.g. `"mp4a.40.2"` for AAC-LC, confirmed against a real multi-
 playlist. Reuses `M3u8PlaylistWriter.Version` directly, so the two writers can't disagree about
 `EXT-X-VERSION`.
 
+`EggEncoder.Streaming.LiveAudioPump` feeds PCM from a genuinely live source (a microphone callback,
+an incoming network stream) into an `IStreamingEncoder` on the source's own schedule --
+`PushSamples(ReadOnlySpan<int> interleavedSamples, DateTimeOffset? captureTimestamp = null)`. Under
+`DriftPolicy.SilenceFill`, once actual-so-far falls more than a configurable threshold behind
+wall-clock-implied-so-far, it inserts exactly enough zero-valued samples to close the gap; under
+the default `DriftPolicy.Ignore`, or whenever `captureTimestamp` is omitted on a call (either
+policy), that call is pure pass-through. Reads `Channels`/`SampleRate` from the wrapped encoder
+directly.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own
