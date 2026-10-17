@@ -106,11 +106,11 @@ namespace EggEncoder.Streaming.Mp3
             var remainingFrames = _pendingInterleaved.Count / Channels;
             if (remainingFrames > 0)
             {
-                PadPendingTo(FrameSamples);
+                PadPendingToOneFrame();
                 EmitFrame(realSampleCount: remainingFrames);
             }
 
-            PadPendingTo(FrameSamples);
+            PadPendingToOneFrame();
             EmitFrame(realSampleCount: 0);
         }
 
@@ -119,9 +119,9 @@ namespace EggEncoder.Streaming.Mp3
             // Holds no unmanaged/disposable resource of its own -- Mp3FrameEncoder has none either.
         }
 
-        private void PadPendingTo(int frameSamples)
+        private void PadPendingToOneFrame()
         {
-            var targetCount = frameSamples * Channels;
+            var targetCount = FrameSamples * Channels;
             for (var i = _pendingInterleaved.Count; i < targetCount; i++)
             {
                 _pendingInterleaved.Add(0);
