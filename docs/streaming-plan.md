@@ -795,16 +795,38 @@ lands:
   only the output plumbing, not the codec logic" principle item 1 established for AAC. Opus frames
   are naturally segment-boundary-friendly (fixed 20ms/960-sample frames at Opus's own fixed 48kHz),
   and CMAF has a defined Opus-in-fMP4 convention (`dOps` box) worth targeting directly rather than
-  inventing one.
+  inventing one. **Done** ([PR #118](https://github.com/eggspot/EggEncoder/pull/118)) --
+  `Streaming.Opus.OpusStreamingEncoder`
+  (`src/EggEncoder/Streaming/Opus/`), same scope as `OpusEncoderSession` (fixed 48kHz, mono/stereo,
+  16-bit PCM). Unlike `AacStreamingEncoder`, `EncoderDelaySamples` (renamed from a fixed constant
+  to an instance property reading `IOpusEncoder.Lookahead` directly) is per-instance, not a
+  project-wide constant -- Opus's own lookahead isn't architecturally fixed at a single value the
+  way AAC-LC's one-MDCT-frame delay is here. Also unlike `AacStreamingEncoder`, every emitted
+  frame's own `SampleCount` is always the full `960` -- Opus has no bitstream-level short-final-
+  frame concept, so the real-vs-padding distinction for a partial tail only matters at the
+  container level (out of scope for this raw packet-level encoder, the same way it was out of
+  scope for item 2's own fMP4 muxer relative to AAC). `Complete()` drains the encoder's own fixed
+  lookahead (feeding it through the normal buffering path, the only way to push the genuine tail of
+  real input out of the encoder's internal state) and, unlike `OpusEncoderSession.Finish()`, does
+  **not** unconditionally emit one final all-zero "EOS marker" frame when nothing remains pending
+  afterward -- that behavior exists in the file-based session purely to flag an Ogg page's own
+  end-of-stream bit, a container-level concept this raw-packet encoder has no equivalent of.
+  Conformance: reconstructs a full OggOpus file from the streaming encoder's own raw packets (via
+  the existing internal `OggPageWriter`/`OpusHeaderPackets`, the same machinery
+  `OpusEncoderSession` itself uses) and decodes it through the project's own public `OpusDecoder`,
+  confirming round-trip SNR for both mono and stereo -- proving the raw packets are genuinely valid
+  Opus without needing new decode-side test infrastructure, dOps/fMP4 integration itself is left
+  for whenever an Opus-targeting muxer item is actually taken up (not scheduled in this plan yet).
 - **MP3**: reuses `Mp3EncoderSession`'s own pure-managed encode internals (no NLayer involvement at
   all — NLayer is decode-only, see "Prerequisites" above). MPEG-TS has a long-established native
   MP3-framing convention (unlike AAC's ADTS-via-wrapping approach, MP3 frames are already
-  self-delimiting) worth confirming against a real reference file rather than assumed.
+  self-delimiting) worth confirming against a real reference file rather than assumed. Not started.
 - **FLAC**: lossless streaming is a real but lower-demand case for a *live-streaming* plan
   specifically (FLAC-over-HLS is uncommon in practice vs. AAC/Opus/MP3); worth doing once the
-  pattern is proven three times over, not before.
+  pattern is proven three times over, not before. Not started.
 
-**Status**: not started.
+**Status**: partially done -- Opus sub-item complete (see above), MP3 and FLAC sub-items not
+started.
 
 ## Top-level test strategy (applies across every item above)
 

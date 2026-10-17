@@ -192,6 +192,20 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
   needs a real clock to compare against, and silently inventing one would be worse than not
   detecting drift at all. Reads `Channels`/`SampleRate` directly from the wrapped encoder, so the
   pump can never disagree with it about either value.
+- `Streaming.Opus.OpusStreamingEncoder` (`Streaming/Opus/`) -- the second `IStreamingEncoder`
+  implementation (item 8's own Opus sub-item; MP3/FLAC still open), same scope as
+  `Codecs.Opus.OpusEncoderSession` (fixed 48kHz, mono/stereo, 16-bit PCM), reusing that session's
+  own Concentus-backed encode internals unchanged. Unlike `AacStreamingEncoder`,
+  `EncoderDelaySamples` is a per-instance property reading the underlying encoder's own
+  `Lookahead` directly, not a project-wide constant -- Opus's lookahead isn't architecturally fixed
+  at one value the way AAC-LC's one-MDCT-frame delay is. Also unlike `AacStreamingEncoder`, every
+  emitted frame's own `SampleCount` is always the full `960` -- Opus has no bitstream-level
+  short-final-frame concept, so a partial tail's real-vs-padding distinction only matters at the
+  container level, out of scope for this raw packet-level encoder. `Complete()` drains the
+  encoder's own lookahead through the normal buffering path, but (unlike
+  `OpusEncoderSession.Finish()`) does **not** unconditionally emit a final all-zero frame when
+  nothing remains pending afterward -- that exists in the file-based session purely to flag an Ogg
+  page's own end-of-stream bit, a container-level concept this raw-packet encoder has none of.
 
 ### Native binary packaging
 
