@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Pcm;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs
@@ -226,9 +227,75 @@ namespace EggEncoder.UnitTests.Codecs
                 using var sourceStream = File.OpenRead(sourcePath);
                 using var destStream = new MemoryStream();
 
-                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Flac);
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wma);
 
                 act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WavSourceToFlacDest_Should_Decode_And_Encode_Correctly()
+        {
+            var (sourcePath, samples) = CreateRampWavFile(totalFrames: 10000, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Flac);
+
+                destStream.Position = 0;
+                var (streamInfo, decodedSamples) = FlacTestDecoder.DecodeAll(destStream);
+                streamInfo.Channels.Should().Be(2);
+                streamInfo.SampleRate.Should().Be(8000);
+                streamInfo.BitsPerSample.Should().Be(16);
+                decodedSamples.Should().Equal(samples, "FLAC is lossless -- the decoded samples must match exactly, not just approximately");
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WithNonSeekableFlacDest_Should_Throw()
+        {
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 10, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new NonSeekableWriteStream();
+
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Flac);
+
+                act.Should().ThrowExactly<ArgumentException>("FlacEncoderSession.Finish() seeks back to patch STREAMINFO, which a non-seekable destination (e.g. an HTTP response body) cannot support");
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WithResamplingPipeline_FlacDest_Should_WriteCorrectTotalFrames()
+        {
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 8000, sampleRate: 8000);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                var pipeline = new PcmTransformPipeline(new ResamplingTransform(sourceRate: 8000, targetRate: 16000, channels: 2));
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Flac, pipeline);
+
+                destStream.Position = 0;
+                var (streamInfo, decodedSamples) = FlacTestDecoder.DecodeAll(destStream);
+                streamInfo.SampleRate.Should().Be(16000);
+                (decodedSamples.Length / streamInfo.Channels).Should().Be(16000);
             }
             finally
             {

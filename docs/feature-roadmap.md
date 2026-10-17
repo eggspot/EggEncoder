@@ -158,13 +158,24 @@ exactly the same way it already does for a path-based one (verified directly: a 
 format except MP3, for the same NLayer `MpegFile(Stream)`-has-no-`leaveOpen` reason). `OpenSinkStream`
 now covers WAV/AIFF/AU, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
 `AuWriter.Create(Stream, ...)` -- all three happen to need no `Stream.CanSeek` at all, since each
-one's header is a fixed size with every field already known from `totalFrames` up front (unlike,
-say, `FlacEncoderSession`'s own STREAMINFO patch-up, which does seek back and will need a real
-`CanSeek` requirement when its own turn comes). `AiffWriter`/`AuWriter` were widened mechanically,
-the same validate-then-write refactor `WavWriter` already went through -- neither needed any seek
-logic touched since they had none to begin with. Every other destination codec's own `Stream` write
-side (and its own seekability requirement, to be confirmed per format rather than assumed) is what's
-still open for this item, alongside MP3's own blocker above.
+one's header is a fixed size with every field already known from `totalFrames` up front -- plus
+FLAC, via `FlacEncoder.OpenSession(Stream, ...)`, the first destination here that genuinely does
+require `CanSeek`: `FlacEncoderSession.Finish()` still seeks back to a fixed byte offset to patch
+STREAMINFO's provisional totalSamples/MD5/block-size-range fields once the real values are known,
+exactly the way the path-based overload's own `FileStream` destination already does, so the new
+overload validates `destStream.CanSeek` up front and throws a clear `ArgumentException` (not a
+confusing mid-`Finish()` failure) if it isn't. `FlacEncoderSession` itself was widened from a
+`FileStream` field to a `Stream` one plus a `leaveOpen` flag (mirroring `WavWriter`'s own
+`_leaveOpen` convention from this same item's earlier work) so `Dispose()` only closes a stream
+this type actually owns -- the path-based overload still owns (and disposes) the `FileStream` it
+opens; the Stream-based one does not dispose the caller's stream. `FlacEncoder`'s own channel/
+bits-per-sample/tag validation was factored into a shared private helper so the path-based and
+Stream-based `OpenSession` overloads can't drift apart on what's valid. `AiffWriter`/`AuWriter`
+were widened mechanically, the same validate-then-write refactor `WavWriter` already went through
+-- neither needed any seek logic touched since they had none to begin with. Every other
+destination codec's own `Stream` write side (and its own seekability requirement, to be confirmed
+per format rather than assumed) is what's still open for this item, alongside MP3's own blocker
+above.
 
 ## 2. Format-native metadata tags
 

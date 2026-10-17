@@ -141,6 +141,95 @@ namespace EggEncoder.UnitTests.Codecs.Flac
         }
 
         [Fact]
+        public void OpenSession_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => FlacEncoder.OpenSession((Stream)null!, channels: 1, bitsPerSample: 16, sampleRate: 44100);
+
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithNonSeekableStream_Should_Throw()
+        {
+            using var destStream = new NonSeekableWriteStream();
+
+            var act = () => FlacEncoder.OpenSession(destStream, channels: 1, bitsPerSample: 16, sampleRate: 44100);
+
+            act.Should().Throw<ArgumentException>("Finish() seeks back to patch STREAMINFO, which a non-seekable destination cannot support").WithMessage("*seekable*");
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithZeroChannels_Should_Throw()
+        {
+            using var destStream = new MemoryStream();
+
+            var act = () => FlacEncoder.OpenSession(destStream, channels: 0, bitsPerSample: 16, sampleRate: 44100);
+
+            act.Should().Throw<NotSupportedException>().WithMessage("*0 channels*");
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(33)]
+        public void OpenSession_Stream_WithBitsPerSampleOutOfRange_Should_Throw(int bitsPerSample)
+        {
+            using var destStream = new MemoryStream();
+
+            var act = () => FlacEncoder.OpenSession(destStream, channels: 1, bitsPerSample, sampleRate: 44100);
+
+            act.Should().Throw<NotSupportedException>().WithMessage("*bits per sample*");
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithInvalidTagFieldName_Should_Throw_Before_WritingToStream()
+        {
+            using var destStream = new MemoryStream();
+            var tags = new Dictionary<string, string> { ["BAD=NAME"] = "value" };
+
+            var act = () => FlacEncoder.OpenSession(destStream, channels: 1, bitsPerSample: 16, sampleRate: 44100, tags: tags);
+
+            act.Should().Throw<ArgumentException>();
+            destStream.Length.Should().Be(0, "tag validation must happen before a single byte reaches the caller's own stream, the same 'fail before touching the destination' guarantee the path-based overload gives via File.Exists");
+        }
+
+        [Fact]
+        public void OpenSession_Stream_Should_RoundTrip_Exactly()
+        {
+            var samples = new[] { 0, 1000, -1000, 500, 12345, -12345 };
+            using var destStream = new MemoryStream();
+
+            using (var session = FlacEncoder.OpenSession(destStream, channels: 1, bitsPerSample: 16, sampleRate: 44100))
+            {
+                session.WriteInterleavedSamples(samples, samples.Length);
+                session.Finish();
+            }
+
+            destStream.Position = 0;
+            var (streamInfo, decodedSamples) = FlacTestDecoder.DecodeAll(destStream);
+
+            streamInfo.Channels.Should().Be(1);
+            streamInfo.SampleRate.Should().Be(44100);
+            streamInfo.BitsPerSample.Should().Be(16);
+            decodedSamples.Should().Equal(samples, "FLAC is lossless -- the decoded samples must match exactly, not just approximately");
+        }
+
+        [Fact]
+        public void OpenSession_Stream_Dispose_Should_NotDisposeCallerStream()
+        {
+            using var destStream = new MemoryStream();
+
+            using (var session = FlacEncoder.OpenSession(destStream, channels: 1, bitsPerSample: 16, sampleRate: 44100))
+            {
+                session.WriteInterleavedSamples([0, 1], 2);
+                session.Finish();
+            }
+
+            var act = () => destStream.Position;
+
+            act.Should().NotThrow("the Stream-based overload must not dispose a stream the caller opened and owns, unlike the path-based overload's own FileStream");
+        }
+
+        [Fact]
         public void Encode_EmptySource_Should_ProduceAZeroSampleDecodableFile()
         {
             var tempDirectory = CreateTempDirectory();
