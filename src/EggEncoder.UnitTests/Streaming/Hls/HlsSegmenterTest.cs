@@ -329,6 +329,32 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             }
         }
 
+        [Fact]
+        public void LiveMode_Combined_With_MpegTsFormat_Should_PruneSegments_AndOmitExtXMap()
+        {
+            var sink = new InMemoryStreamingSink();
+            var segmenter = new HlsSegmenter(1, SampleRate, targetDurationSeconds: 1, sink, liveWindowSize: 2, SegmentFormat.MpegTs);
+
+            for (var i = 0; i < 44 * 4; i++) // 4 segments cut -- 2 must age out of the window
+            {
+                segmenter.AddFrame(Frame(SamplesPerFrame, i));
+            }
+
+            sink.InitSegment.Should().BeNull("MPEG-TS carries PAT/PMT inside every segment, even in live mode");
+            sink.MediaSegments.Should().HaveCount(2, "the live window must still be enforced under the MpegTs segment format");
+            sink.MediaSegments.Keys.Should().BeEquivalentTo(new long[] { 3, 4 });
+
+            var playlistText = Encoding.UTF8.GetString(sink.Playlist!);
+            playlistText.Should().NotContain("#EXT-X-MAP");
+            playlistText.Should().Contain("segment_3.ts");
+            playlistText.Should().Contain("segment_4.ts");
+
+            foreach (var segmentBytes in sink.MediaSegments.Values)
+            {
+                segmentBytes[0].Should().Be(0x47, "every retained segment must still be a well-formed TS file");
+            }
+        }
+
         private static EncodedAudioFrame Frame(int sampleCount, long frameIndex) =>
             new(new byte[] { 0xAA, 0xBB, 0xCC }, sampleCount, frameIndex);
 
