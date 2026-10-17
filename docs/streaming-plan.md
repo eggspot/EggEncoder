@@ -288,7 +288,13 @@ all yet."
   ADTS-framed) stay exactly as they are — this is a new, additional entry point into the same
   underlying frame-encoding logic, not a replacement; refactor the shared internals into a form
   both the existing ADTS-file path and the new streaming path call, rather than duplicating the
-  MDCT/quantization logic a second time.
+  MDCT/quantization logic a second time. This same refactor is also where `WriteAdtsFrame`'s own
+  ADTS-wrapping logic (sync word, profile, sample-rate index, channel config, frame length) gets
+  pulled out into the standalone `AdtsFrameWriter.Wrap(ReadOnlySpan<byte> payload, int
+  sampleRateIndex, int channels) -> byte[]` helper referenced in "Architecture overview" — natural
+  to do here since this item already has to touch that exact code, and it means item 4's own
+  MPEG-TS muxer later has a single, already-tested ADTS implementation to call rather than needing
+  its own extraction pass against code this item already rewrote once.
 - `IStreamingEncoder.Write` buffers samples internally (mirrors `AacFrameEncoder.WriteSample`'s own
   existing per-sample accumulation into `_currentBlock`) and emits a frame via the callback the
   moment a full `SamplesPerFrame` block is available — *synchronously, within the `Write` call that
@@ -454,8 +460,11 @@ playlist a player can actually fetch.
 - `src/EggEncoder/Streaming/Hls/M3u8PlaylistWriter.cs`: a stateless formatter, `BuildMediaPlaylist
   (int version, int targetDurationSeconds, long mediaSequence, IReadOnlyList<HlsSegmentDescriptor>
   segments, string? initSegmentUri, bool endList) -> string`. Emits, per `RFC 8216` §4.3.3/§4.4:
-  `#EXTM3U`, `#EXT-X-VERSION:{version}` (`7`, the first version with first-class fMP4/`EXT-X-MAP`
-  support), `#EXT-X-TARGETDURATION:{n}`, `#EXT-X-MEDIA-SEQUENCE:{mediaSequence}`, `#EXT-X-MAP:URI="
+  `#EXTM3U`, `#EXT-X-VERSION:{version}` (`6` — per `RFC 8216` §7's own compatibility table, the
+  minimum version an `EXT-X-MAP` tag requires when `EXT-X-I-FRAMES-ONLY` is absent, which is this
+  plan's own case; confirm against a real fMP4-based HLS stream's own playlist before shipping,
+  the same "don't ship a spec-table reading unverified" discipline every other numeric
+  container/protocol constant in this plan already gets), `#EXT-X-TARGETDURATION:{n}`, `#EXT-X-MEDIA-SEQUENCE:{mediaSequence}`, `#EXT-X-MAP:URI="
   {initSegmentUri}"` (once, only when fMP4 segments are in use — MPEG-TS segments from item 4 don't
   need it), then per segment `#EXTINF:{duration},` + the segment's own URI, with
   `#EXT-X-DISCONTINUITY` emitted if a future caller ever needs to signal one (not actually produced
