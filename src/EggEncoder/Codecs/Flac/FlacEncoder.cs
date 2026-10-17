@@ -68,6 +68,18 @@ namespace EggEncoder.Codecs.Flac
         /// <paramref name="destStream"/> -- the caller opened it, so the caller is responsible for
         /// disposing it.
         /// </summary>
+        /// <remarks>
+        /// Because of that same seek-back, <paramref name="destStream"/>'s <see cref="Stream.Position"/>
+        /// after <see cref="FlacEncoderSession.Finish"/> returns is wherever the STREAMINFO patch
+        /// write left it (shortly after the start of the stream), <b>not</b> the end of the written
+        /// FLAC data -- unlike <see cref="Wav.WavWriter"/>/<see cref="Aiff.AiffWriter"/>/
+        /// <see cref="Au.AuWriter"/>'s own Stream-based destinations, which never seek back and so
+        /// always leave <see cref="Stream.Position"/> at the true end. A caller that needs the true
+        /// written length should use <see cref="Stream.Length"/> (correct regardless of where
+        /// <see cref="Stream.Position"/> ends up, since the seek-back only overwrites already-written
+        /// bytes in place) rather than <see cref="Stream.Position"/>, and should seek explicitly
+        /// before reading the stream back or writing anything further to it.
+        /// </remarks>
         public static FlacEncoderSession OpenSession(Stream destStream, int channels, int bitsPerSample, int sampleRate, uint compressionLevel = DefaultCompressionLevel, IReadOnlyDictionary<string, string>? tags = null)
         {
             ArgumentNullException.ThrowIfNull(destStream);
