@@ -252,6 +252,17 @@ earlier, alongside their own respective managed rewrites (see the `WavPack/`/`Mp
 EggEncoder is now 100% pure managed C# with zero native dependency of any kind, and CI builds
 and tests on `windows-latest`/`ubuntu-latest`/`macos-latest` to prove it.
 
+### External NuGet dependencies (product code)
+
+Zero native dependency isn't the same as zero *external* dependency: `Concentus` (Opus),
+`NLayer` (MP3 decode), `NVorbis` (Vorbis decode), and `OggVorbisEncoder` (Vorbis encode) are all
+pure-managed NuGet packages, not EggEncoder's own code — see `docs/external-dependency-removal-plan.md`
+for the owner's phased plan replacing each with a from-scratch implementation (MP3 decode first,
+Opus last — see that plan's own audit table for why). `Microsoft.Extensions.DependencyInjection.Abstractions`/
+`Microsoft.Extensions.Logging.Abstractions` are a deliberate, permanent exception to that plan
+(interface-only contracts needed for real ASP.NET Core DI/logging interop — see that same plan's
+own "Decision" section and `THIRD-PARTY-NOTICES.md`'s matching entry for the full rationale).
+
 ### Native AOT
 
 `EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe constructs now that no P/Invoke remains at all — no `[LibraryImport]`/`[DllImport]`, no `[UnmanagedCallersOnly]` native callbacks (`FlacDecoder`'s own decode callback was this pattern's last example, until it was replaced by the pure managed decoder in `FlacFrameDecoder`; `WavPackEncoderSession`'s own encode callback was replaced by the pure managed `WavPackBlockWriter`/`WavPackEntropyEncoder` before that). `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project, multi-RID (`win-x64`/`linux-x64`/`osx-arm64`), that round-trips WAV → MP3/FLAC/WavPack → probe through a real native-compiled binary on every OS in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling, `Reflection.Emit`, or a native binary dependency.
