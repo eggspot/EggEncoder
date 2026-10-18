@@ -177,8 +177,14 @@ namespace EggEncoder.UnitTests.Codecs
                 streamInfo.Channels.Should().Be(2);
                 samples.Should().NotBeEmpty();
 
+                // Threshold lowered from 1000 to 300 alongside the Mp3PolyphaseFilter.Analyze gain fix
+                // (sum/32.0, not sum/16.0 -- see that file's own doc comment): this project's own MP3
+                // encoder previously wrote every file's xr values at exactly 2x the correct amplitude,
+                // so a real, standards-compliant external decoder (NLayer, via Mp3Decoder.Decode) now
+                // correctly reconstructs this fixture's own cut at roughly half the RMS it used to --
+                // still clearly non-silent, just no longer inflated by the fixed bug.
                 var rootMeanSquare = Math.Sqrt(samples.Average(sample => (double)sample * sample));
-                rootMeanSquare.Should().BeGreaterThan(1000, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
+                rootMeanSquare.Should().BeGreaterThan(300, $"expected a real, non-silent decoded signal, got RMS={rootMeanSquare}");
             }
             finally
             {

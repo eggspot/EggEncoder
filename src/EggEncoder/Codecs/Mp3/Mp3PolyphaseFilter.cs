@@ -57,15 +57,34 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 // The window-multiply + 8-way partial sum + 32x64 cosine matrix steps above have an
-                // inherent gain of exactly 16x for a steady-state DC input (confirmed numerically: a
-                // constant input produces subband 0 == 16x its own value, verified independently of
-                // this project's own quantizer/Huffman layer by simulating the full analysis -> hybrid
-                // filter -> alias reduction -> its own exact inverse -> synthesis chain with no
-                // quantization at all). The matching decoder-side synthesis filter has no
-                // corresponding 1/16 of its own, so this is the one place in the whole chain that
+                // inherent gain of exactly 32x for a steady-state DC input -- NOT 16x, as an earlier
+                // version of this comment claimed (that "16x" figure was confirmed only against this
+                // project's own now-deleted self-decode scratch test, which paired this filter with
+                // its own from-scratch synthesis counterpart; both apparently shared a matching,
+                // independently-wrong gain assumption, so a purely self-consistent round-trip
+                // "confirmed" the wrong number without either side being individually correct). The
+                // true 32x factor was found and confirmed directly from the window-multiply/partial-
+                // sum/matrix steps' own definitions (a steady-state constant C produces a raw,
+                // pre-normalization sum of exactly 32*C here, verified with the project's own real
+                // Mp3Tables.WindowCoefficients values, not assumed) while investigating why
+                // Mp3SynthesisFilter -- independently cross-checked value-for-value against a real,
+                // external, working MP3 decoder's own synthesis-filter source and matching exactly --
+                // still reconstructed real encoded audio at exactly double the correct amplitude; see
+                // docs/external-dependency-removal-plan.md Phase 1 sub-item 1a's own status note for
+                // the full investigation. The matching decoder-side synthesis filter has no
+                // corresponding scaling of its own, so this is the one place in the whole chain that
                 // needs it -- normalizing here keeps a round-tripped DC signal at unity gain instead
-                // of 16x too loud.
-                subbandSamples[k] = sum / 16.0;
+                // of 32x too loud. This changes every encoded file's own internal scalar values
+                // (global_gain ends up roughly 4 steps lower -- each step is a quarter-power-of-2 in
+                // amplitude, ~1.505dB, so 4 of them is ~6.02dB, exactly the dB-equivalent of the 2x
+                // amplitude reduction this represents; the quantizer's own binary search picks
+                // whatever global_gain correctly represents the now-correctly-scaled input either
+                // way) but does NOT change what a real decoder reports after decoding: every existing round-
+                // trip test here already measures SNR after solving for the best-fit linear scale
+                // between original and decoded audio (deliberately scale-invariant, to compare
+                // *shape* fidelity independent of any absolute gain convention), which is exactly why
+                // this real factor-of-2 gain bug was never caught by them.
+                subbandSamples[k] = sum / 32.0;
             }
 
             return subbandSamples;

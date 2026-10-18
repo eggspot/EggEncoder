@@ -18,46 +18,30 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         private const int SampleRate = 44100;
         private const int GranuleSamples = 576;
 
-        // KNOWN OPEN ISSUE (docs/external-dependency-removal-plan.md Phase 1 sub-item 1a): this
-        // full-chain test currently fails -- even after searching all delays in [-600, 600] samples
-        // for the best-correlating alignment (the same "find the true alignment empirically via
-        // cross-correlation" technique VorbisEncoderSessionTest's own round-trip SNR helper already
-        // uses elsewhere in this codebase, added here specifically to rule delay/alignment out as
-        // the cause), the best achievable SNR is ~0dB (essentially uncorrelated), not the >20dB a
-        // lossless path should give. Ruled out so far, each independently:
-        //  - Mp3HybridFilter itself: confirmed correct in isolation (Mp3HybridFilterTest, a pure
-        //    TDAC round trip with no polyphase filtering involved at all).
-        //  - Mp3SynthesisFilter's own matrix formula, U-vector construction (U[64i+j]=V[128i+j],
-        //    U[64i+32+j]=V[128i+96+j]), and window application: cross-checked line-by-line against
-        //    a real, independently-written, actively-maintained open-source MP3 decoder's own
-        //    synthesis-filter source (confirmed index-for-index equivalent, including its own
-        //    "n[i][j]=cos((16+i)(2j+1)pi/64) is the DCT-II continued past k=31" derivation of the
-        //    exact same ISO matrix this type already used) -- not a guess, a real working
-        //    reference's own formulas, matching exactly.
-        //  - Simple time misalignment: ruled out by the brute-force delay search in this test
-        //    itself -- if it were just a delay, some nearby delay would show high SNR; none does.
-        //  - A sign error in this test's own frequency-inversion step: disabling it entirely
-        //    produced no material SNR change (-5.9dB either way, an earlier run of this test).
-        //  - This test's 440Hz signal choice makes frequency inversion itself unlikely to be
-        //    load-bearing either way: 440Hz at 44.1kHz sits almost entirely in subband 0, which is
-        //    even (frequency inversion -- odd subbands only -- never touches it on either the
-        //    encoder's or the decoder's side), yet the chain still fails -- so the bug is not
-        //    specific to the encoder's own pre-MDCT vs. the spec's own post-hybrid-filter placement
-        //    of that step either.
-        //  - Mp3SynthesisFilter in genuine isolation (no hybrid filter, no real encoder) DOES show
-        //    real, substantial positive correlation with a slowly-varying subband-0-only input
-        //    (confirmed via a throwaway diagnostic during this investigation, not committed) --
-        //    meaning the filter itself produces output structurally related to its own input, not
-        //    pure noise; the near-zero correlation specifically appears once Mp3FrameEncoder's own
-        //    real output is in the loop.
-        // Net effect: every individually-checked piece matches a real reference or passes its own
-        // isolated test, yet the full chain still doesn't reconstruct -- the remaining bug is most
-        // likely in some interaction this per-piece testing doesn't exercise (a strong next step:
-        // dump intermediate xr/hybrid-filter-output values for a single real encoded granule and
-        // compare them, value for value, against a hand-computed expectation, rather than only
-        // checking aggregate SNR). Left as an explicit repro, not deleted, so the next session
-        // doesn't need to rebuild it.
-        [Fact(Skip = "Open bug: the full chain reconstructs at ~0dB SNR even after an exhaustive delay search -- see this test's own doc comment for the full list of what's been ruled out.")]
+        // RESOLVED (was a known open issue in docs/external-dependency-removal-plan.md Phase 1
+        // sub-item 1a). Root cause: Mp3PolyphaseFilter.Analyze -- the existing, already-shipped MP3
+        // ENCODER's own analysis filter, not anything in this decode chain -- had a genuine gain
+        // bug: its own steady-state DC gain is really 32x, not the 16x an earlier version of its
+        // own doc comment claimed (that "16x" figure was only ever confirmed against this project's
+        // own now-deleted self-decode scratch test, which paired this filter with its own
+        // from-scratch synthesis counterpart sharing a matching, independently-wrong gain
+        // assumption -- a purely self-consistent round-trip that "confirmed" the wrong number
+        // without either side being individually correct against the real ISO-defined gain). This
+        // meant every encoded file's own xr values -- and so every real decoder's own reconstructed
+        // audio, including this project's own -- was exactly 2x too loud. It was never caught by
+        // the existing MP3 encoder tests (Mp3EncoderSnrTest and friends) because they're
+        // deliberately scale-invariant: they solve for the best-fit linear scale between original
+        // and decoded audio before measuring SNR, specifically to compare *shape* fidelity
+        // independent of any absolute gain convention -- exactly the property that hid a real
+        // factor-of-2 absolute-gain bug. Found by dumping real per-sample intermediate values for
+        // one encoded granule and comparing them, value for value, against an independent
+        // from-scratch reference computation of the spec's own synthesis formulas (not aggregate
+        // SNR) -- see Mp3PolyphaseFilter.cs's own doc comment for the full numeric derivation.
+        // Fixed in Mp3PolyphaseFilter.Analyze (sum/32.0, not sum/16.0) -- the shipped MP3 encoder's
+        // own output is otherwise unaffected in shape (Mp3EncoderSnrTest and the AotSmokeTest's own
+        // MP3 round trip, both decoded by real external decoders, still pass after this fix) and
+        // every encoded file now carries the correct absolute amplitude, not just a correct shape.
+        [Fact]
         public void FullBackHalfChain_Should_ReconstructASineTone_AtHighSnr_OnceTheFilterHistoryHasSettled()
         {
             const int granuleCount = 12;
@@ -150,7 +134,7 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                 }
             }
 
-            bestSnr.Should().BeGreaterThan(20, $"best delay found was {bestDelay}, giving SNR {bestSnr}dB");
+            bestSnr.Should().BeGreaterThan(40, $"best delay found was {bestDelay}, giving SNR {bestSnr}dB");
         }
     }
 }
