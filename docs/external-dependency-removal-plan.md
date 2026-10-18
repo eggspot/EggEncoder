@@ -167,34 +167,36 @@ narrower "decodes our own output" scope.
     independently-confirmed `*2` — applying the same sine window on both the forward and inverse
     sides of this "n+0.5+K/2"-basis MDCT halves the reconstructed amplitude, confirmed via a
     from-scratch Python harness before being fixed in code.
-    **`Mp3SynthesisFilter` (the polyphase synthesis filter bank) has a known, NOT yet resolved
-    bug**: `Mp3HybridAndSynthesisRoundTripTest` (full chain: alias-reduction-decode → hybrid filter
-    → frequency inversion → synthesis filter, against real `Mp3FrameEncoder` output, bypassing
-    Huffman/quantization) currently reconstructs a sine tone at essentially 0dB SNR (uncorrelated),
-    even after an exhaustive ±600-sample delay search (the same cross-correlation alignment
-    technique `VorbisEncoderSessionTest` already uses elsewhere in this codebase, added specifically
-    to rule out simple misalignment). Left in the suite as `[Fact(Skip = "...")]` with the exact
-    repro. What's been ruled out, each independently: a sign error in frequency inversion (disabling
-    it made no material difference); "wrong candidate formula" for the U-vector construction (the
-    one well-corroborated alternative was also tried, no fix); simple time misalignment (the delay
-    search itself rules this out — no nearby delay shows high SNR); the matrix formula and U-vector
-    construction being wrong at all (cross-checked index-for-index against a real, independently-
-    written, actively-maintained open-source MP3 decoder's own synthesis-filter source — matches
-    exactly, including that project's own from-scratch derivation of the same ISO matrix); and
-    frequency-inversion placement/domain mismatch specifically for this test's own signal (440Hz at
-    44.1kHz sits almost entirely in subband 0, which frequency inversion — odd subbands only —
-    never touches on either side, yet the chain still fails). `Mp3SynthesisFilter` in genuine
-    isolation (no hybrid filter, no real encoder) does show real positive correlation with a
-    slowly-varying subband-0-only input, meaning the filter isn't producing pure noise on its own —
-    the failure specifically appears once `Mp3FrameEncoder`'s real output enters the chain. Next
-    concrete step: dump intermediate `xr`/hybrid-filter-output values for a single real encoded
-    granule and compare value-for-value against a hand-computed expectation, rather than only
-    checking aggregate SNR. **This is the single largest remaining blocker for sub-item 1a** — until it's
-    resolved, `Mp3Decoder.Decode` cannot be cut over and `NLayer` cannot be removed. Frame
+    **`Mp3SynthesisFilter`'s reconstruction bug is now RESOLVED** — root cause found and fixed by
+    dumping real per-sample intermediate values for one encoded granule and comparing them,
+    value-for-value, against an independent from-scratch reference computation of the spec's own
+    synthesis formulas, rather than only checking aggregate SNR (exactly the "next concrete step"
+    this note used to call out). The bug was never in `Mp3SynthesisFilter`, `Mp3HybridFilter`, or
+    any other part of this decode chain — all independently re-confirmed correct, value-for-value,
+    during this investigation. It was in the existing, already-shipped MP3 **encoder**'s own
+    `Mp3PolyphaseFilter.Analyze`: its steady-state DC gain is really 32x, not the 16x an earlier
+    version of its own doc comment claimed (that "16x" figure traces back to this project's own
+    now-deleted self-decode scratch test, which paired this filter with its own from-scratch
+    synthesis counterpart sharing a matching, independently-wrong gain assumption — a purely
+    self-consistent round trip that "confirmed" the wrong number without either side being
+    individually correct against the real ISO-defined gain). This meant every encoded file's own
+    `xr` values — and so every real decoder's own reconstructed audio, including this project's
+    own — was exactly 2x too loud. It was never caught by the existing MP3 encoder tests
+    (`Mp3EncoderSnrTest` and friends) because they're deliberately scale-invariant (they solve for
+    the best-fit linear scale between original and decoded audio before measuring SNR, to compare
+    *shape* fidelity independent of any absolute gain convention) — exactly the property that hid a
+    real factor-of-2 absolute-gain bug. Fixed in `Mp3PolyphaseFilter.Analyze` (`sum / 32.0`, not
+    `sum / 16.0`); `Mp3HybridAndSynthesisRoundTripTest` is un-skipped and now reconstructs a real
+    sine tone at ~50dB SNR via only a delay search (no scale search needed — confirming the
+    absolute gain, not just the shape, is now correct). The shipped encoder's own output is
+    otherwise unaffected in shape — `Mp3EncoderSnrTest` and the `AotSmokeTest`'s own MP3 round trip,
+    both decoded by real external decoders, still pass after this fix; one existing absolute-RMS
+    non-silence threshold (`AudioCutterTest.Cut_Mp3_Should_Produce_Correct_Duration_And_NonSilent_Output`)
+    was lowered to match the now-correct (previously 2x-inflated) absolute amplitude. Frame
     header/side-info parsing and the real bit-reservoir frame assembler (the two remaining,
-    not-yet-started pieces) are comparatively mechanical and lower-risk, but a cutover still needs
-    the synthesis filter fixed first (none of this is wired into `Mp3Decoder.Decode` yet; `NLayer`
-    remains the active decoder).
+    not-yet-started pieces of this sub-item) are comparatively mechanical and lower-risk, and are
+    now unblocked — none of this decode chain is wired into `Mp3Decoder.Decode` yet; `NLayer`
+    remains the active decoder until that wiring and the remaining pieces land.
 - [ ] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
   joint-stereo bits (MS stereo's sum/difference reconstruction per channel, intensity stereo's
   scalefactor-band-driven panning reconstruction above the `intensity_stereo_bound`).

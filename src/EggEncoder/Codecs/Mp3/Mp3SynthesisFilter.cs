@@ -9,25 +9,17 @@ namespace EggEncoder.Codecs.Mp3
     // sliding history V (newest 64 at the front), reduced to a 512-element vector U, windowed by D
     // (Mp3Tables.WindowCoefficients again), and summed down to 32 output samples.
     //
-    // Unlike the encoder's own analysis filter (which documents an empirically-confirmed 16x gain
-    // it corrects for with its own /16.0), this synthesis filter applies no extra scaling at all --
-    // the standard decoder-side formula is unity gain on its own, which is why
-    // Mp3PolyphaseFilter's own doc comment specifically calls out that "the matching decoder-side
-    // synthesis filter has no corresponding 1/16 of its own."
+    // This synthesis filter applies no extra scaling at all -- the standard decoder-side formula
+    // is unity gain on its own, unlike the encoder's own analysis filter (Mp3PolyphaseFilter),
+    // which needs its own /32.0 to compensate for a real inherent 32x gain in its window-multiply
+    // /partial-sum/matrix steps. See Mp3PolyphaseFilter's own doc comment for the full derivation.
     //
-    // KNOWN OPEN ISSUE (docs/external-dependency-removal-plan.md Phase 1 sub-item 1a): this type's
-    // own correctness is NOT yet independently verified end-to-end. Mp3HybridAndSynthesisRoundTripTest
-    // (currently [Fact(Skip=...)]) reconstructs a real sine tone through the full
-    // Mp3AliasReduction.Decode -> Mp3HybridFilter -> frequency inversion -> Synthesize chain at
-    // roughly -6 to -9dB SNR, not the >20dB a lossless path should give. Mp3HybridFilter itself is
-    // independently confirmed correct in isolation (Mp3HybridFilterTest, a pure TDAC round trip
-    // with no polyphase filtering involved at all), which narrows the remaining bug to this type's
-    // own matrixing/U-vector construction and/or its interaction with frequency inversion -- see
-    // that skipped test's own doc comment for exactly what's been ruled out so far. The U-vector
-    // construction below (U[64i+j]=V[128i+j], U[64i+32+j]=V[128i+96+j]) is the best-corroborated of
-    // two candidate formulas found across independent sources during research (the other uses
-    // V[128i+32+j] for the second half); swapping to that alternative was tried and did not fix
-    // the SNR either, so the bug is not simply "the wrong one of these two candidates."
+    // RESOLVED (was tracked as a known open issue in docs/external-dependency-removal-plan.md
+    // Phase 1 sub-item 1a; see Mp3HybridAndSynthesisRoundTripTest's own doc comment for the full
+    // story). This type's own U-vector construction (U[64i+j]=V[128i+j], U[64i+32+j]=V[128i+96+j])
+    // and matrixing were independently confirmed correct, value-for-value, against a from-scratch
+    // reference computation of the same spec formulas -- the real bug turned out to be entirely on
+    // the encoder side (Mp3PolyphaseFilter.Analyze's own gain), not here.
     internal sealed class Mp3SynthesisFilter
     {
         private const int SubbandCount = 32;
