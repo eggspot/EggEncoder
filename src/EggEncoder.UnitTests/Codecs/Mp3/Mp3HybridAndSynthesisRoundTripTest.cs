@@ -19,20 +19,45 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         private const int GranuleSamples = 576;
 
         // KNOWN OPEN ISSUE (docs/external-dependency-removal-plan.md Phase 1 sub-item 1a): this
-        // full-chain test currently fails (SNR around -6 to -9dB, not the >20dB a lossless-path
-        // reconstruction should give). Mp3HybridFilter is independently verified correct in
-        // isolation (see Mp3HybridFilterTest, a pure TDAC round trip with no polyphase filtering at
-        // all) -- the remaining bug is somewhere in Mp3SynthesisFilter's own polyphase matrixing/
-        // U-vector construction, and/or in how this test's own frequency-inversion placement
-        // interacts with Mp3FrameEncoder.ComputeGranuleCoefficients' own ALREADY-applied frequency
-        // inversion (applied pre-MDCT, in raw subband-domain samples -- a different representation
-        // from the post-hybrid-filter point section 4.3.12.5 of the bitstream-syntax spec document
-        // says a decoder applies it at). Disabling this test's own frequency-inversion step
-        // entirely did not materially change the SNR (-5.9dB either way), which rules out a sign
-        // error there as the dominant cause but does not yet identify the real one. Left as a
-        // Theory with explicit inputs recorded, not deleted, so the next session has the exact
-        // repro rather than needing to rebuild it.
-        [Fact(Skip = "Open bug: Mp3SynthesisFilter's own polyphase reconstruction is not yet correct -- see this test's own doc comment for what's confirmed vs. still unknown.")]
+        // full-chain test currently fails -- even after searching all delays in [-600, 600] samples
+        // for the best-correlating alignment (the same "find the true alignment empirically via
+        // cross-correlation" technique VorbisEncoderSessionTest's own round-trip SNR helper already
+        // uses elsewhere in this codebase, added here specifically to rule delay/alignment out as
+        // the cause), the best achievable SNR is ~0dB (essentially uncorrelated), not the >20dB a
+        // lossless path should give. Ruled out so far, each independently:
+        //  - Mp3HybridFilter itself: confirmed correct in isolation (Mp3HybridFilterTest, a pure
+        //    TDAC round trip with no polyphase filtering involved at all).
+        //  - Mp3SynthesisFilter's own matrix formula, U-vector construction (U[64i+j]=V[128i+j],
+        //    U[64i+32+j]=V[128i+96+j]), and window application: cross-checked line-by-line against
+        //    a real, independently-written, actively-maintained open-source MP3 decoder's own
+        //    synthesis-filter source (confirmed index-for-index equivalent, including its own
+        //    "n[i][j]=cos((16+i)(2j+1)pi/64) is the DCT-II continued past k=31" derivation of the
+        //    exact same ISO matrix this type already used) -- not a guess, a real working
+        //    reference's own formulas, matching exactly.
+        //  - Simple time misalignment: ruled out by the brute-force delay search in this test
+        //    itself -- if it were just a delay, some nearby delay would show high SNR; none does.
+        //  - A sign error in this test's own frequency-inversion step: disabling it entirely
+        //    produced no material SNR change (-5.9dB either way, an earlier run of this test).
+        //  - This test's 440Hz signal choice makes frequency inversion itself unlikely to be
+        //    load-bearing either way: 440Hz at 44.1kHz sits almost entirely in subband 0, which is
+        //    even (frequency inversion -- odd subbands only -- never touches it on either the
+        //    encoder's or the decoder's side), yet the chain still fails -- so the bug is not
+        //    specific to the encoder's own pre-MDCT vs. the spec's own post-hybrid-filter placement
+        //    of that step either.
+        //  - Mp3SynthesisFilter in genuine isolation (no hybrid filter, no real encoder) DOES show
+        //    real, substantial positive correlation with a slowly-varying subband-0-only input
+        //    (confirmed via a throwaway diagnostic during this investigation, not committed) --
+        //    meaning the filter itself produces output structurally related to its own input, not
+        //    pure noise; the near-zero correlation specifically appears once Mp3FrameEncoder's own
+        //    real output is in the loop.
+        // Net effect: every individually-checked piece matches a real reference or passes its own
+        // isolated test, yet the full chain still doesn't reconstruct -- the remaining bug is most
+        // likely in some interaction this per-piece testing doesn't exercise (a strong next step:
+        // dump intermediate xr/hybrid-filter-output values for a single real encoded granule and
+        // compare them, value for value, against a hand-computed expectation, rather than only
+        // checking aggregate SNR). Left as an explicit repro, not deleted, so the next session
+        // doesn't need to rebuild it.
+        [Fact(Skip = "Open bug: the full chain reconstructs at ~0dB SNR even after an exhaustive delay search -- see this test's own doc comment for the full list of what's been ruled out.")]
         public void FullBackHalfChain_Should_ReconstructASineTone_AtHighSnr_OnceTheFilterHistoryHasSettled()
         {
             const int granuleCount = 12;
@@ -97,21 +122,35 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var settledStart = (granuleCount / 2) * GranuleSamples;
             var compareLength = totalSamples - settledStart - GranuleSamples; // also drop the cold tail
             var expected = originalPcm.Skip(settledStart).Take(compareLength).ToArray();
-            var actual = decoded.Skip(settledStart).Take(compareLength).ToArray();
 
-            actual.Should().HaveCount(expected.Length);
-
-            var errorSumSquares = 0.0;
-            var signalSumSquares = 0.0;
-            for (var i = 0; i < expected.Length; i++)
+            var bestDelay = 0;
+            var bestSnr = double.NegativeInfinity;
+            for (var delay = -600; delay <= 600; delay++)
             {
-                var error = expected[i] - actual[i];
-                errorSumSquares += error * error;
-                signalSumSquares += expected[i] * expected[i];
+                var errorSumSquares = 0.0;
+                var signalSumSquares = 0.0;
+                for (var i = 0; i < expected.Length; i++)
+                {
+                    var actualIndex = settledStart + i + delay;
+                    if (actualIndex < 0 || actualIndex >= decoded.Length)
+                    {
+                        continue;
+                    }
+
+                    var error = expected[i] - decoded[actualIndex];
+                    errorSumSquares += error * error;
+                    signalSumSquares += expected[i] * expected[i];
+                }
+
+                var snrDb = 10 * Math.Log10(signalSumSquares / errorSumSquares);
+                if (snrDb > bestSnr)
+                {
+                    bestSnr = snrDb;
+                    bestDelay = delay;
+                }
             }
 
-            var snrDb = 10 * Math.Log10(signalSumSquares / errorSumSquares);
-            snrDb.Should().BeGreaterThan(20, "the hybrid filter + frequency inversion + synthesis filter chain should reconstruct a settled sine tone with no quantization involved at all");
+            bestSnr.Should().BeGreaterThan(20, $"best delay found was {bestDelay}, giving SNR {bestSnr}dB");
         }
     }
 }
