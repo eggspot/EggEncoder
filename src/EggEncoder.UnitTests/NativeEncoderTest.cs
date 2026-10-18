@@ -1319,7 +1319,7 @@ namespace EggEncoder.UnitTests
             using var sourceStream = File.OpenRead(_wavFixturePath);
             using var destStream = new MemoryStream();
 
-            var act = () => _nativeEncoder.ConvertFile(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wma);
+            var act = () => _nativeEncoder.ConvertFile(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Opus);
 
             await act.Should().ThrowExactlyAsync<NotSupportedException>();
         }

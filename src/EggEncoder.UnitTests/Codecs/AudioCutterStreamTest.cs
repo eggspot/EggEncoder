@@ -1,9 +1,11 @@
 using EggEncoder.Codecs;
+using EggEncoder.Codecs.Aac;
 using EggEncoder.Codecs.Aiff;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
+using EggEncoder.Codecs.Wma;
 using EggEncoder.Pcm;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -228,7 +230,7 @@ namespace EggEncoder.UnitTests.Codecs
                 using var sourceStream = File.OpenRead(sourcePath);
                 using var destStream = new MemoryStream();
 
-                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wma);
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Opus);
 
                 act.Should().ThrowExactly<NotSupportedException>();
             }
@@ -341,6 +343,230 @@ namespace EggEncoder.UnitTests.Codecs
                 using var destStream = new NonSeekableWriteStream();
 
                 var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Tta);
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WavSourceToAacDest_Should_Decode_And_Encode_Correctly()
+        {
+            const int sampleRate = 44100;
+            const int sampleCount = sampleRate;
+
+            // A sine tone, not CreateRampWavFile's own linear ramp -- AAC is a lossy, psychoacoustic
+            // codec, and a ramp has neither periodic structure nor bounded int16-range amplitude
+            // (CreateRampWavFile's own ramp runs up to totalFrames, far past short.MaxValue here).
+            var originalSamples = new int[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                originalSamples[i] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var sourcePath = Path.Combine(Path.GetTempPath(), $"audiocutter_stream_aac_src_{Guid.NewGuid():N}.wav");
+            try
+            {
+                using (var writer = WavWriter.Create(sourcePath, channels: 1, sampleRate, bitsPerSample: 16, sampleCount))
+                {
+                    writer.WriteInterleavedSamples(originalSamples, sampleCount);
+                }
+
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aac);
+
+                destStream.Position = 0;
+                var decodedSamples = new List<int>();
+                var streamInfo = AacDecoder.Decode(destStream, (block, _, _, _, _) => decodedSamples.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(1);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+
+                // AacEncoderTest.Encode_ThenDecode_Should_ReconstructToneSignal_UpToScale documents
+                // the same one-frame (1024-sample) encoder delay for this exact codec path.
+                const int encoderDelaySamples = 1024;
+                var compareLength = Math.Min(decodedSamples.Count - encoderDelaySamples, originalSamples.Length);
+                compareLength.Should().BeGreaterThan(1000);
+
+                double dotProduct = 0;
+                double originalEnergy = 0;
+                for (var i = 0; i < compareLength; i++)
+                {
+                    dotProduct += (double)decodedSamples[i + encoderDelaySamples] * originalSamples[i];
+                    originalEnergy += (double)originalSamples[i] * originalSamples[i];
+                }
+
+                originalEnergy.Should().BeGreaterThan(0);
+                var scale = dotProduct / originalEnergy;
+
+                double errorEnergy = 0;
+                double signalEnergy = 0;
+                for (var i = 0; i < compareLength; i++)
+                {
+                    var expected = originalSamples[i] * scale;
+                    var error = decodedSamples[i + encoderDelaySamples] - expected;
+                    errorEnergy += error * error;
+                    signalEnergy += expected * expected;
+                }
+
+                var signalToNoiseRatioDb = 10 * Math.Log10(signalEnergy / Math.Max(errorEnergy, 1e-9));
+                signalToNoiseRatioDb.Should().BeGreaterThan(15, $"expected SNR > 15dB for a lossy AAC round trip (scale={scale}), got {signalToNoiseRatioDb}dB");
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WavStereoSourceToAacDest_Should_Throw()
+        {
+            // AacEncoderSession only supports mono -- confirmed through the full AudioCutter.Convert
+            // call, not just OpenSession in isolation, so the channel count genuinely propagates
+            // from the decoded source through to the destination sink's own validation.
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 10, sampleRate: 44100);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aac);
+
+                act.Should().ThrowExactly<NotSupportedException>();
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WithNonSeekableAacDest_Should_StillWork()
+        {
+            // Unlike Flac, AacEncoderSession.OpenSession(Stream, ...) needs no CanSeek at all --
+            // confirmed through the full AudioCutter.Convert call, not just the writer in isolation.
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 10, sampleRate: 44100, channels: 1);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new NonSeekableWriteStream();
+
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aac);
+
+                act.Should().NotThrow();
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WavSourceToWmaDest_Should_Decode_And_Encode_Correctly()
+        {
+            const int sampleRate = 44100;
+            const int channels = 2;
+            const int sampleCount = sampleRate;
+
+            // A sine tone per channel, not CreateRampWavFile's own linear ramp -- WMA, like AAC, is
+            // a lossy codec, so the comparison needs real periodic structure to measure SNR against.
+            var originalSamples = new int[sampleCount * channels];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                originalSamples[(i * channels) + 0] = (short)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+                originalSamples[(i * channels) + 1] = (short)(8000 * Math.Sin(2 * Math.PI * 220 * i / sampleRate));
+            }
+
+            var sourcePath = Path.Combine(Path.GetTempPath(), $"audiocutter_stream_wma_src_{Guid.NewGuid():N}.wav");
+            try
+            {
+                using (var writer = WavWriter.Create(sourcePath, channels, sampleRate, bitsPerSample: 16, sampleCount))
+                {
+                    writer.WriteInterleavedSamples(originalSamples, sampleCount);
+                }
+
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wma);
+
+                destStream.Position = 0;
+                var decodedSamples = new List<int>();
+                var streamInfo = WmaDecoder.Decode(destStream, (block, _, _, _, _) => decodedSamples.AddRange(block.ToArray()));
+
+                streamInfo.Channels.Should().Be(channels);
+                streamInfo.SampleRate.Should().Be(sampleRate);
+                decodedSamples.Should().NotBeEmpty();
+
+                // WmaEncoderTest.AssertRoundTripSnr documents the same one-frame encoder delay for
+                // this exact codec path.
+                var encoderDelaySamples = 1 << WmaTables.GetFrameLengthBits(sampleRate);
+
+                for (var channel = 0; channel < channels; channel++)
+                {
+                    var originalChannel = new List<double>();
+                    for (var i = channel; i < originalSamples.Length; i += channels)
+                    {
+                        originalChannel.Add(originalSamples[i]);
+                    }
+
+                    var decodedChannel = new List<double>();
+                    for (var i = channel; i < decodedSamples.Count; i += channels)
+                    {
+                        decodedChannel.Add(decodedSamples[i]);
+                    }
+
+                    var compareLength = Math.Min(decodedChannel.Count - encoderDelaySamples, originalChannel.Count);
+                    compareLength.Should().BeGreaterThan(1000);
+
+                    double dotProduct = 0;
+                    double originalEnergy = 0;
+                    for (var i = 0; i < compareLength; i++)
+                    {
+                        dotProduct += decodedChannel[i + encoderDelaySamples] * originalChannel[i];
+                        originalEnergy += originalChannel[i] * originalChannel[i];
+                    }
+
+                    originalEnergy.Should().BeGreaterThan(0);
+                    var scale = dotProduct / originalEnergy;
+
+                    double errorEnergy = 0;
+                    double signalEnergy = 0;
+                    for (var i = 0; i < compareLength; i++)
+                    {
+                        var expected = originalChannel[i] * scale;
+                        var error = decodedChannel[i + encoderDelaySamples] - expected;
+                        errorEnergy += error * error;
+                        signalEnergy += expected * expected;
+                    }
+
+                    var signalToNoiseRatioDb = 10 * Math.Log10(signalEnergy / Math.Max(errorEnergy, 1e-9));
+                    signalToNoiseRatioDb.Should().BeGreaterThan(10, $"expected SNR > 10dB for a lossy WMA round trip, channel {channel} (scale={scale}), got {signalToNoiseRatioDb}dB");
+                }
+            }
+            finally
+            {
+                File.Delete(sourcePath);
+            }
+        }
+
+        [Fact]
+        public void Convert_Stream_WithNonSeekableWmaDest_Should_StillWork()
+        {
+            // Unlike Flac, WmaEncoderSession.OpenSession(Stream, ...) needs no CanSeek at all --
+            // confirmed through the full AudioCutter.Convert call, not just the writer in isolation.
+            var (sourcePath, _) = CreateRampWavFile(totalFrames: 10, sampleRate: 44100);
+            try
+            {
+                using var sourceStream = File.OpenRead(sourcePath);
+                using var destStream = new NonSeekableWriteStream();
+
+                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Wma);
 
                 act.Should().NotThrow();
             }
@@ -498,12 +724,12 @@ namespace EggEncoder.UnitTests.Codecs
             return samples;
         }
 
-        private static (string FilePath, int[] Samples) CreateRampWavFile(int totalFrames, int sampleRate)
+        private static (string FilePath, int[] Samples) CreateRampWavFile(int totalFrames, int sampleRate, int channels = 2)
         {
-            var samples = BuildRampSamples(totalFrames, channels: 2);
+            var samples = BuildRampSamples(totalFrames, channels);
             var filePath = Path.Combine(Path.GetTempPath(), $"audiocutter_stream_{Guid.NewGuid():N}.wav");
 
-            using (var writer = WavWriter.Create(filePath, channels: 2, sampleRate, bitsPerSample: 16, totalFrames))
+            using (var writer = WavWriter.Create(filePath, channels, sampleRate, bitsPerSample: 16, totalFrames))
             {
                 writer.WriteInterleavedSamples(samples, totalFrames);
             }

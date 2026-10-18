@@ -1,16 +1,18 @@
 namespace EggEncoder.Codecs.Wma
 {
     // Encodes to WMAv2/ASF. Unlike the other streaming sessions, this can't flush frames straight
-    // to disk as they're encoded: the ASF header needs the final packet count/size before any bytes
-    // are written, and every data packet must be padded to one shared fixed size (chosen from the
-    // largest payload actually produced). So encoding happens incrementally, per frame, exactly as
-    // PCM arrives -- only the packaging into the ASF container is deferred to Finish(). The buffered
-    // data between calls is compressed WMA payloads (kilobytes per second of audio, not the raw PCM
-    // an earlier version of AacEncoderSession used to buffer), so this doesn't hold unbounded memory
+    // to the destination as they're encoded: the ASF header needs the final packet count/size
+    // before any bytes are written, and every data packet must be padded to one shared fixed size
+    // (chosen from the largest payload actually produced). So encoding happens incrementally, per
+    // frame, exactly as PCM arrives -- only the packaging into the ASF container (AsfContainerWriter.Write,
+    // a single forward pass needing no Stream.CanSeek) is deferred to Finish(). The buffered data
+    // between calls is compressed WMA payloads (kilobytes per second of audio, not the raw PCM an
+    // earlier version of AacEncoderSession used to buffer), so this doesn't hold unbounded memory
     // the way that did.
     public sealed class WmaEncoderSession : IAudioSink
     {
-        private readonly string _destFilePath;
+        private readonly Stream _destStream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _sampleRate;
         private readonly WmaFrameEncoder _frameEncoder;
@@ -20,10 +22,12 @@ namespace EggEncoder.Codecs.Wma
         private int _pendingCount;
         private long _totalSamplesWritten;
         private bool _finished;
+        private bool _disposed;
 
-        private WmaEncoderSession(string destFilePath, int channels, int sampleRate)
+        private WmaEncoderSession(Stream destStream, bool leaveOpen, int channels, int sampleRate)
         {
-            _destFilePath = destFilePath;
+            _destStream = destStream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _sampleRate = sampleRate;
             _frameEncoder = new WmaFrameEncoder(channels, sampleRate);
@@ -37,6 +41,38 @@ namespace EggEncoder.Codecs.Wma
 
         public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate)
         {
+            ValidateParameters(channels, sampleRate);
+
+            var destStream = File.Create(destFilePath);
+            try
+            {
+                return new WmaEncoderSession(destStream, leaveOpen: false, channels, sampleRate);
+            }
+            catch
+            {
+                destStream.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates a WMA destination from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a destination that isn't a local file (an HTTP request body, blob storage,
+        /// an in-memory buffer). Needs no <see cref="Stream.CanSeek"/> at all -- see
+        /// <see cref="AsfContainerWriter.Write(Stream, int, int, long, IReadOnlyList{byte[]})"/>'s
+        /// own doc comment for why. Does NOT dispose <paramref name="destStream"/> -- the caller
+        /// opened it, so the caller is responsible for disposing it.
+        /// </summary>
+        public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+            ValidateParameters(channels, sampleRate);
+
+            return new WmaEncoderSession(destStream, leaveOpen: true, channels, sampleRate);
+        }
+
+        private static void ValidateParameters(int channels, int sampleRate)
+        {
             if (channels is not 1 and not 2)
             {
                 throw new NotSupportedException("Only mono and stereo WMA encoding is supported");
@@ -46,8 +82,6 @@ namespace EggEncoder.Codecs.Wma
             {
                 throw new NotSupportedException($"Sample rate {sampleRate} is not a valid WMA sample rate");
             }
-
-            return new WmaEncoderSession(destFilePath, channels, sampleRate);
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -88,13 +122,22 @@ namespace EggEncoder.Codecs.Wma
                 EncodePendingBlock();
             }
 
-            AsfContainerWriter.Write(_destFilePath, _channels, _sampleRate, _totalSamplesWritten, _packetPayloads);
+            AsfContainerWriter.Write(_destStream, _channels, _sampleRate, _totalSamplesWritten, _packetPayloads);
         }
 
         public void Dispose()
         {
-            // Nothing held open between calls -- AsfContainerWriter owns its own file handle for
-            // the single write that happens in Finish().
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            if (!_leaveOpen)
+            {
+                _destStream.Dispose();
+            }
         }
 
         private void EncodePendingBlock()

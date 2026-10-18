@@ -179,7 +179,24 @@ no `Stream.CanSeek`: `TtaEncoderSession` already holds every compressed frame in
 `Finish()` (`TtaWriter`'s own "whole frame list known up front" design, predating this item), so
 the header/seek-table/frame data are all written in a single forward pass with no patch-up ever
 needed -- confirmed directly, not just assumed from the absence of a `CanSeek` check, via a test
-that actually writes through a destination `Stream` whose `Seek`/`Position` throw. Every other
+that actually writes through a destination `Stream` whose `Seek`/`Position` throw. `OpenSinkStream`
+also now covers AAC, via `AacEncoderSession.OpenSession(Stream, ...)` -- needs neither
+`exactTotalFrames` nor `Stream.CanSeek`, and unlike every destination above doesn't even buffer
+anything of its own: every ADTS frame is written straight to the destination as soon as
+`AacFrameEncoder`'s own per-frame callback produces it, with no whole-file patch-up step at all.
+And WMA, via `WmaEncoderSession.OpenSession(Stream, ...)` -- also needs neither, but unlike AAC it
+does buffer (every encoded WMA packet payload, not raw PCM, until `Finish()`, the same "whole frame
+list known up front" shape TTA's own `Stream` overload already established), since the ASF
+container's header needs stats (packet count/size, duration, average bitrate) computed from every
+payload before the first byte is written. Widening this one surfaced a real, independent bug fix
+along the way: the pre-existing `AsfContainerWriter.Write` (used by both the path-based overload
+and, now, the new `Stream` one) read back `writer.BaseStream.Position` after writing each packet
+purely to compute a value -- `PacketHeaderOverhead + payload.Length` -- that's already fully known
+from its own inputs; that read would have thrown against a genuinely non-seekable destination
+(confirmed: .NET's own `NetworkStream`/an HTTP request body both throw `NotSupportedException` from
+`Position`'s own getter when `CanSeek` is false) despite the method never actually needing to seek,
+so it's now computed directly instead, confirmed by actually writing through a destination `Stream`
+whose `Seek`/`Position` throw, the same way TTA's own claim above is confirmed. Every other
 destination codec's own `Stream` write side (and its own seekability requirement, to be confirmed
 per format rather than assumed) is what's still open for this item, alongside MP3's own blocker
 above.
