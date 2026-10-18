@@ -192,11 +192,29 @@ narrower "decodes our own output" scope.
     otherwise unaffected in shape — `Mp3EncoderSnrTest` and the `AotSmokeTest`'s own MP3 round trip,
     both decoded by real external decoders, still pass after this fix; one existing absolute-RMS
     non-silence threshold (`AudioCutterTest.Cut_Mp3_Should_Produce_Correct_Duration_And_NonSilent_Output`)
-    was lowered to match the now-correct (previously 2x-inflated) absolute amplitude. Frame
-    header/side-info parsing and the real bit-reservoir frame assembler (the two remaining,
-    not-yet-started pieces of this sub-item) are comparatively mechanical and lower-risk, and are
-    now unblocked — none of this decode chain is wired into `Mp3Decoder.Decode` yet; `NLayer`
-    remains the active decoder until that wiring and the remaining pieces land.
+    was lowered to match the now-correct (previously 2x-inflated) absolute amplitude.
+    **Frame header + side info parsing is now done** (`Mp3FrameHeaderParser`/`Mp3SideInfoParser`):
+    the 32-bit MPEG-1 Layer III header (bitrate/sample-rate index, channel mode, padding, CRC
+    presence) and the fixed-size side info block (`main_data_begin`, `private_bits`, `scfsi`, and
+    per-granule/channel `part2_3_length`/`big_values`/`global_gain`/`scalefac_compress`/
+    `table_select`/`region0_count`/`region1_count`/`preflag`/`scalefac_scale`/
+    `count1table_select`), in the real ISO bitstream syntax order (table_select before the region
+    counts for a long block — confirmed directly from `Mp3FrameEncoder.WriteSideInfo`'s own
+    already-matching order, not assumed). Both throw a specific `NotSupportedException` for
+    anything outside this sub-item's scope (MPEG-2/2.5, Layer I/II, joint stereo, free-format/
+    reserved bitrate or sample rate, `window_switching_flag=1` short/mixed blocks) per the
+    acceptance bar above. Verified against this project's own encoder (round trip via
+    `Mp3FrameEncoder.WriteHeader`/`WriteSideInfo`, both widened to `internal` for this) AND against
+    the real fixtures' own raw bytes — which surfaced a genuinely useful audit result: walking
+    `cbr128.mp3`/`tone.mp3`/`vbr_q4.mp3`/`no_xing.mp3` frame by frame found that every one of them
+    encodes its real audio content in **joint stereo**; the only independent-stereo region any of
+    them has is the LAME/Xing Info-tag placeholder frame (three of the four have one), which
+    carries no real Huffman-coded data at all. So today's fixtures have no non-trivial
+    independent-stereo region to decode end-to-end yet — 1b (joint stereo) is a prerequisite for
+    decoding real audio from any of them, not just an enhancement. Real bit-reservoir frame
+    assembly (`main_data_begin` actually reused across frames, not just parsed) remains the one
+    not-yet-started piece of this sub-item, and is now the thing blocking a `Mp3Decoder.Decode`
+    cutover — none of this decode chain is wired in yet; `NLayer` remains the active decoder.
 - [ ] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
   joint-stereo bits (MS stereo's sum/difference reconstruction per channel, intensity stereo's
   scalefactor-band-driven panning reconstruction above the `intensity_stereo_bound`).
