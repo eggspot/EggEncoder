@@ -172,7 +172,14 @@ opens; the Stream-based one does not dispose the caller's stream. `FlacEncoder`'
 bits-per-sample/tag validation was factored into a shared private helper so the path-based and
 Stream-based `OpenSession` overloads can't drift apart on what's valid. `AiffWriter`/`AuWriter`
 were widened mechanically, the same validate-then-write refactor `WavWriter` already went through
--- neither needed any seek logic touched since they had none to begin with. Every other
+-- neither needed any seek logic touched since they had none to begin with. `OpenSinkStream` also
+now covers TTA, via `TtaEncoderSession.OpenSession(Stream, ...)` -- like FLAC, it needs no
+`exactTotalFrames` up front (so no `DeferredFixedHeaderSink` either), but unlike FLAC it also needs
+no `Stream.CanSeek`: `TtaEncoderSession` already holds every compressed frame in memory until
+`Finish()` (`TtaWriter`'s own "whole frame list known up front" design, predating this item), so
+the header/seek-table/frame data are all written in a single forward pass with no patch-up ever
+needed -- confirmed directly, not just assumed from the absence of a `CanSeek` check, via a test
+that actually writes through a destination `Stream` whose `Seek`/`Position` throw. Every other
 destination codec's own `Stream` write side (and its own seekability requirement, to be confirmed
 per format rather than assumed) is what's still open for this item, alongside MP3's own blocker
 above.

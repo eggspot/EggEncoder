@@ -7,7 +7,8 @@ namespace EggEncoder.Codecs.Tta
     // table needs every frame's final compressed size up front.
     public sealed class TtaEncoderSession : IAudioSink
     {
-        private readonly FileStream _destStream;
+        private readonly Stream _destStream;
+        private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _bitsPerSample;
         private readonly int _sampleRate;
@@ -19,9 +20,10 @@ namespace EggEncoder.Codecs.Tta
         private long _totalSamples;
         private bool _disposed;
 
-        private TtaEncoderSession(FileStream destStream, int channels, int bitsPerSample, int sampleRate)
+        private TtaEncoderSession(Stream destStream, bool leaveOpen, int channels, int bitsPerSample, int sampleRate)
         {
             _destStream = destStream;
+            _leaveOpen = leaveOpen;
             _channels = channels;
             _bitsPerSample = bitsPerSample;
             _sampleRate = sampleRate;
@@ -32,30 +34,59 @@ namespace EggEncoder.Codecs.Tta
 
         public static TtaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample)
         {
-            if (channels is not 1 and not 2)
-            {
-                throw new NotSupportedException($"'{destFilePath}' requests {channels} channels; only mono and stereo TTA encoding is supported");
-            }
-
-            if (bitsPerSample != 16)
-            {
-                throw new NotSupportedException($"'{destFilePath}' requests {bitsPerSample}-bit samples; only 16-bit TTA encoding is supported");
-            }
-
-            if (sampleRate <= 0)
-            {
-                throw new NotSupportedException($"'{destFilePath}' requests a sample rate of {sampleRate}; only positive sample rates are supported for TTA encoding");
-            }
+            ValidateParameters(destFilePath, channels, sampleRate, bitsPerSample);
 
             var destStream = File.Create(destFilePath);
             try
             {
-                return new TtaEncoderSession(destStream, channels, bitsPerSample, sampleRate);
+                return new TtaEncoderSession(destStream, leaveOpen: false, channels, bitsPerSample, sampleRate);
             }
             catch
             {
                 destStream.Dispose();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates a TTA destination from an already-open <see cref="Stream"/> instead of a file
+        /// path -- for a destination that isn't a local file (an HTTP request body, blob storage,
+        /// an in-memory buffer). Unlike <see cref="Flac.FlacEncoderSession"/>'s own STREAMINFO
+        /// patch-up, this needs no <see cref="Stream.CanSeek"/> at all: like the path-based overload,
+        /// every compressed frame is held in memory until <see cref="Finish"/>, at which point
+        /// <see cref="TtaWriter.Write"/> writes the header, seek table, and every frame's own data
+        /// in a single forward pass -- the same "whole frame list known up front, so no patch-up
+        /// needed" reasoning <see cref="TtaWriter"/>'s own doc comment already establishes for the
+        /// path-based case. Does NOT dispose <paramref name="destStream"/> -- the caller opened it,
+        /// so the caller is responsible for disposing it.
+        /// </summary>
+        public static TtaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample)
+        {
+            ArgumentNullException.ThrowIfNull(destStream);
+            ValidateParameters("<stream>", channels, sampleRate, bitsPerSample);
+
+            return new TtaEncoderSession(destStream, leaveOpen: true, channels, bitsPerSample, sampleRate);
+        }
+
+        // Shared by both OpenSession overloads so path-based and Stream-based destinations can
+        // never drift apart on what's a valid request -- destPathForErrors is "<stream>" for the
+        // Stream-based overload, the same placeholder WavWriter/AiffWriter/AuWriter/FlacEncoder's
+        // own Stream-based overloads already use for their error messages.
+        private static void ValidateParameters(string destPathForErrors, int channels, int sampleRate, int bitsPerSample)
+        {
+            if (channels is not 1 and not 2)
+            {
+                throw new NotSupportedException($"'{destPathForErrors}' requests {channels} channels; only mono and stereo TTA encoding is supported");
+            }
+
+            if (bitsPerSample != 16)
+            {
+                throw new NotSupportedException($"'{destPathForErrors}' requests {bitsPerSample}-bit samples; only 16-bit TTA encoding is supported");
+            }
+
+            if (sampleRate <= 0)
+            {
+                throw new NotSupportedException($"'{destPathForErrors}' requests a sample rate of {sampleRate}; only positive sample rates are supported for TTA encoding");
             }
         }
 
@@ -101,7 +132,11 @@ namespace EggEncoder.Codecs.Tta
             }
 
             _disposed = true;
-            _destStream.Dispose();
+
+            if (!_leaveOpen)
+            {
+                _destStream.Dispose();
+            }
         }
 
         private void FlushPendingFrame()
