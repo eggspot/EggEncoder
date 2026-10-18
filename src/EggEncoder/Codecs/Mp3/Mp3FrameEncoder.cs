@@ -256,7 +256,11 @@ namespace EggEncoder.Codecs.Mp3
             writer.WriteBits(0, 2); // emphasis
         }
 
-        private void WriteSideInfo(BitWriter writer, Mp3Quantizer.Plan[,] plans)
+        // internal (not private) so Mp3SideInfoParserTest can round-trip against this exact,
+        // already-verified writer rather than hand-building side info bits from scratch -- the
+        // same "widen for test reuse, zero behavior change" precedent
+        // FlacEncoderSession.WriteStreamInfoPayload already established.
+        internal void WriteSideInfo(BitWriter writer, Mp3Quantizer.Plan[,] plans)
         {
             writer.WriteBits(0, 9); // main_data_begin -- always 0, this encoder never borrows from the bit reservoir
             writer.WriteBits(0, _channels == 1 ? 5 : 3); // private_bits
