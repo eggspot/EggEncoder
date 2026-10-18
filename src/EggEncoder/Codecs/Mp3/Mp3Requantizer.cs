@@ -53,8 +53,8 @@ namespace EggEncoder.Codecs.Mp3
                     sfb++;
                 }
 
-                var is_i = quantized[i];
-                if (is_i == 0)
+                var quantizedValue = quantized[i];
+                if (quantizedValue == 0)
                 {
                     continue;
                 }
@@ -66,8 +66,8 @@ namespace EggEncoder.Codecs.Mp3
                 var scaleExponent = -(scalefacMultiplier * scalefac) - pretabValue;
                 var scale = globalScale * Math.Pow(2.0, scaleExponent);
 
-                var magnitude = Math.Pow(Math.Abs(is_i), 4.0 / 3.0) * scale;
-                xr[i] = is_i < 0 ? -magnitude : magnitude;
+                var magnitude = Math.Pow(Math.Abs(quantizedValue), 4.0 / 3.0) * scale;
+                xr[i] = quantizedValue < 0 ? -magnitude : magnitude;
             }
 
             return xr;
