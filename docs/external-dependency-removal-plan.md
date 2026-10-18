@@ -170,12 +170,26 @@ narrower "decodes our own output" scope.
     **`Mp3SynthesisFilter` (the polyphase synthesis filter bank) has a known, NOT yet resolved
     bug**: `Mp3HybridAndSynthesisRoundTripTest` (full chain: alias-reduction-decode → hybrid filter
     → frequency inversion → synthesis filter, against real `Mp3FrameEncoder` output, bypassing
-    Huffman/quantization) currently reconstructs a sine tone at roughly -6 to -9dB SNR instead of
-    the >20dB a lossless path should give, and is left in the suite as `[Fact(Skip = "...")]` with
-    the exact repro and everything ruled out so far recorded in its own doc comment (not a sign
-    error in frequency inversion — tried disabling it, no material SNR change; not simply "wrong
-    candidate formula" for the U-vector construction — tried the one well-corroborated alternative,
-    also no fix). **This is the single largest remaining blocker for sub-item 1a** — until it's
+    Huffman/quantization) currently reconstructs a sine tone at essentially 0dB SNR (uncorrelated),
+    even after an exhaustive ±600-sample delay search (the same cross-correlation alignment
+    technique `VorbisEncoderSessionTest` already uses elsewhere in this codebase, added specifically
+    to rule out simple misalignment). Left in the suite as `[Fact(Skip = "...")]` with the exact
+    repro. What's been ruled out, each independently: a sign error in frequency inversion (disabling
+    it made no material difference); "wrong candidate formula" for the U-vector construction (the
+    one well-corroborated alternative was also tried, no fix); simple time misalignment (the delay
+    search itself rules this out — no nearby delay shows high SNR); the matrix formula and U-vector
+    construction being wrong at all (cross-checked index-for-index against a real, independently-
+    written, actively-maintained open-source MP3 decoder's own synthesis-filter source — matches
+    exactly, including that project's own from-scratch derivation of the same ISO matrix); and
+    frequency-inversion placement/domain mismatch specifically for this test's own signal (440Hz at
+    44.1kHz sits almost entirely in subband 0, which frequency inversion — odd subbands only —
+    never touches on either side, yet the chain still fails). `Mp3SynthesisFilter` in genuine
+    isolation (no hybrid filter, no real encoder) does show real positive correlation with a
+    slowly-varying subband-0-only input, meaning the filter isn't producing pure noise on its own —
+    the failure specifically appears once `Mp3FrameEncoder`'s real output enters the chain. Next
+    concrete step: dump intermediate `xr`/hybrid-filter-output values for a single real encoded
+    granule and compare value-for-value against a hand-computed expectation, rather than only
+    checking aggregate SNR. **This is the single largest remaining blocker for sub-item 1a** — until it's
     resolved, `Mp3Decoder.Decode` cannot be cut over and `NLayer` cannot be removed. Frame
     header/side-info parsing and the real bit-reservoir frame assembler (the two remaining,
     not-yet-started pieces) are comparatively mechanical and lower-risk, but a cutover still needs
