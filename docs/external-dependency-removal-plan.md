@@ -159,10 +159,28 @@ narrower "decodes our own output" scope.
     existing `Mp3Quantizer`, plus dedicated scalefactor/preflag tests), `Mp3HuffmanDecoder`
     (verified via round-trip against `Mp3Quantizer.Write` plus hand-built bitstreams for
     count1/escape/multi-region cases), `Mp3ScaleFactorDecoder` (verified via hand-built bitstreams
-    covering scfsi reuse). Still open: the hybrid filter + polyphase synthesis filter bank (the
-    synthesis filter specifically has a known, not-yet-resolved bug — see below once that PR
-    lands), frame/side-info parsing, the real bit-reservoir frame assembler, and the actual cutover
-    (none of this is wired into `Mp3Decoder.Decode` yet; `NLayer` remains the active decoder).
+    covering scfsi reuse). `Mp3HybridFilter` (IMDCT+window+overlap-add) is also implemented and
+    independently verified correct in isolation (`Mp3HybridFilterTest` — a pure TDAC round trip
+    against hand-replicated encoder windowing, no polyphase filtering involved) after finding and
+    fixing a real bug during development: `Transform.Mdct.Inverse` needed not just the documented
+    `*18` compensation (undoing its own AAC/WMA-tailored normalization) but an *additional*,
+    independently-confirmed `*2` — applying the same sine window on both the forward and inverse
+    sides of this "n+0.5+K/2"-basis MDCT halves the reconstructed amplitude, confirmed via a
+    from-scratch Python harness before being fixed in code.
+    **`Mp3SynthesisFilter` (the polyphase synthesis filter bank) has a known, NOT yet resolved
+    bug**: `Mp3HybridAndSynthesisRoundTripTest` (full chain: alias-reduction-decode → hybrid filter
+    → frequency inversion → synthesis filter, against real `Mp3FrameEncoder` output, bypassing
+    Huffman/quantization) currently reconstructs a sine tone at roughly -6 to -9dB SNR instead of
+    the >20dB a lossless path should give, and is left in the suite as `[Fact(Skip = "...")]` with
+    the exact repro and everything ruled out so far recorded in its own doc comment (not a sign
+    error in frequency inversion — tried disabling it, no material SNR change; not simply "wrong
+    candidate formula" for the U-vector construction — tried the one well-corroborated alternative,
+    also no fix). **This is the single largest remaining blocker for sub-item 1a** — until it's
+    resolved, `Mp3Decoder.Decode` cannot be cut over and `NLayer` cannot be removed. Frame
+    header/side-info parsing and the real bit-reservoir frame assembler (the two remaining,
+    not-yet-started pieces) are comparatively mechanical and lower-risk, but a cutover still needs
+    the synthesis filter fixed first (none of this is wired into `Mp3Decoder.Decode` yet; `NLayer`
+    remains the active decoder).
 - [ ] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
   joint-stereo bits (MS stereo's sum/difference reconstruction per channel, intensity stereo's
   scalefactor-band-driven panning reconstruction above the `intensity_stereo_bound`).
