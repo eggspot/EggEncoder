@@ -151,6 +151,18 @@ narrower "decodes our own output" scope.
     yet cover (joint stereo mode bits set, or `window_switching_flag` indicating a short/mixed
     block), so 1b/1c have an unambiguous "not implemented yet" signal to replace rather than a
     silent correctness gap.
+  - **Status: in progress, not merged to a public API yet.** The scalar/Huffman decode
+    infrastructure is done and independently verified ([PR #124](https://github.com/eggspot/EggEncoder/pull/124)):
+    `Mp3ScaleFactorTables` (scalefac_compress/pretab/scalefactor-band tables, cross-validated
+    against 2+ independent public sources each), `Mp3AliasReduction.Decode` (verified as the exact
+    inverse of the existing `Encode`), `Mp3Requantizer` (verified via round-trip against the
+    existing `Mp3Quantizer`, plus dedicated scalefactor/preflag tests), `Mp3HuffmanDecoder`
+    (verified via round-trip against `Mp3Quantizer.Write` plus hand-built bitstreams for
+    count1/escape/multi-region cases), `Mp3ScaleFactorDecoder` (verified via hand-built bitstreams
+    covering scfsi reuse). Still open: the hybrid filter + polyphase synthesis filter bank (the
+    synthesis filter specifically has a known, not-yet-resolved bug — see below once that PR
+    lands), frame/side-info parsing, the real bit-reservoir frame assembler, and the actual cutover
+    (none of this is wired into `Mp3Decoder.Decode` yet; `NLayer` remains the active decoder).
 - [ ] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
   joint-stereo bits (MS stereo's sum/difference reconstruction per channel, intensity stereo's
   scalefactor-band-driven panning reconstruction above the `intensity_stereo_bound`).
