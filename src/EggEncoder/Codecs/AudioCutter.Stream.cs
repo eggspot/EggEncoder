@@ -21,14 +21,19 @@ namespace EggEncoder.Codecs
     // DeferredFixedHeaderSink from directly rather than duplicating any of that logic. Source: every
     // format this project's own Stream-based Probe already decodes from a Stream (see
     // NativeEncoder.Stream.cs) -- MP3 is the one exception, still blocked on NLayer's own
-    // MpegFile(Stream) having no leaveOpen option. Destination: WAV/AIFF/AU/FLAC so far, via
+    // MpegFile(Stream) having no leaveOpen option. Destination: WAV/AIFF/AU/FLAC/TTA so far, via
     // WavWriter.Create(Stream, ...)/AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...)/
-    // FlacEncoder.OpenSession(Stream, ...) -- the first three need no Stream.CanSeek at all (each
-    // writes a fixed-size header with every size field already known from totalFrames up front, no
-    // patch-up on Finish()), while FLAC is the first destination here that genuinely does require
-    // CanSeek (FlacEncoderSession.Finish() seeks back to patch STREAMINFO once totalSamples/MD5 are
-    // known). Every other destination codec's own Stream write side is still open, one format at a
-    // time, the same way Stream-based Probe itself was rolled out.
+    // FlacEncoder.OpenSession(Stream, ...)/TtaEncoderSession.OpenSession(Stream, ...) -- WAV/AIFF/AU
+    // need no Stream.CanSeek at all (each writes a fixed-size header with every size field already
+    // known from totalFrames up front, no patch-up on Finish()); FLAC is the first destination here
+    // that genuinely does require CanSeek (FlacEncoderSession.Finish() seeks back to patch
+    // STREAMINFO once totalSamples/MD5 are known); TTA needs no CanSeek either, despite also
+    // needing no exactTotalFrames up front -- unlike FLAC's provisional-header-then-patch design,
+    // TtaEncoderSession holds every compressed frame in memory until Finish(), at which point
+    // TtaWriter writes the header/seek-table/frames in one single forward pass since the whole
+    // frame list (and every frame's own final size) is already known by then. Every other
+    // destination codec's own Stream write side is still open, one format at a time, the same way
+    // Stream-based Probe itself was rolled out.
     public static partial class AudioCutter
     {
         /// <summary>
@@ -310,6 +315,13 @@ namespace EggEncoder.Codecs
                     // byte offset -- which FlacEncoder.OpenSession(Stream, ...) itself validates and
                     // throws a clear ArgumentException for if it's missing.
                     return FlacEncoder.OpenSession(dest, channels, bitsPerSample, sampleRate);
+                case AudioFormat.Tta:
+                    // Like FLAC, TtaEncoderSession.OpenSession needs no exactTotalFrames at all (so
+                    // no DeferredFixedHeaderSink either) -- but unlike FLAC, it also needs no
+                    // dest.CanSeek: every compressed frame is held in memory until Finish(), which
+                    // then writes the header/seek-table/frames in one single forward pass, since the
+                    // whole frame list (and every frame's own final size) is already known by then.
+                    return TtaEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 default:
                     throw new NotSupportedException($"Converting to an AudioFormat.{destFormat} stream destination is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");
             }

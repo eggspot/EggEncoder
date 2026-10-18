@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Tta;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Tta
@@ -190,6 +191,105 @@ namespace EggEncoder.UnitTests.Codecs.Tta
             {
                 File.Delete(filePath);
             }
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithNullStream_Should_Throw()
+        {
+            var act = () => TtaEncoderSession.OpenSession((Stream)null!, channels: 1, sampleRate: 44100, bitsPerSample: 16);
+
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithUnsupportedChannelCount_Should_Throw()
+        {
+            using var destStream = new MemoryStream();
+
+            var act = () => TtaEncoderSession.OpenSession(destStream, channels: 3, sampleRate: 44100, bitsPerSample: 16);
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithNonSixteenBitDepth_Should_Throw()
+        {
+            using var destStream = new MemoryStream();
+
+            var act = () => TtaEncoderSession.OpenSession(destStream, channels: 1, sampleRate: 44100, bitsPerSample: 24);
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithZeroSampleRate_Should_Throw()
+        {
+            using var destStream = new MemoryStream();
+
+            var act = () => TtaEncoderSession.OpenSession(destStream, channels: 1, sampleRate: 0, bitsPerSample: 16);
+
+            act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void OpenSession_Stream_Should_RoundTrip_Exactly()
+        {
+            const int sampleRate = 44100;
+            const int sampleCount = sampleRate * 2;
+            var samples = new int[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                samples[i] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            using var destStream = new MemoryStream();
+            using (var session = TtaEncoderSession.OpenSession(destStream, channels: 1, sampleRate, bitsPerSample: 16))
+            {
+                session.WriteInterleavedSamples(samples, samples.Length);
+                session.Finish();
+            }
+
+            destStream.Position = 0;
+            var decoded = new List<int>();
+            var streamInfo = TtaDecoder.Decode(destStream, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+
+            streamInfo.SampleRate.Should().Be(sampleRate);
+            streamInfo.Channels.Should().Be(1);
+            streamInfo.TotalSamples.Should().Be(sampleCount);
+            decoded.Should().Equal(samples);
+        }
+
+        [Fact]
+        public void OpenSession_Stream_WithNonSeekableDestination_Should_StillWork()
+        {
+            // Unlike FlacEncoder.OpenSession(Stream, ...), TtaEncoderSession needs no CanSeek at
+            // all -- confirmed directly by actually writing through a destination that throws on
+            // any Seek/Position access, not just by the absence of a CanSeek check in the source.
+            const int sampleRate = 44100;
+            var samples = new[] { 100, -200, 300, -400, 500 };
+
+            using var destStream = new NonSeekableWriteStream();
+            using (var session = TtaEncoderSession.OpenSession(destStream, channels: 1, sampleRate, bitsPerSample: 16))
+            {
+                session.WriteInterleavedSamples(samples, samples.Length);
+                session.Finish();
+            }
+        }
+
+        [Fact]
+        public void OpenSession_Stream_Dispose_Should_NotDisposeCallerStream()
+        {
+            using var destStream = new MemoryStream();
+
+            using (var session = TtaEncoderSession.OpenSession(destStream, channels: 1, sampleRate: 44100, bitsPerSample: 16))
+            {
+                session.WriteInterleavedSamples([1, 2, 3], 3);
+                session.Finish();
+            }
+
+            var act = () => destStream.Position;
+
+            act.Should().NotThrow("the Stream-based overload must not dispose a stream the caller opened and owns, unlike the path-based overload's own FileStream");
         }
 
         private static void AssertRoundTrips(int[] interleavedSamples, int channels, int sampleRate)
