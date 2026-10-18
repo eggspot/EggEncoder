@@ -27,7 +27,7 @@ public interface IMediaEncoder
     Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken); // same shallow check as above
     Task ConvertFile(string sourceFilePath, string destFilePath);
     Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken); // checked once per decoded block, inside AudioCutter's own shared decode callback -- real, sub-second cancellation for every format
-    Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat); // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) supports; destination: Wav only so far, via WavWriter.Create(Stream, ...) -- see docs/feature-roadmap.md item 1
+    Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat); // neither stream is disposed. Source: every format Probe(Stream, AudioFormat) supports; destination: Wav/Aiff/Au/Flac/Tta/Aac/Wma so far -- see docs/feature-roadmap.md item 1
     Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken); // checked once per decoded block, same as the path-based CancellationToken overload
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds);
     Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken); // same per-block check as ConvertFile above

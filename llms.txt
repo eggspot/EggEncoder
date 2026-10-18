@@ -156,8 +156,9 @@ way they already do for a path-based one (a frame-count-changing transform like 
 correctly routes through `DeferredFixedHeaderSink`'s own buffer-then-patch path, not just the
 "exact count known up front" one). Source: every format `Probe(Stream, AudioFormat)` already
 supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV, AIFF, AU,
-FLAC, and TTA so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
-`AuWriter.Create(Stream, ...)`/`FlacEncoder.OpenSession(Stream, ...)`/`TtaEncoderSession.OpenSession(Stream, ...)`
+FLAC, TTA, AAC, and WMA so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
+`AuWriter.Create(Stream, ...)`/`FlacEncoder.OpenSession(Stream, ...)`/`TtaEncoderSession.OpenSession(Stream, ...)`/
+`AacEncoderSession.OpenSession(Stream, ...)`/`WmaEncoderSession.OpenSession(Stream, ...)`
 -- WAV/AIFF/AU need no `Stream.CanSeek` at all, since each writes a fixed-size header with every
 field already known from `totalFrames` up front; FLAC is the first of these that genuinely does
 require `CanSeek` (throwing `ArgumentException` up front if it isn't seekable), since
@@ -165,7 +166,10 @@ require `CanSeek` (throwing `ArgumentException` up front if it isn't seekable), 
 block-size-range fields once their real values are known, same as the path-based overload's own
 `FileStream` destination already does; TTA needs no `CanSeek` either, despite also needing no
 `exactTotalFrames` up front, since every compressed frame is already held in memory until
-`Finish()` writes the header/seek-table/frames in one single forward pass -- every other
+`Finish()` writes the header/seek-table/frames in one single forward pass; AAC needs neither either,
+and doesn't even buffer -- every ADTS frame is written straight to the destination as soon as it's
+encoded; WMA also needs neither, buffering every encoded packet (like TTA) until `Finish()` writes
+the whole ASF container in one forward pass once every header stat is known -- every other
 destination codec's own `Stream` write side is still open, one format at a time, the same
 incremental way `Stream`-based `Probe` itself was rolled out; an unsupported `AudioFormat` on
 either side throws `NotSupportedException`.

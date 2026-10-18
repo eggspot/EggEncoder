@@ -15,6 +15,23 @@ namespace EggEncoder.Codecs.Wma
 
         public static void Write(string filePath, int channels, int sampleRate, long totalSamples, IReadOnlyList<byte[]> framePayloads)
         {
+            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            Write(stream, channels, sampleRate, totalSamples, framePayloads);
+        }
+
+        /// <summary>
+        /// Writes directly to an already-open <see cref="Stream"/> instead of a file path -- for a
+        /// destination that isn't a local file (an HTTP request body, blob storage, an in-memory
+        /// buffer). Needs no <see cref="Stream.CanSeek"/> at all: every stat the header needs
+        /// (packet count/size, duration, average bitrate) is computed from
+        /// <paramref name="framePayloads"/> up front, before any byte is written, and
+        /// <see cref="WritePacket"/>'s own per-packet padding is computed directly from each
+        /// payload's own length rather than by re-reading the stream's position. Does NOT dispose
+        /// <paramref name="destStream"/> -- the caller (whichever <c>WmaEncoderSession</c> overload
+        /// is used) decides whether it owns the stream.
+        /// </summary>
+        public static void Write(Stream destStream, int channels, int sampleRate, long totalSamples, IReadOnlyList<byte[]> framePayloads)
+        {
             var packetSize = PacketHeaderOverhead;
             foreach (var payload in framePayloads)
             {
@@ -27,8 +44,7 @@ namespace EggEncoder.Codecs.Wma
                 ? (uint)(((long)framePayloads.Count * packetSize * 10_000_000L) / durationIn100Ns)
                 : 0u;
 
-            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
-            using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+            using var writer = new BinaryWriter(destStream, Encoding.ASCII, leaveOpen: true);
 
             var fileId = Guid.NewGuid();
 
@@ -126,8 +142,6 @@ namespace EggEncoder.Codecs.Wma
             const byte payloadFlagsOnePayload = 0x01;
             const byte streamNumber = 0x01;
 
-            var packetStart = writer.BaseStream.Position;
-
             writer.Write(lengthFlags);
             writer.Write(propertyFlags);
             writer.Write((uint)0); // Packet Send Time -- not consumed by AsfContainerReader
@@ -137,7 +151,11 @@ namespace EggEncoder.Codecs.Wma
             writer.Write((ushort)payload.Length);
             writer.Write(payload);
 
-            var written = (int)(writer.BaseStream.Position - packetStart);
+            // Computed directly from the fields just written above (PacketHeaderOverhead's own
+            // definition) rather than by re-reading writer.BaseStream.Position -- Position requires
+            // Stream.CanSeek-equivalent support that a genuinely forward-only destination (e.g. an
+            // HTTP request body) doesn't have, even though this method only ever writes forward.
+            var written = PacketHeaderOverhead + payload.Length;
             if (written < packetSize)
             {
                 writer.Write(new byte[packetSize - written]);
