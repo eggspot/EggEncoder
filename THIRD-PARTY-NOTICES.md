@@ -138,6 +138,31 @@ feature needs depends on them.
   (`Codecs/Vorbis/VorbisEncoderSession.cs`); no source is vendored. As with NVorbis, there is no
   native `libvorbisenc` fallback option to guard against — it's pure managed only.
 
+**Concentus/NLayer/NVorbis/OggVorbisEncoder are all scheduled for removal** — see
+`docs/external-dependency-removal-plan.md` for the phased plan replacing each with a from-scratch
+EggEncoder implementation, the owner's own decision once the native-binary removal above was
+complete.
+
+## Microsoft.Extensions.DependencyInjection.Abstractions / Microsoft.Extensions.Logging.Abstractions — kept as a permanent, documented exception
+
+- **Projects**: both part of [dotnet/extensions](https://github.com/dotnet/extensions) (the
+  `Microsoft.Extensions.*` family)
+- **License**: MIT (Microsoft Corporation)
+- **How they're used**: `Microsoft.Extensions.DependencyInjection.Abstractions` backs the optional
+  `ServiceCollectionExtensions.AddEggEncoder` DI registration; `Microsoft.Extensions.Logging.Abstractions`
+  backs `NativeEncoder`'s optional logging. No source is vendored.
+- **Why these are NOT on the removal plan above, unlike the four codec dependencies**: both
+  packages contain zero implementation code — they are pure interface/type contracts
+  (`IServiceCollection`, `ILogger<T>`, etc.) that the wider .NET ecosystem (ASP.NET Core and every
+  real DI/logging container that implements them) also depends on directly. Defining our own
+  `IServiceCollection`-shaped type would not be a drop-in replacement; it would be a *different,
+  incompatible* type that no real host application's own container implements, defeating the
+  entire point of the integration (a caller registering EggEncoder into their own, real ASP.NET
+  Core `IServiceCollection`). The owner's explicit decision (see
+  `docs/external-dependency-removal-plan.md`'s own "Decision" section): keep both as a documented
+  exception rather than drop the DI/logging integration feature or ship a non-interoperable
+  lookalike.
+
 ---
 
 *Before the first public release, verify the license text links above still resolve and
