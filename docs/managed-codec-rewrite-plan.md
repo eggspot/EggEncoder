@@ -395,9 +395,41 @@ commitments.
   - **Depends on**: 5.
   - **Size**: unestimated — genuinely open-ended until the multi-term change is tried and either
     closes the gap or narrows down what else the real decoder actually requires.
-  - Status: not started. Lower priority than Phase 3 (MP3 encode) — this is a real-world-interop
-    polish item on an already-correct (per this project's own decoder) encoder, not a blocking
-    defect.
+  - **Status: multi-term cascade implemented, but it did NOT close the real-world compatibility
+    gap** — the acceptance criteria above is still not met, and the result against the real
+    `wvunpack` CLI is genuinely mixed, not a clean improvement. `WavPackBlockEncoder` now cascades
+    the exact 5-term sequence (terms 18, 18, 2, 17, 3, all delta=2) confirmed directly from a real
+    `wavpack -x0` encode's own `WP_ID_DECORR_TERMS` metadata (read back with this project's own
+    `WavPackBlockHeader`/`WavPackMetadataSubBlock`, not assumed or reverse-engineered from
+    documentation) — `WavPackBlockDecoder` already supported every one of these terms for decode,
+    so `WavPackDecorrPass.TwoTapSource` (terms 17/18's shared formula) was promoted from a private
+    decoder-only helper to a shared one so the new `WavPackBlockEncoder.EncodeMono`/`EncodeStereo`
+    (the algebraic inverse of `WavPackBlockDecoder.ApplyMono`/`ApplyStereo`) can't drift from it.
+    This project's own `WavPackDecoder` round-trip bar is fully intact (confirmed bit-exact,
+    including for the specific content that still fails against the real CLI below — this is not
+    a correctness regression in this project's own decode path).
+    Measured directly, before vs. after, against the real `wvunpack` 5.9.0 CLI (`brew install
+    wavpack`) on five representative files (44100 frames, 44100Hz): silence/mono/16-bit unchanged
+    (2 blocks flagged both before and after); random noise/mono/16-bit improved slightly (12→10
+    blocks flagged); random noise/stereo/16-bit genuinely improved (outright "not compatible" →
+    decodes with 16 blocks flagged); random noise/stereo/24-bit unchanged (still outright "not
+    compatible"); a two-tone sine/stereo/16-bit file **regressed** (13 blocks flagged → outright
+    "not compatible"). So the net effect across this content matrix is a wash, not a win — one
+    case improved, one case got strictly worse, and none reached zero errors.
+    This is itself a useful, narrowing finding: silence (every residual exactly 0, the simplest
+    possible case) fails identically before and after regardless of which decorrelation terms run,
+    and the pass/fail split for other content didn't track cleanly with "more realistic terms" at
+    all — both point away from the decorrelation cascade (term count/shape) as the real blocker and
+    toward `WavPackEntropyEncoder`'s own bitstream (median tracking/carry/escape handling), which
+    this project's own code already flags as reconstructed "from general familiarity... not the
+    spec" (the format spec explicitly doesn't describe either the decorrelation or entropy
+    algorithm). Joint stereo (confirmed via the same `wavpack -x0` inspection: the real encoder sets
+    `IsJointStereo` even at its fastest/simplest setting) was deliberately NOT added this round,
+    since the plan's own original scope said not to until the multi-term change alone was tried --
+    it has now been tried, and the entropy coder looks like the more promising next thing to
+    investigate before joint stereo, not after. Lower priority than Phase 3 (MP3 encode) — this
+    remains a real-world-interop polish item on an already-correct (per this project's own
+    decoder) encoder, not a blocking defect, and is still open.
 
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 

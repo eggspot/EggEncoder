@@ -135,7 +135,7 @@ namespace EggEncoder.Codecs.WavPack
 
                 case 17 or 18:
                 {
-                    var source = TwoTapSource(pass.Term, pass.SamplesA);
+                    var source = WavPackDecorrPass.TwoTapSource(pass.Term, pass.SamplesA);
                     var output = value + WavPackDecorrPass.ApplyWeight(pass.WeightA, source);
                     pass.WeightA = WavPackDecorrPass.UpdateWeight(pass.WeightA, pass.Delta, source, value);
                     pass.SamplesA[1] = pass.SamplesA[0];
@@ -169,13 +169,13 @@ namespace EggEncoder.Codecs.WavPack
 
                 case 17 or 18:
                 {
-                    var sourceA = TwoTapSource(pass.Term, pass.SamplesA);
+                    var sourceA = WavPackDecorrPass.TwoTapSource(pass.Term, pass.SamplesA);
                     var outputA = left + WavPackDecorrPass.ApplyWeight(pass.WeightA, sourceA);
                     pass.WeightA = WavPackDecorrPass.UpdateWeight(pass.WeightA, pass.Delta, sourceA, left);
                     pass.SamplesA[1] = pass.SamplesA[0];
                     pass.SamplesA[0] = outputA;
 
-                    var sourceB = TwoTapSource(pass.Term, pass.SamplesB);
+                    var sourceB = WavPackDecorrPass.TwoTapSource(pass.Term, pass.SamplesB);
                     var outputB = right + WavPackDecorrPass.ApplyWeight(pass.WeightB, sourceB);
                     pass.WeightB = WavPackDecorrPass.UpdateWeight(pass.WeightB, pass.Delta, sourceB, right);
                     pass.SamplesB[1] = pass.SamplesB[0];
@@ -229,12 +229,6 @@ namespace EggEncoder.Codecs.WavPack
                     throw new InvalidDataException($"Unsupported WavPack decorrelation term {pass.Term}.");
             }
         }
-
-        // Term 17: a simple 2-sample linear extrapolation. Term 18: the same, damped by half.
-        private static int TwoTapSource(int term, int[] samples) =>
-            term == 17
-                ? (2 * samples[0]) - samples[1]
-                : ((3 * samples[0]) - samples[1]) >> 1;
 
         // WP_ID_DECORR_TERMS lists passes in the order they were applied during *encoding*; decode
         // must undo them in the opposite order, so the metadata's own byte order is reversed into
