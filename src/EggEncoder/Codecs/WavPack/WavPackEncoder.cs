@@ -8,23 +8,26 @@ namespace EggEncoder.Codecs.WavPack
     // mathematical inverse of this project's own already bit-exact-verified decoder, not a fresh
     // study of any encoder implementation.
     //
-    // An MVP scope, deliberately simple rather than compression-competitive -- see
-    // WavPackBlockEncoder's own doc comment for the exact simplifications (a single fixed
-    // decorrelation term, independent-channel stereo, no real zero-run-length exploitation).
-    // Correctness is the bar: every block this encoder writes decodes back to the exact original
-    // samples through this project's own WavPackDecoder, the primary test oracle (see
+    // Independent-channel stereo only, no joint stereo, no real zero-run-length exploitation -- see
+    // WavPackBlockEncoder's own doc comment for its 5-term decorrelation cascade (matching the real
+    // reference encoder's own simplest term set, confirmed directly from its own output rather than
+    // assumed). Correctness is the bar: every block this encoder writes decodes back to the exact
+    // original samples through this project's own WavPackDecoder, the primary test oracle (see
     // WavPackEncoderSessionTest/WavPackRoundTripTest/WavPackFfmpegCrossCheckTest).
     //
-    // Checked, but NOT yet achieved, during development: byte-for-byte compatibility with the real
-    // reference wvunpack CLI. It accepts this encoder's output for plenty of content, but rejects
-    // some of it outright ("not compatible with this version of WavPack file!") in a way this
-    // project's own decoder never reproduces or explains -- confirmed (via the real wavpack CLI's
-    // own encoder, at every processing level including its fastest/simplest "-x0") that no real
-    // encoder ever actually emits a single-decorrelation-term block the way this one deliberately
-    // does for MVP simplicity, which is the leading suspect for why the real decoder sometimes
-    // balks at a shape no real encoder has ever handed it. Rather than block this item on fully
-    // reverse-engineering that undocumented decoder-side behavior, this is left as a known
-    // limitation -- see docs/managed-codec-rewrite-plan.md item 5's own status note.
+    // Checked, but NOT yet achieved: full compatibility with the real reference wvunpack CLI. It
+    // accepts this encoder's output for plenty of content, but flags some of it as corrupt (either
+    // outright "not compatible with this version of WavPack file!" or per-block "missing data or
+    // crc errors") in a way this project's own decoder never reproduces or explains. Matching the
+    // real encoder's own decorrelation term cascade (item 5a) changed which specific content hits
+    // this -- measured before/after, the result is a genuine mixed bag, not a clean fix (some
+    // content that used to fail outright now partially decodes; some content that used to partially
+    // decode now fails outright) -- so the decorrelation cascade's own term count/shape is probably
+    // not the real remaining blocker. The more likely remaining suspect: WavPackEntropyEncoder's own
+    // bitstream, since even trivial all-silence content (every residual exactly 0) still trips this
+    // regardless of which decorrelation terms run. Rather than block this item on fully
+    // reverse-engineering that undocumented behavior, this is left as a known limitation -- see
+    // docs/managed-codec-rewrite-plan.md item 5a's own status note for the full before/after data.
     public static class WavPackEncoder
     {
         private const int FramesPerBlock = 4096;

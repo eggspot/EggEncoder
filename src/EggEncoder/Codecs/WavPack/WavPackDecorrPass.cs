@@ -56,5 +56,14 @@ namespace EggEncoder.Codecs.WavPack
             var updated = UpdateWeight(weight, delta, source, residual);
             return Math.Clamp(updated, -1024, 1024);
         }
+
+        // Term 17: a simple 2-sample linear extrapolation. Term 18: the same, damped by half.
+        // Lives here (not as a private method on the decoder, where it used to be) so
+        // WavPackBlockEncoder can call this exact same formula rather than duplicating it -- a
+        // mismatch here would silently produce an unrecoverable residual.
+        public static int TwoTapSource(int term, int[] samples) =>
+            term == 17
+                ? (2 * samples[0]) - samples[1]
+                : ((3 * samples[0]) - samples[1]) >> 1;
     }
 }
