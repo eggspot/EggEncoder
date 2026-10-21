@@ -157,13 +157,34 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
-        public void Probe_NonSeekableStream_Should_Throw_ArgumentException()
+        public void Probe_NonSeekableStream_Should_Return_Same_Result_As_PathBased()
         {
-            using var stream = new NonSeekableStream(File.ReadAllBytes(Path.GetFullPath("Codecs/Mp3/cbr128.mp3")));
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/cbr128.mp3");
+            var pathResult = Mp3Probe.Probe(fixturePath);
 
-            var act = () => Mp3Probe.Probe(stream);
+            using var stream = new NonSeekableStream(File.ReadAllBytes(fixturePath));
+            var streamResult = Mp3Probe.Probe(stream);
 
-            act.Should().ThrowExactly<ArgumentException>().WithParameterName("stream");
+            streamResult.Should().BeEquivalentTo(pathResult);
+        }
+
+        [Fact]
+        public void Probe_Stream_Should_Start_From_The_Streams_Current_Position()
+        {
+            // The probe seeks by absolute offset internally (ID3v2 at 0, ID3v1 at Length - 128);
+            // it must treat the caller's current position as the file's start, the same way
+            // Mp3Decoder.Decode(Stream, ...) does, not the stream's own absolute position 0.
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/cbr128.mp3");
+            var pathResult = Mp3Probe.Probe(fixturePath);
+
+            var prefix = new byte[257];
+            Array.Fill(prefix, (byte)0xCD);
+            using var stream = new MemoryStream([.. prefix, .. File.ReadAllBytes(fixturePath)]);
+            stream.Position = prefix.Length;
+
+            var streamResult = Mp3Probe.Probe(stream);
+
+            streamResult.Should().BeEquivalentTo(pathResult);
         }
 
         [Fact]

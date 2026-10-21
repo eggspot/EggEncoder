@@ -27,22 +27,28 @@ namespace EggEncoder.Codecs.Mp3
 
         /// <summary>
         /// Probes an MP3 source from an already-open <see cref="Stream"/> instead of a file path.
-        /// Requires <see cref="Stream.CanSeek"/>, and treats the stream's own absolute position 0
-        /// as the start of the file -- this probe jumps around by absolute offset throughout (the
-        /// leading ID3v2 tag, the Xing/Info header, a trailing ID3v1 tag via
-        /// <see cref="Stream.Length"/>). <c>NativeEncoder.Probe(Stream, AudioFormat.Mp3)</c> satisfies
-        /// both by buffering the caller's stream into memory first, then probing a
-        /// <see cref="MemoryStream"/> over those bytes. Does NOT take ownership of
+        /// No <see cref="Stream.CanSeek"/> requirement: this probe jumps around by absolute offset
+        /// (the leading ID3v2 tag, the Xing/Info header, a trailing ID3v1 tag via
+        /// <see cref="Stream.Length"/>), so it reads the whole source -- from its current position,
+        /// the same as <see cref="Mp3Decoder.Decode(Stream, AudioBlockDecodedCallback)"/> -- into
+        /// memory up front and probes that instead. Does NOT take ownership of
         /// <paramref name="stream"/>; this call never closes it.
         /// </summary>
         public static Mp3ProbeResult Probe(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
-            if (!stream.CanSeek)
-            {
-                throw new ArgumentException("Mp3Probe requires a seekable stream -- it reads the ID3v2/Xing/ID3v1 headers by absolute offset", nameof(stream));
-            }
 
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Probe(memoryStream.ToArray());
+        }
+
+        // internal (not private) so NativeEncoder.Probe(Stream, AudioFormat.Mp3) can buffer the
+        // caller's stream once and share those bytes with Mp3Decoder.Decode(byte[], ...).
+        internal static Mp3ProbeResult Probe(byte[] fileBytes)
+        {
+            using var stream = new MemoryStream(fileBytes, writable: false);
             return ProbeCore(stream, "<stream>");
         }
 

@@ -55,7 +55,7 @@ namespace EggEncoder
                     AudioFormat.Wma => ProbeWmaStream(source),
                     AudioFormat.Mov => ProbeMovStream(source),
                     AudioFormat.Mp3 => ProbeMp3Stream(source),
-                    _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
+                    _ => throw new NotSupportedException($"'{format}' is not a defined AudioFormat value, so there is no Stream-based probe for it.")
                 };
 
                 LogInformation($"Completed native stream probe (format {format}): codec '{result.CodecName}', duration {result.DurationSeconds}s");
@@ -139,12 +139,7 @@ namespace EggEncoder
                 fileBytes = memoryStream.ToArray();
             }
 
-            Mp3ProbeResult mp3ProbeResult;
-            using (var probeStream = new MemoryStream(fileBytes, writable: false))
-            {
-                mp3ProbeResult = Mp3Probe.Probe(probeStream);
-            }
-
+            var mp3ProbeResult = Mp3Probe.Probe(fileBytes);
             WaveformCalculator? waveformCalculator = null;
 
             Mp3Decoder.Decode(fileBytes, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
@@ -153,7 +148,10 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
-            return BuildMp3ProbeResult(mp3ProbeResult, fileBytes.Length, waveformCalculator);
+            // A seekable source reports its full Length, the same as every other format here (see
+            // GetStreamLength); a non-seekable one still has a real byte count, unlike every other
+            // format, since it was just buffered in full.
+            return BuildMp3ProbeResult(mp3ProbeResult, source.CanSeek ? source.Length : fileBytes.Length, waveformCalculator);
         }
 
         private static ProbeResult ProbeFlacStream(Stream source)

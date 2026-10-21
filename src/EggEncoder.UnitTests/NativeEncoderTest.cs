@@ -154,6 +154,7 @@ namespace EggEncoder.UnitTests
         [Theory]
         [InlineData("cbr128.mp3")]
         [InlineData("vbr_q4.mp3")]
+        [InlineData("no_xing.mp3")]
         public async Task Probe_Stream_Mp3Format_Should_Return_Same_Result_As_Path_Based_Probe(string fixtureName)
         {
             var fixturePath = Path.GetFullPath($"Codecs/Mp3/{fixtureName}");
@@ -179,6 +180,24 @@ namespace EggEncoder.UnitTests
             var streamResult = await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
 
             streamResult.Should().BeEquivalentTo(pathResult);
+        }
+
+        [Fact]
+        public async Task Probe_Stream_Mp3Format_SeekableNotAtStart_Should_Decode_From_Current_Position_And_Report_Full_Stream_Length()
+        {
+            // Matches every other format's own SizeBytes convention (GetStreamLength: the seekable
+            // stream's full Length), while still probing/decoding from the current position.
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/cbr128.mp3");
+            var pathResult = await _nativeEncoder.Probe(fixturePath);
+
+            var prefix = new byte[100];
+            using var stream = new MemoryStream([.. prefix, .. File.ReadAllBytes(fixturePath)]);
+            stream.Position = prefix.Length;
+
+            var streamResult = await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+
+            streamResult.Should().BeEquivalentTo(pathResult, options => options.Excluding(result => result.SizeBytes));
+            streamResult.SizeBytes.Should().Be(stream.Length);
         }
 
         [Fact]

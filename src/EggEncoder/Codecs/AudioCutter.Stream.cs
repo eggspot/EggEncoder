@@ -298,7 +298,7 @@ namespace EggEncoder.Codecs
                     Mp3Decoder.Decode(source, onBlockDecoded);
                     break;
                 default:
-                    throw new NotSupportedException($"Decoding an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");
+                    throw new NotSupportedException($"'{format}' is not a defined AudioFormat value, so there is no Stream-based decode for it.");
             }
         }
 
