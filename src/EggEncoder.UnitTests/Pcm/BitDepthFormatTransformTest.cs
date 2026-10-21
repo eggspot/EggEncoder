@@ -94,7 +94,6 @@ namespace EggEncoder.UnitTests.Pcm
             transform.OutputChannels.Should().Be(0);
             transform.OutputSampleRate.Should().Be(0);
         }
-    
 
         [Theory]
         [InlineData(100, 8, 16, 25600)]
