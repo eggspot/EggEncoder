@@ -55,7 +55,7 @@ var probeResult = await encoder.Probe("track.flac");
 
 ## Core Types
 
-- `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`, plus `Probe(Stream, AudioFormat)` for a source that isn't a local file -- WAV and FLAC so far, see "Stream-based Probe" below; each also has a `CancellationToken`-accepting overload, see "CancellationToken Support" below)
+- `IMediaEncoder` — the abstraction (`Probe`, `ConvertFile`, `CutFile`, plus `Probe(Stream, AudioFormat)` for a source that isn't a local file -- every `AudioFormat`, see "Stream-based Probe" below; each also has a `CancellationToken`-accepting overload, see "CancellationToken Support" below)
 - `NativeEncoder` — the sole implementation, 100% pure managed and cross-platform (every codec, including MP3, FLAC, and WavPack, decode and encode, is pure managed C# -- no native call anywhere in this project); also implements `IPcmTransformEncoder`
 - `ProbeResult` — format name/long name, file size, duration, codec name/long name, sample rate, channels, channel layout, bit depth, bitrate, dimensions (for video), normalized waveform peak windows, peak amplitude/RMS level/integrated loudness (`IntegratedLoudness`, LUFS), and metadata `Tags` (WAV/MP3/FLAC/Opus/Vorbis/AIFF)
 - `AudioCutter` — format-dispatching convert/cut/mix/concatenate, used internally by `NativeEncoder`
@@ -104,9 +104,11 @@ response body, blob storage, an in-memory buffer) -- the path-based `Probe(strin
 unaffected and unchanged. `AudioFormat` has to be given explicitly, since a `Stream` has no file
 extension to dispatch on the way the path-based overload uses. Does NOT take ownership of the
 stream -- the caller opened it, so the caller disposes it; `Probe` never closes it. Implemented so
-far for `AudioFormat.Wav`/`Aiff`/`Au`/`Caf`/`Flac`/`Aac`/`WavPack`/`Tta`/`Opus`/`Vorbis`/`Wma`/`Mov`;
-MP3 still throws `NotSupportedException` with a message pointing at
-`docs/feature-roadmap.md` item 1, where the status is tracked. `WavReader.Open(Stream)`/
+for every `AudioFormat`: `Wav`/`Aiff`/`Au`/`Caf`/`Flac`/`Aac`/`WavPack`/`Tta`/`Opus`/`Vorbis`/`Wma`/`Mov`/`Mp3`
+(`docs/feature-roadmap.md` item 1 tracks the history). MP3 reads the whole source into memory up
+front (no `CanSeek` needed) and hands NLayer its own `MemoryStream` -- NLayer's `MpegFile(Stream)`
+always disposes the stream it's given, so it never sees the caller's; a non-seekable MP3 source still
+reports a real `SizeBytes` since the bytes are buffered. `WavReader.Open(Stream)`/
 `AiffReader.Open(Stream)`/`AuReader.Open(Stream)`/`CafReader.Open(Stream)`/`MovProbe.Probe(Stream)`/
 `MovDecoder.Decode(Stream, callback)`/
 `FlacDecoder.Decode(Stream, callback)`/`AacDecoder.Decode(Stream, callback)`/
@@ -155,7 +157,7 @@ so `ResamplingTransform`/`VolumeTransform`/etc. work for a `Stream` destination 
 way they already do for a path-based one (a frame-count-changing transform like resampling
 correctly routes through `DeferredFixedHeaderSink`'s own buffer-then-patch path, not just the
 "exact count known up front" one). Source: every format `Probe(Stream, AudioFormat)` already
-supports (everything except MP3, blocked for the same NLayer reason). Destination: WAV, AIFF, AU,
+supports (every format, MP3 included). Destination: WAV, AIFF, AU,
 FLAC, TTA, AAC, and WMA so far, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
 `AuWriter.Create(Stream, ...)`/`FlacEncoder.OpenSession(Stream, ...)`/`TtaEncoderSession.OpenSession(Stream, ...)`/
 `AacEncoderSession.OpenSession(Stream, ...)`/`WmaEncoderSession.OpenSession(Stream, ...)`

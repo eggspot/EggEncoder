@@ -22,7 +22,38 @@ namespace EggEncoder.Codecs.Mp3
         public static Mp3ProbeResult Probe(string filePath)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return ProbeCore(stream, filePath);
+        }
 
+        /// <summary>
+        /// Probes an MP3 source from an already-open <see cref="Stream"/> instead of a file path.
+        /// No <see cref="Stream.CanSeek"/> requirement: this probe jumps around by absolute offset
+        /// (the leading ID3v2 tag, the Xing/Info header, a trailing ID3v1 tag via
+        /// <see cref="Stream.Length"/>), so it reads the whole source -- from its current position,
+        /// the same as <see cref="Mp3Decoder.Decode(Stream, AudioBlockDecodedCallback)"/> -- into
+        /// memory up front and probes that instead. Does NOT take ownership of
+        /// <paramref name="stream"/>; this call never closes it.
+        /// </summary>
+        public static Mp3ProbeResult Probe(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Probe(memoryStream.ToArray());
+        }
+
+        // internal (not private) so NativeEncoder.Probe(Stream, AudioFormat.Mp3) can buffer the
+        // caller's stream once and share those bytes with Mp3Decoder.Decode(byte[], ...).
+        internal static Mp3ProbeResult Probe(byte[] fileBytes)
+        {
+            using var stream = new MemoryStream(fileBytes, writable: false);
+            return ProbeCore(stream, "<stream>");
+        }
+
+        private static Mp3ProbeResult ProbeCore(Stream stream, string filePath)
+        {
             var tags = Id3v2Reader.ReadTags(stream);
             stream.Position = SkipId3V2Tag(stream);
 

@@ -151,7 +151,12 @@ assumption the MP3 `528` constant already proved wrong once. Expose the confirme
 constant (`AacStreamingEncoder.EncoderDelaySamples` or similar, named to match
 `Mp3Encoder.EncoderDelaySamples`'s own existing precedent) for the muxer to use directly.
 
-### MP3 `Stream`-based decode gap (does not block this plan at all; listed for completeness)
+### MP3 `Stream`-based decode gap (resolved; listed for history)
+
+**Resolved**: `Mp3Decoder.Decode(Stream, ...)`/`Probe(Stream, AudioFormat.Mp3)` now read the source
+into memory up front and hand NLayer its own `MemoryStream`, so NLayer disposing it never touches
+the caller's stream -- chosen over the wrapper proposed below; see `docs/feature-roadmap.md` item 1.
+The original note follows.
 
 `docs/feature-roadmap.md` item 1's own status note already documents this: NLayer's
 `MpegFile(Stream)` constructor has no `leaveOpen` option, so `Probe(Stream, AudioFormat.Mp3)` still

@@ -139,9 +139,55 @@ namespace EggEncoder.UnitTests.Codecs
             using var sourceStream = new MemoryStream();
             using var destStream = new MemoryStream();
 
-            var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Mp3, destStream, AudioFormat.Wav);
+            var act = () => AudioCutter.Convert(sourceStream, (AudioFormat)999, destStream, AudioFormat.Wav);
 
             act.Should().ThrowExactly<NotSupportedException>();
+        }
+
+        [Fact]
+        public void Convert_Stream_Mp3SourceToWavDest_Should_Match_PathBased_Conversion()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/tone.mp3");
+            var pathDestPath = Path.Combine(Path.GetTempPath(), $"audiocutter_stream_mp3_{Guid.NewGuid():N}.wav");
+            try
+            {
+                AudioCutter.Convert(fixturePath, pathDestPath);
+
+                using var sourceStream = new NonSeekableStream(File.ReadAllBytes(fixturePath));
+                using var destStream = new MemoryStream();
+
+                AudioCutter.Convert(sourceStream, AudioFormat.Mp3, destStream, AudioFormat.Wav);
+
+                destStream.ToArray().Should().Equal(File.ReadAllBytes(pathDestPath));
+            }
+            finally
+            {
+                File.Delete(pathDestPath);
+            }
+        }
+
+        [Fact]
+        public void Cut_Stream_Mp3SourceToFlacDest_Should_Match_PathBased_Cut()
+        {
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/cbr128.mp3");
+            var pathDestPath = Path.Combine(Path.GetTempPath(), $"audiocutter_stream_mp3_{Guid.NewGuid():N}.flac");
+            try
+            {
+                AudioCutter.Cut(fixturePath, pathDestPath, startInSeconds: 2, endInSeconds: 4, new CutOptions()).Should().BeTrue();
+
+                using var sourceStream = File.OpenRead(fixturePath);
+                using var destStream = new MemoryStream();
+
+                var produced = AudioCutter.Cut(sourceStream, AudioFormat.Mp3, startInSeconds: 2, endInSeconds: 4, destStream, AudioFormat.Flac);
+
+                produced.Should().BeTrue();
+                destStream.ToArray().Should().Equal(File.ReadAllBytes(pathDestPath));
+                sourceStream.CanRead.Should().BeTrue("Cut(Stream) must not dispose the caller's source stream");
+            }
+            finally
+            {
+                File.Delete(pathDestPath);
+            }
         }
 
         [Fact]
