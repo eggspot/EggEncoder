@@ -5,6 +5,7 @@ using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
+using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
@@ -26,10 +27,9 @@ namespace EggEncoder
     // non-disposing support via closeOnDispose: false, so no "widen"/"read fully into memory"
     // adaptation was needed for Vorbis at all), and MOV/MP4 (the same CanSeek-requiring
     // "FileStream-widened-to-Stream" treatment WAV/AIFF/AU/CAF already got, via MovProbe.Probe(Stream)/
-    // MovDecoder.Decode(Stream, ...)). MP3 still throws NotSupportedException here -- NLayer's own
-    // MpegFile(Stream) constructor has no leaveOpen option, so it can't honor this type's own "never
-    // dispose the caller's stream" contract without further work -- see the roadmap item's own status
-    // note.
+    // MovDecoder.Decode(Stream, ...)), and MP3 (read-fully-into-byte[], like FLAC/AAC -- which is
+    // also what sidesteps NLayer's own MpegFile(Stream) constructor always disposing the stream it's
+    // given: NLayer only ever sees a MemoryStream this type created, never the caller's own).
     public partial class NativeEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
@@ -54,6 +54,7 @@ namespace EggEncoder
                     AudioFormat.Vorbis => ProbeVorbisStream(source),
                     AudioFormat.Wma => ProbeWmaStream(source),
                     AudioFormat.Mov => ProbeMovStream(source),
+                    AudioFormat.Mp3 => ProbeMp3Stream(source),
                     _ => throw new NotSupportedException($"Probing an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Probe(string) overload for this format in the meantime.")
                 };
 
@@ -124,6 +125,35 @@ namespace EggEncoder
                 IntegratedLoudness = waveformCalculator.GetIntegratedLoudness(),
                 Tags = wavReader.Tags
             };
+        }
+
+        private static ProbeResult ProbeMp3Stream(Stream source)
+        {
+            // Read the caller's stream exactly once (it may not be seekable), then give Mp3Probe
+            // and the decode each their own MemoryStream view of the same bytes -- Mp3Probe needs
+            // absolute seeks, and NLayer disposes whatever stream it's handed.
+            byte[] fileBytes;
+            using (var memoryStream = new MemoryStream())
+            {
+                source.CopyTo(memoryStream);
+                fileBytes = memoryStream.ToArray();
+            }
+
+            Mp3ProbeResult mp3ProbeResult;
+            using (var probeStream = new MemoryStream(fileBytes, writable: false))
+            {
+                mp3ProbeResult = Mp3Probe.Probe(probeStream);
+            }
+
+            WaveformCalculator? waveformCalculator = null;
+
+            Mp3Decoder.Decode(fileBytes, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
+            {
+                waveformCalculator ??= new WaveformCalculator(totalSamples, channels, bitsPerSample, sampleRate: sampleRate);
+                waveformCalculator.AddBlock(block);
+            });
+
+            return BuildMp3ProbeResult(mp3ProbeResult, fileBytes.Length, waveformCalculator);
         }
 
         private static ProbeResult ProbeFlacStream(Stream source)

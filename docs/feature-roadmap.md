@@ -135,12 +135,7 @@ graceful-degradation behavior -- the one genuine difference from the path-based 
 always reports `FormatName`/`FormatLongName` as `"mov"`/`"QuickTime / MOV"`, the same default the
 path-based overload itself already falls back to for any extension other than `.mp4`).
 
-MP3 is what's left for `Probe`. It's still specifically blocked on NLayer's own
-`MpegFile(Stream)` constructor having no `leaveOpen` option, so it can't honor this type's own
-"never dispose the caller's stream" contract without further work (e.g. wrapping the stream in a
-disposal-suppressing adapter, or an upstream NLayer change) -- not attempted here, since that's a
-real design decision for the owner, not a mechanical port like every other format this item has
-confirmed.
+MP3 is now covered too, via `Mp3Decoder.Decode(Stream, callback)`/`Mp3Probe.Probe(Stream)`: `Probe(Stream, AudioFormat.Mp3)` reads the whole source into memory up front (the same no-`CanSeek`-needed shape as FLAC/AAC), then gives `Mp3Probe` and NLayer each their own `MemoryStream` view of those bytes -- which is also what resolves NLayer's own `MpegFile(Stream)` constructor having no `leaveOpen` option: NLayer only ever sees (and disposes) a buffer this library created, never the caller's stream. Decided over the disposal-suppressing-wrapper option this item used to suggest, since `Mp3Probe` seeks by absolute offset throughout (a wrapper alone would also need an offset view to honor a caller stream not positioned at 0) and a non-seekable source would have needed a second, buffered code path anyway. Because the bytes are buffered, a non-seekable MP3 source still reports a real `SizeBytes`, not the usual `0`.
 
 `ConvertFile`/`CutFile`'s own `Stream` overloads (the destination-seekability half) are now wired
 up: `IMediaEncoder.ConvertFile(Stream, AudioFormat, Stream, AudioFormat)`/
@@ -155,7 +150,7 @@ exactly the same way it already does for a path-based one (verified directly: a 
 `Convert` with a frame-count-changing `ResamplingTransform` correctly goes through
 `DeferredFixedHeaderSink`'s own buffer-then-patch path, the same as the path-based WAV case).
 `DecodeSourceStream` covers every source format `Probe(Stream, AudioFormat)` already does (every
-format except MP3, for the same NLayer `MpegFile(Stream)`-has-no-`leaveOpen` reason). `OpenSinkStream`
+format, MP3 included). `OpenSinkStream`
 now covers WAV/AIFF/AU, via `WavWriter.Create(Stream, ...)`/`AiffWriter.Create(Stream, ...)`/
 `AuWriter.Create(Stream, ...)` -- all three happen to need no `Stream.CanSeek` at all, since each
 one's header is a fixed size with every field already known from `totalFrames` up front -- plus

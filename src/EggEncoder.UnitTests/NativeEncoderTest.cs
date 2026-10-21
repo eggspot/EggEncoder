@@ -144,12 +144,51 @@ namespace EggEncoder.UnitTests
         [Fact]
         public async Task Probe_Stream_WithUnsupportedFormat_Should_ThrowNotSupportedException()
         {
-            // Wav/Aiff/Au/Flac/Aac/WavPack are wired up for the Stream-based overload so far --
-            // see docs/feature-roadmap.md item 1 for status. Every other AudioFormat should fail
-            // clearly rather than silently misbehaving.
+            // Every defined AudioFormat is wired up for the Stream-based overload now -- an
+            // undefined value should still fail clearly rather than silently misbehaving.
             using var stream = new MemoryStream();
-            var act = async () => await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+            var act = async () => await _nativeEncoder.Probe(stream, (AudioFormat)999);
             await act.Should().ThrowAsync<NotSupportedException>();
+        }
+
+        [Theory]
+        [InlineData("cbr128.mp3")]
+        [InlineData("vbr_q4.mp3")]
+        public async Task Probe_Stream_Mp3Format_Should_Return_Same_Result_As_Path_Based_Probe(string fixtureName)
+        {
+            var fixturePath = Path.GetFullPath($"Codecs/Mp3/{fixtureName}");
+            var pathResult = await _nativeEncoder.Probe(fixturePath);
+
+            using var stream = File.OpenRead(fixturePath);
+            var streamResult = await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+
+            AssertNonEmptyWaveform(streamResult.Waveform);
+            streamResult.Should().BeEquivalentTo(pathResult);
+            stream.CanRead.Should().BeTrue("Probe(Stream) must not dispose the caller's stream");
+        }
+
+        [Fact]
+        public async Task Probe_Stream_Mp3Format_NonSeekable_Should_Return_Same_Result_As_Path_Based_Probe()
+        {
+            // Unlike every other format's own non-seekable case (SizeBytes = 0, "unknown"), MP3
+            // reads the whole source into memory up front, so its byte count is genuinely known.
+            var fixturePath = Path.GetFullPath("Codecs/Mp3/cbr128.mp3");
+            var pathResult = await _nativeEncoder.Probe(fixturePath);
+
+            using var stream = new NonSeekableStream(File.ReadAllBytes(fixturePath));
+            var streamResult = await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+
+            streamResult.Should().BeEquivalentTo(pathResult);
+        }
+
+        [Fact]
+        public async Task Probe_Stream_Mp3Format_WithNoMp3Frame_Should_Throw_InvalidDataException()
+        {
+            using var stream = new MemoryStream(new byte[64]);
+
+            var act = async () => await _nativeEncoder.Probe(stream, AudioFormat.Mp3);
+
+            await act.Should().ThrowAsync<InvalidDataException>();
         }
 
         [Fact]

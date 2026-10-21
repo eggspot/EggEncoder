@@ -22,7 +22,32 @@ namespace EggEncoder.Codecs.Mp3
         public static Mp3ProbeResult Probe(string filePath)
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            return ProbeCore(stream, filePath);
+        }
 
+        /// <summary>
+        /// Probes an MP3 source from an already-open <see cref="Stream"/> instead of a file path.
+        /// Requires <see cref="Stream.CanSeek"/>, and treats the stream's own absolute position 0
+        /// as the start of the file -- this probe jumps around by absolute offset throughout (the
+        /// leading ID3v2 tag, the Xing/Info header, a trailing ID3v1 tag via
+        /// <see cref="Stream.Length"/>). <c>NativeEncoder.Probe(Stream, AudioFormat.Mp3)</c> satisfies
+        /// both by buffering the caller's stream into memory first, then probing a
+        /// <see cref="MemoryStream"/> over those bytes. Does NOT take ownership of
+        /// <paramref name="stream"/>; this call never closes it.
+        /// </summary>
+        public static Mp3ProbeResult Probe(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanSeek)
+            {
+                throw new ArgumentException("Mp3Probe requires a seekable stream -- it reads the ID3v2/Xing/ID3v1 headers by absolute offset", nameof(stream));
+            }
+
+            return ProbeCore(stream, "<stream>");
+        }
+
+        private static Mp3ProbeResult ProbeCore(Stream stream, string filePath)
+        {
             var tags = Id3v2Reader.ReadTags(stream);
             stream.Position = SkipId3V2Tag(stream);
 

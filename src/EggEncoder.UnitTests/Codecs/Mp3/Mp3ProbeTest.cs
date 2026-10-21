@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.Mp3;
+using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Codecs.Mp3
@@ -137,6 +138,50 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             result.DurationInSeconds.Should().Be(10);
             result.Tags.Should().NotBeNull();
             result.Tags!.Should().ContainKey("TSSE").WhoseValue.Should().Be("Lavf59.10.100");
+        }
+
+        [Theory]
+        [InlineData("cbr128.mp3")]
+        [InlineData("vbr_q4.mp3")]
+        [InlineData("no_xing.mp3")]
+        public void Probe_Stream_Should_Return_Same_Result_As_PathBased(string fixtureName)
+        {
+            var fixturePath = Path.GetFullPath($"Codecs/Mp3/{fixtureName}");
+            var pathResult = Mp3Probe.Probe(fixturePath);
+
+            using var stream = new MemoryStream(File.ReadAllBytes(fixturePath));
+            var streamResult = Mp3Probe.Probe(stream);
+
+            streamResult.Should().BeEquivalentTo(pathResult);
+            stream.CanRead.Should().BeTrue("Probe(Stream) must not dispose the caller's stream");
+        }
+
+        [Fact]
+        public void Probe_NonSeekableStream_Should_Throw_ArgumentException()
+        {
+            using var stream = new NonSeekableStream(File.ReadAllBytes(Path.GetFullPath("Codecs/Mp3/cbr128.mp3")));
+
+            var act = () => Mp3Probe.Probe(stream);
+
+            act.Should().ThrowExactly<ArgumentException>().WithParameterName("stream");
+        }
+
+        [Fact]
+        public void Probe_NullStream_Should_Throw_ArgumentNullException()
+        {
+            var act = () => Mp3Probe.Probe((Stream)null!);
+
+            act.Should().ThrowExactly<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void Probe_StreamWithNoMp3Frame_Should_Throw_InvalidDataException()
+        {
+            using var stream = new MemoryStream(new byte[64]);
+
+            var act = () => Mp3Probe.Probe(stream);
+
+            act.Should().Throw<InvalidDataException>().WithMessage("*<stream>*");
         }
     }
 }

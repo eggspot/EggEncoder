@@ -378,11 +378,18 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
+            return BuildMp3ProbeResult(mp3ProbeResult, GetFileSize(filePath), waveformCalculator);
+        }
+
+        // Shared by the path-based ProbeMp3 above and NativeEncoder.Stream.cs's own ProbeMp3Stream,
+        // so the two can't drift apart on how an Mp3ProbeResult maps onto ProbeResult.
+        private static ProbeResult BuildMp3ProbeResult(Mp3ProbeResult mp3ProbeResult, long sizeBytes, WaveformCalculator? waveformCalculator)
+        {
             return new ProbeResult
             {
                 FormatName = "mp3",
                 FormatLongName = "MP3 (MPEG audio layer 3)",
-                SizeBytes = GetFileSize(filePath),
+                SizeBytes = sizeBytes,
                 DurationSeconds = mp3ProbeResult.DurationSeconds,
                 CodecType = "audio",
                 CodecName = "mp3",

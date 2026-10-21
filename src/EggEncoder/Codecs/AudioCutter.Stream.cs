@@ -4,6 +4,7 @@ using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Au;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mov;
+using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Opus;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Vorbis;
@@ -20,8 +21,7 @@ namespace EggEncoder.Codecs
     // this reuses CutOptions/BuildCutPipeline/ForwardOverlap/GetSampleRange/ScratchBuffer/
     // DeferredFixedHeaderSink from directly rather than duplicating any of that logic. Source: every
     // format this project's own Stream-based Probe already decodes from a Stream (see
-    // NativeEncoder.Stream.cs) -- MP3 is the one exception, still blocked on NLayer's own
-    // MpegFile(Stream) having no leaveOpen option. Destination: WAV/AIFF/AU/FLAC/TTA/AAC/WMA so
+    // NativeEncoder.Stream.cs), MP3 included. Destination: WAV/AIFF/AU/FLAC/TTA/AAC/WMA so
     // far, via WavWriter.Create(Stream, ...)/AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...)/
     // FlacEncoder.OpenSession(Stream, ...)/TtaEncoderSession.OpenSession(Stream, ...)/
     // AacEncoderSession.OpenSession(Stream, ...)/WmaEncoderSession.OpenSession(Stream, ...) --
@@ -293,6 +293,9 @@ namespace EggEncoder.Codecs
                     break;
                 case AudioFormat.WavPack:
                     WavPackDecoder.Decode(source, onBlockDecoded);
+                    break;
+                case AudioFormat.Mp3:
+                    Mp3Decoder.Decode(source, onBlockDecoded);
                     break;
                 default:
                     throw new NotSupportedException($"Decoding an AudioFormat.{format} stream is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");

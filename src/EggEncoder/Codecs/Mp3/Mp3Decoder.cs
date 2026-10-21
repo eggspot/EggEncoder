@@ -12,6 +12,43 @@ namespace EggEncoder.Codecs.Mp3
         public static Mp3StreamInfo Decode(string mp3FilePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             using var mpegFile = new MpegFile(mp3FilePath);
+            return Decode(mpegFile, onBlockDecoded);
+        }
+
+        /// <summary>
+        /// Decodes an MP3 source from an already-open <see cref="Stream"/> instead of a file path
+        /// -- for a source that isn't a local file (an HTTP response body, blob storage, an
+        /// in-memory buffer). No <see cref="Stream.CanSeek"/> requirement: like
+        /// <see cref="Flac.FlacDecoder"/>/<see cref="Aac.AacDecoder"/>, this reads the whole source
+        /// (from its current position) into memory up front, so any forward-readable stream works.
+        /// That buffer is also what lets this honor the "never dispose the caller's stream"
+        /// contract every Stream overload here shares: NLayer's own <c>MpegFile(Stream)</c>
+        /// constructor has no <c>leaveOpen</c> option and always disposes the stream it's given,
+        /// so it only ever sees this method's own <see cref="MemoryStream"/>, never
+        /// <paramref name="stream"/> itself. Does NOT take ownership of <paramref name="stream"/>.
+        /// </summary>
+        public static Mp3StreamInfo Decode(Stream stream, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            using var memoryStream = new MemoryStream();
+            stream.CopyTo(memoryStream);
+
+            return Decode(memoryStream.ToArray(), onBlockDecoded);
+        }
+
+        // internal (not private) so NativeEncoder.Probe(Stream, AudioFormat.Mp3) can read the
+        // caller's (possibly non-seekable) stream exactly once, then run both Mp3Probe.Probe and
+        // this decode over separate read-only MemoryStream views of the same bytes -- NLayer
+        // disposing its own view never affects the other one.
+        internal static Mp3StreamInfo Decode(byte[] fileBytes, AudioBlockDecodedCallback onBlockDecoded)
+        {
+            using var mpegFile = new MpegFile(new MemoryStream(fileBytes, writable: false));
+            return Decode(mpegFile, onBlockDecoded);
+        }
+
+        private static Mp3StreamInfo Decode(MpegFile mpegFile, AudioBlockDecodedCallback onBlockDecoded)
+        {
             var channels = mpegFile.Channels;
             var sampleRate = mpegFile.SampleRate;
             var totalSamplesPerChannel = (long)(mpegFile.Duration.TotalSeconds * sampleRate);
