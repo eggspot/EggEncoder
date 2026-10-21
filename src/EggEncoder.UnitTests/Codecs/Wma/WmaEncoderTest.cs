@@ -279,5 +279,62 @@ namespace EggEncoder.UnitTests.Codecs.Wma
                 signalToNoiseRatioDb.Should().BeGreaterThan(minimumSnrDb, $"expected SNR > {minimumSnrDb}dB for channel {channel} (scale={scale}), got {signalToNoiseRatioDb}dB");
             }
         }
+
+        [Fact]
+        public void OpenSession_TwentyFourBitInput_Should_Encode_Identically_To_Equivalent_SixteenBitInput()
+        {
+            // Regression: the codec core only accepts 16-bit-range samples, and 24-bit input used
+            // to reach it unscaled (wrapping/clipping into noise). A 24-bit sample that's exactly a
+            // 16-bit one shifted left by 8 must now encode to the same audio. Compared after decode,
+            // not byte-for-byte: AsfContainerWriter writes a fresh random file ID into every header.
+            const int sampleRate = 44100;
+            var sixteenBitSamples = new int[5000];
+            for (var i = 0; i < sixteenBitSamples.Length; i++)
+            {
+                sixteenBitSamples[i] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var twentyFourBitSamples = sixteenBitSamples.Select(sample => sample << 8).ToArray();
+
+            using var sixteenBitDest = new MemoryStream();
+            using (var session = WmaEncoderSession.OpenSession(sixteenBitDest, channels: 1, sampleRate))
+            {
+                session.WriteInterleavedSamples(sixteenBitSamples, sixteenBitSamples.Length);
+                session.Finish();
+            }
+
+            using var twentyFourBitDest = new MemoryStream();
+            using (var session = WmaEncoderSession.OpenSession(twentyFourBitDest, channels: 1, sampleRate, bitsPerSample: 24))
+            {
+                session.WriteInterleavedSamples(twentyFourBitSamples, twentyFourBitSamples.Length);
+                session.Finish();
+            }
+
+            DecodeAll(twentyFourBitDest).Should().Equal(DecodeAll(sixteenBitDest));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(12)]
+        [InlineData(20)]
+        public void OpenSession_UnsupportedBitsPerSample_Should_Throw_Before_Creating_File(int bitsPerSample)
+        {
+            var outputPath = Path.Combine(Path.GetTempPath(), $"wma_invalid_bits_{Guid.NewGuid():N}.wma");
+
+            var pathAct = () => WmaEncoderSession.OpenSession(outputPath, channels: 1, sampleRate: 44100, bitsPerSample);
+            var streamAct = () => WmaEncoderSession.OpenSession(new MemoryStream(), channels: 1, sampleRate: 44100, bitsPerSample);
+
+            pathAct.Should().ThrowExactly<NotSupportedException>();
+            streamAct.Should().ThrowExactly<NotSupportedException>();
+            File.Exists(outputPath).Should().BeFalse("validation should fail before any file is created");
+        }
+
+        private static List<int> DecodeAll(MemoryStream encoded)
+        {
+            encoded.Position = 0;
+            var decoded = new List<int>();
+            WmaDecoder.Decode(encoded, (block, _, _, _, _) => decoded.AddRange(block.ToArray()));
+            return decoded;
+        }
     }
 }

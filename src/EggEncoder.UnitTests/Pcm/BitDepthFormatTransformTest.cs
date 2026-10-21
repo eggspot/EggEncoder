@@ -94,5 +94,32 @@ namespace EggEncoder.UnitTests.Pcm
             transform.OutputChannels.Should().Be(0);
             transform.OutputSampleRate.Should().Be(0);
         }
+
+        [Theory]
+        [InlineData(100, 8, 16, 25600)]
+        [InlineData(-128, 8, 16, -32768)]
+        [InlineData(1000, 16, 16, 1000)]
+        [InlineData(256 * 1000, 24, 16, 1000)]
+        [InlineData(256 * 1000 + 128, 24, 16, 1001)]
+        [InlineData(-(256 * 1000 + 128), 24, 16, -1001)]
+        [InlineData(8388607, 24, 16, 32767)]
+        [InlineData(-8388608, 24, 16, -32768)]
+        [InlineData(int.MaxValue, 32, 16, 32767)]
+        [InlineData(int.MinValue, 32, 16, -32768)]
+        public void Rescale_Should_Widen_Exactly_And_Narrow_With_Rounding_And_Clamping(int sample, int fromBits, int toBits, int expected)
+        {
+            BitDepthFormatTransform.Rescale(sample, fromBits, toBits).Should().Be(expected);
+        }
+
+        [Fact]
+        public void Rescale_Should_Match_Apply_For_Every_Sample()
+        {
+            var samples = new[] { int.MinValue, -1_000_000_000, -32769, -1, 0, 1, 32768, 1_000_000_000, int.MaxValue };
+            var buffer = (int[])samples.Clone();
+
+            new BitDepthFormatTransform(fromBits: 32, toBits: 16).Apply(buffer, buffer.Length, channels: 1, sampleRate: 44100, bitsPerSample: 32);
+
+            buffer.Should().Equal(samples.Select(sample => BitDepthFormatTransform.Rescale(sample, 32, 16)));
+        }
     }
 }

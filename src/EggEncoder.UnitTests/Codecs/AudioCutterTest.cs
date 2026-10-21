@@ -1085,6 +1085,71 @@ namespace EggEncoder.UnitTests.Codecs
             }
         }
 
+        [Theory]
+        [InlineData(".aac", 8)]
+        [InlineData(".aac", 24)]
+        [InlineData(".aac", 32)]
+        [InlineData(".wma", 8)]
+        [InlineData(".wma", 24)]
+        [InlineData(".wma", 32)]
+        public void Convert_NonSixteenBitWavToLossy16BitOnlyCodec_Should_Match_SixteenBitSourceLoudness(string destExtension, int sourceBits)
+        {
+            // Regression: AAC/WMA's codec cores only accept 16-bit-range samples, and AudioCutter
+            // used to hand them a 24-bit source's samples unscaled -- AAC wrapped them around the
+            // 16-bit range (noise, RMS ~2.6x too loud), WMA clipped them to full scale. The decoded
+            // output of a 24-bit source must instead sound like the same signal's 16-bit version.
+            var tempDirectory = CreateTempDirectory();
+
+            try
+            {
+                var referenceRms = ConvertSineAndMeasureDecodedRms(tempDirectory, destExtension, sourceBits: 16);
+                var actualRms = ConvertSineAndMeasureDecodedRms(tempDirectory, destExtension, sourceBits);
+
+                actualRms.Should().BeApproximately(referenceRms, referenceRms * 0.05, $"a {sourceBits}-bit source should be rescaled to 16-bit, not wrapped or clipped");
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
+        private static double ConvertSineAndMeasureDecodedRms(string tempDirectory, string destExtension, int sourceBits)
+        {
+            const int sampleRate = 44100;
+            const int totalFrames = sampleRate;
+
+            var sourcePath = Path.Combine(tempDirectory, $"sine_{sourceBits}{destExtension}.wav");
+            var destPath = Path.Combine(tempDirectory, $"sine_{sourceBits}{destExtension}");
+            var scale = Math.Pow(2, sourceBits - 16);
+
+            var samples = new int[totalFrames];
+            for (var i = 0; i < totalFrames; i++)
+            {
+                samples[i] = (int)Math.Round(10000 * scale * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            using (var writer = WavWriter.Create(sourcePath, channels: 1, sampleRate, sourceBits, totalFrames))
+            {
+                writer.WriteInterleavedSamples(samples, totalFrames);
+                writer.Finish();
+            }
+
+            AudioCutter.Convert(sourcePath, destPath);
+
+            var decoded = new List<int>();
+            AudioBlockDecodedCallback onBlock = (block, _, _, _, _) => decoded.AddRange(block.ToArray());
+            if (destExtension == ".aac")
+            {
+                AacDecoder.Decode(destPath, onBlock);
+            }
+            else
+            {
+                WmaDecoder.Decode(destPath, onBlock);
+            }
+
+            return Math.Sqrt(decoded.Average(sample => (double)sample * sample));
+        }
+
         private static string CreateTempDirectory()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
