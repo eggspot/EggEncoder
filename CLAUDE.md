@@ -277,6 +277,10 @@ own "Decision" section and `THIRD-PARTY-NOTICES.md`'s matching entry for the ful
 - Round-trip and cross-check tests (e.g. `FlacFfmpegCrossCheckTest`) validate native codec output against ffmpeg-produced reference fixtures checked into the repo — no external ffmpeg install is needed to run the tests, only the fixture files themselves
 - `src/EggEncoder.AotSmokeTest/` covers Native AOT: it's a separate `PublishAot=true` console project (not an xUnit test, since xUnit runs under the JIT) that CI publishes with `dotnet publish -r <rid>` (the RID matching whichever OS the current CI matrix leg is running on — `win-x64`/`linux-x64`/`osx-arm64`) and then executes, to catch AOT/trimming regressions that the build-time analyzer alone can't (e.g. inside the `NLayer` dependency, which ships no AOT metadata of its own)
 
+## Benchmarks
+
+`src/EggEncoder.Benchmarks/` is a standalone [BenchmarkDotNet](https://benchmarkdotnet.org/) console project — local, manual, point-in-time performance measurements, not part of the test suite and not run in CI. Covers WAV I/O throughput (`WavIoBenchmarks`), end-to-end decode+encode throughput for WAV→MP3/FLAC (`AudioCutterBenchmarks`), `AacEncoderSession`'s own incremental streaming push throughput (`AacStreamingBenchmarks`), and pure decode throughput for FLAC/MP3/WavPack/TTA (`CodecDecodeBenchmarks`) — see [docs/benchmarks.md](docs/benchmarks.md) for how to run it and what's not yet covered.
+
 ## Release Process
 
 Fully automatic tag-based versioning — every push to `main` triggers a release:
