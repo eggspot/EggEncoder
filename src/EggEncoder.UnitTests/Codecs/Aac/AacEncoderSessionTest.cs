@@ -156,5 +156,53 @@ namespace EggEncoder.UnitTests.Codecs.Aac
 
             act.Should().NotThrow("the Stream-based overload must not dispose a stream the caller opened and owns, unlike the path-based overload's own FileStream");
         }
+
+        [Fact]
+        public void OpenSession_TwentyFourBitInput_Should_Encode_Identically_To_Equivalent_SixteenBitInput()
+        {
+            // Regression: the codec core only accepts 16-bit-range samples, and 24-bit input used
+            // to reach it unscaled (wrapping/clipping into noise). A 24-bit sample that's exactly a
+            // 16-bit one shifted left by 8 must now encode to byte-identical output.
+            const int sampleRate = 44100;
+            var sixteenBitSamples = new int[5000];
+            for (var i = 0; i < sixteenBitSamples.Length; i++)
+            {
+                sixteenBitSamples[i] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var twentyFourBitSamples = sixteenBitSamples.Select(sample => sample << 8).ToArray();
+
+            using var sixteenBitDest = new MemoryStream();
+            using (var session = AacEncoderSession.OpenSession(sixteenBitDest, channels: 1, sampleRate))
+            {
+                session.WriteInterleavedSamples(sixteenBitSamples, sixteenBitSamples.Length);
+                session.Finish();
+            }
+
+            using var twentyFourBitDest = new MemoryStream();
+            using (var session = AacEncoderSession.OpenSession(twentyFourBitDest, channels: 1, sampleRate, bitsPerSample: 24))
+            {
+                session.WriteInterleavedSamples(twentyFourBitSamples, twentyFourBitSamples.Length);
+                session.Finish();
+            }
+
+            twentyFourBitDest.ToArray().Should().Equal(sixteenBitDest.ToArray());
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(12)]
+        [InlineData(20)]
+        public void OpenSession_UnsupportedBitsPerSample_Should_Throw_Before_Creating_File(int bitsPerSample)
+        {
+            var outputPath = Path.Combine(Path.GetTempPath(), $"aac_invalid_bits_{Guid.NewGuid():N}.aac");
+
+            var pathAct = () => AacEncoderSession.OpenSession(outputPath, channels: 1, sampleRate: 44100, bitsPerSample);
+            var streamAct = () => AacEncoderSession.OpenSession(new MemoryStream(), channels: 1, sampleRate: 44100, bitsPerSample);
+
+            pathAct.Should().ThrowExactly<NotSupportedException>();
+            streamAct.Should().ThrowExactly<NotSupportedException>();
+            File.Exists(outputPath).Should().BeFalse("validation should fail before any file is created");
+        }
     }
 }

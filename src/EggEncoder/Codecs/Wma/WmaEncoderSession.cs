@@ -1,3 +1,5 @@
+using EggEncoder.Pcm;
+
 namespace EggEncoder.Codecs.Wma
 {
     // Encodes to WMAv2/ASF. Unlike the other streaming sessions, this can't flush frames straight
@@ -15,6 +17,7 @@ namespace EggEncoder.Codecs.Wma
         private readonly bool _leaveOpen;
         private readonly int _channels;
         private readonly int _sampleRate;
+        private readonly int _bitsPerSample;
         private readonly WmaFrameEncoder _frameEncoder;
         private readonly List<byte[]> _packetPayloads = [];
         private readonly int[][] _pendingSamples;
@@ -24,12 +27,13 @@ namespace EggEncoder.Codecs.Wma
         private bool _finished;
         private bool _disposed;
 
-        private WmaEncoderSession(Stream destStream, bool leaveOpen, int channels, int sampleRate)
+        private WmaEncoderSession(Stream destStream, bool leaveOpen, int channels, int sampleRate, int bitsPerSample)
         {
             _destStream = destStream;
             _leaveOpen = leaveOpen;
             _channels = channels;
             _sampleRate = sampleRate;
+            _bitsPerSample = bitsPerSample;
             _frameEncoder = new WmaFrameEncoder(channels, sampleRate);
 
             _pendingSamples = new int[channels][];
@@ -39,14 +43,25 @@ namespace EggEncoder.Codecs.Wma
             }
         }
 
-        public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate)
+        public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate) =>
+            OpenSession(destFilePath, channels, sampleRate, bitsPerSample: 16);
+
+        /// <summary>
+        /// Same as <see cref="OpenSession(string, int, int)"/>, but for input samples in
+        /// <paramref name="bitsPerSample"/>'s own native range (8, 16, 24, or 32 -- see
+        /// <see cref="BitDepthFormatTransform"/>) rather than always 16-bit. The WMA codec core
+        /// only accepts 16-bit-range samples, so anything else is rescaled (rounded, clamped) to
+        /// 16-bit as it's written -- without this, a 24-bit source would encode as full-scale
+        /// clipped noise.
+        /// </summary>
+        public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample)
         {
-            ValidateParameters(channels, sampleRate);
+            ValidateParameters(channels, sampleRate, bitsPerSample);
 
             var destStream = File.Create(destFilePath);
             try
             {
-                return new WmaEncoderSession(destStream, leaveOpen: false, channels, sampleRate);
+                return new WmaEncoderSession(destStream, leaveOpen: false, channels, sampleRate, bitsPerSample);
             }
             catch
             {
@@ -63,15 +78,23 @@ namespace EggEncoder.Codecs.Wma
         /// own doc comment for why. Does NOT dispose <paramref name="destStream"/> -- the caller
         /// opened it, so the caller is responsible for disposing it.
         /// </summary>
-        public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate)
+        public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate) =>
+            OpenSession(destStream, channels, sampleRate, bitsPerSample: 16);
+
+        /// <summary>
+        /// Same as <see cref="OpenSession(Stream, int, int)"/>, but for input samples in
+        /// <paramref name="bitsPerSample"/>'s own native range -- see
+        /// <see cref="OpenSession(string, int, int, int)"/>.
+        /// </summary>
+        public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample)
         {
             ArgumentNullException.ThrowIfNull(destStream);
-            ValidateParameters(channels, sampleRate);
+            ValidateParameters(channels, sampleRate, bitsPerSample);
 
-            return new WmaEncoderSession(destStream, leaveOpen: true, channels, sampleRate);
+            return new WmaEncoderSession(destStream, leaveOpen: true, channels, sampleRate, bitsPerSample);
         }
 
-        private static void ValidateParameters(int channels, int sampleRate)
+        private static void ValidateParameters(int channels, int sampleRate, int bitsPerSample)
         {
             if (channels is not 1 and not 2)
             {
@@ -82,6 +105,11 @@ namespace EggEncoder.Codecs.Wma
             {
                 throw new NotSupportedException($"Sample rate {sampleRate} is not a valid WMA sample rate");
             }
+
+            if (bitsPerSample is not (8 or 16 or 24 or 32))
+            {
+                throw new NotSupportedException($"{bitsPerSample}-bit input is not supported for WMA encoding; expected 8, 16, 24, or 32");
+            }
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -90,7 +118,7 @@ namespace EggEncoder.Codecs.Wma
             {
                 for (var channel = 0; channel < _channels; channel++)
                 {
-                    _pendingSamples[channel][_pendingCount] = buffer[(frame * _channels) + channel];
+                    _pendingSamples[channel][_pendingCount] = BitDepthFormatTransform.Rescale(buffer[(frame * _channels) + channel], _bitsPerSample, 16);
                 }
 
                 _pendingCount++;

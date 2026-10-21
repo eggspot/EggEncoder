@@ -724,6 +724,56 @@ namespace EggEncoder.UnitTests.Codecs
             return samples;
         }
 
+        [Theory]
+        [InlineData(AudioFormat.Aac)]
+        [InlineData(AudioFormat.Wma)]
+        public void Convert_Stream_TwentyFourBitWav_ToSixteenBitOnlyLossyCodec_Should_Match_Equivalent_SixteenBitSource(AudioFormat destFormat)
+        {
+            // Regression: OpenSinkStream used to drop bitsPerSample for AAC/WMA, so a 24-bit source
+            // reached a 16-bit-only codec core unscaled and encoded as wrapped/clipped noise.
+            // Compared after decode: WMA's ASF header carries a fresh random file ID every time.
+            const int sampleRate = 44100;
+            const int totalFrames = 5000;
+            var sixteenBitSamples = new int[totalFrames];
+            for (var i = 0; i < totalFrames; i++)
+            {
+                sixteenBitSamples[i] = (int)(10000 * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
+            }
+
+            var sixteenBitOutput = ConvertMonoWavStream(sixteenBitSamples, bitsPerSample: 16, sampleRate, destFormat);
+            var twentyFourBitOutput = ConvertMonoWavStream(sixteenBitSamples.Select(sample => sample << 8).ToArray(), bitsPerSample: 24, sampleRate, destFormat);
+
+            twentyFourBitOutput.Should().Equal(sixteenBitOutput);
+        }
+
+        private static List<int> ConvertMonoWavStream(int[] samples, int bitsPerSample, int sampleRate, AudioFormat destFormat)
+        {
+            using var sourceStream = new MemoryStream();
+            using (var writer = WavWriter.Create(sourceStream, channels: 1, sampleRate, bitsPerSample, samples.Length))
+            {
+                writer.WriteInterleavedSamples(samples, samples.Length);
+                writer.Finish();
+            }
+
+            sourceStream.Position = 0;
+            using var destStream = new MemoryStream();
+            AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, destFormat);
+
+            destStream.Position = 0;
+            var decoded = new List<int>();
+            AudioBlockDecodedCallback onBlock = (block, _, _, _, _) => decoded.AddRange(block.ToArray());
+            if (destFormat == AudioFormat.Aac)
+            {
+                AacDecoder.Decode(destStream, onBlock);
+            }
+            else
+            {
+                WmaDecoder.Decode(destStream, onBlock);
+            }
+
+            return decoded;
+        }
+
         private static (string FilePath, int[] Samples) CreateRampWavFile(int totalFrames, int sampleRate, int channels = 2)
         {
             var samples = BuildRampSamples(totalFrames, channels);

@@ -384,9 +384,13 @@ public static class AacEncoder
 
 public sealed class AacEncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
 {
-    public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate); // 16-bit input
+    public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample); // 8/16/24/32-bit input, rescaled to 16-bit
+    public static AacEncoderSession OpenSession(Stream destStream, int channels, int sampleRate); // does not dispose destStream; no CanSeek needed
+    public static AacEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
+      <p>The AAC codec core only accepts 16-bit-range samples. The <code>bitsPerSample</code> overloads take samples in their own bit depth's native range (8, 16, 24, or 32 — see <code>BitDepthFormatTransform</code>) and rescale them to 16-bit (exact left shift to widen, rounded and clamped division to narrow), so a 24-bit source isn't wrapped into noise; any other bit depth throws <code>NotSupportedException</code>. <code>AudioCutter</code>/<code>NativeEncoder</code> pass the source's bit depth through automatically.</p>
 
       <h3>FLAC — <code>EggEncoder.Codecs.Flac</code></h3>
       <pre><code class="language-csharp">public static class FlacDecoder
@@ -468,9 +472,13 @@ public static class WmaEncoder
 
 public sealed class WmaEncoderSession : IDisposable // for incremental/streaming encode instead of a whole-file Encode call
 {
-    public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate);
+    public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate); // 16-bit input
+    public static WmaEncoderSession OpenSession(string destFilePath, int channels, int sampleRate, int bitsPerSample); // 8/16/24/32-bit input, rescaled to 16-bit
+    public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate); // does not dispose destStream; no CanSeek needed
+    public static WmaEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample);
     public void WriteInterleavedSamples(int[] buffer, int frameCount);
 }</code></pre>
+      <p>Like AAC, the WMA codec core only accepts 16-bit-range samples: the <code>bitsPerSample</code> overloads rescale 8/24/32-bit input to 16-bit (rounded, clamped) rather than letting it clip to full scale, and <code>AudioCutter</code>/<code>NativeEncoder</code> pass the source's bit depth through automatically.</p>
       <p>Mono or independently-coded stereo only. Mid/side stereo coding (used by most real-world WMAv2 encoders, including ffmpeg's) is not supported for decode and throws <code>NotSupportedException</code>; <code>WmaEncoder</code> never produces mid/side output, so this library's own encoder/decoder round-trip always works.</p>
 
       <h3>AIFF / AIFC — <code>EggEncoder.Codecs.Aiff</code></h3>

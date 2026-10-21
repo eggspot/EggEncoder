@@ -337,18 +337,19 @@ namespace EggEncoder.Codecs
                     // no DeferredFixedHeaderSink either) and no dest.CanSeek -- every ADTS frame is
                     // written forward-only to dest as soon as it's encoded, with no whole-file
                     // patch-up step at all (not even TTA's own "buffer every frame until Finish()").
-                    // bitsPerSample is ignored here the same way the path-based ".aac" dispatch
-                    // already ignores it -- AacFrameEncoder always treats its input as 16-bit-range.
-                    return AacEncoderSession.OpenSession(dest, channels, sampleRate);
+                    // AacFrameEncoder only accepts 16-bit-range input, so bitsPerSample is passed
+                    // through for the session to rescale to 16-bit (the same as the path-based
+                    // ".aac" dispatch) -- a 24-bit source would otherwise wrap and encode as noise.
+                    return AacEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 case AudioFormat.Wma:
                     // Like AAC, WmaEncoderSession.OpenSession needs no exactTotalFrames and no
                     // dest.CanSeek -- AsfContainerWriter.Write computes every header stat (packet
                     // count/size, duration, average bitrate) from the already-fully-encoded frame
                     // list in Finish() and writes the whole container in one forward pass, the same
                     // "every size known before the first byte is written" shape FLAC's STREAMINFO
-                    // patch-up does NOT share (that one does seek back). bitsPerSample is ignored
-                    // here the same way the path-based ".wma" dispatch already ignores it.
-                    return WmaEncoderSession.OpenSession(dest, channels, sampleRate);
+                    // patch-up does NOT share (that one does seek back). bitsPerSample is passed
+                    // through for the session to rescale to 16-bit, the same as AAC above.
+                    return WmaEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 default:
                     throw new NotSupportedException($"Converting to an AudioFormat.{destFormat} stream destination is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");
             }

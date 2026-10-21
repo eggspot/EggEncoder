@@ -43,28 +43,34 @@ public sealed class BitDepthFormatTransform : IPcmTransform
 
         var n = frameCount * channels;
 
-        if (_toBits > _fromBits)
-        {
-            var shift = _toBits - _fromBits;
-            for (var i = 0; i < n; i++)
-                buffer[i] <<= shift;
-        }
-        else
-        {
-            var shift = _fromBits - _toBits;
-            var divisor = 1L << shift;
-            var half = divisor / 2;
-            var (min, max) = GetNativeRange(_toBits);
-            for (var i = 0; i < n; i++)
-            {
-                // Widen to long first: value + half can overflow int32 when value is near int.MaxValue.
-                long value = buffer[i];
-                var rounded = value >= 0 ? (value + half) / divisor : -((-value + half) / divisor);
-                buffer[i] = (int)Math.Clamp(rounded, min, max);
-            }
-        }
+        for (var i = 0; i < n; i++)
+            buffer[i] = Rescale(buffer[i], _fromBits, _toBits);
 
         return (buffer, frameCount);
+    }
+
+    /// <summary>
+    /// Rescales one sample from <paramref name="fromBits"/>'s native range to
+    /// <paramref name="toBits"/>'s: an exact left shift to widen, or a rounded, clamped division
+    /// to narrow. The single implementation behind <see cref="Apply"/>, also used directly by
+    /// encoders whose codec core only accepts 16-bit-range input (<c>AacEncoderSession</c>,
+    /// <c>WmaEncoderSession</c>), so a 24-bit source can't wrap or clip there. Callers validate
+    /// both bit depths up front; this hot-path helper doesn't re-check them.
+    /// </summary>
+    internal static int Rescale(int sample, int fromBits, int toBits)
+    {
+        if (toBits >= fromBits)
+            return sample << (toBits - fromBits);
+
+        var shift = fromBits - toBits;
+        var divisor = 1L << shift;
+        var half = divisor / 2;
+
+        // Widen to long first: value + half can overflow int32 when value is near int.MaxValue.
+        long value = sample;
+        var rounded = value >= 0 ? (value + half) / divisor : -((-value + half) / divisor);
+        var max = (1L << (toBits - 1)) - 1;
+        return (int)Math.Clamp(rounded, -max - 1, max);
     }
 
     /// <summary>
