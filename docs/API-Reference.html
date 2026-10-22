@@ -842,6 +842,121 @@ public static class Amf0Writer
     public static void Write(IBufferWriter&lt;byte&gt; destination, Amf0Value value);
 }</code></pre>
       <p>The reader bounds every length before allocating: nesting past 32 levels, a string over 64 KiB, more than 1,024 properties or items, a count larger than the bytes left, truncation, and the Reference, Typed Object and AMF3-switch markers all throw <code>InvalidDataException</code>. An ECMA array's count is treated as a hint; its object-end marker terminates it. The writer is the reader's inverse and refuses to nest deeper than the reader accepts.</p>
+
+      <h2 id="rtmp-core">RTMP Protocol Core</h2>
+      <p>Namespace: <code>EggEncoder.Live.Rtmp</code>. Everything RTMP needs below "publish a stream" (Adobe RTMP specification 1.0): the handshake, chunk stream reassembly and splitting, protocol control and user control messages, and the AMF0 command and data messages publishers and servers exchange. This is item 3 of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>: every type here is pure and synchronous over bytes and never touches a socket, so the coming RTMP server (item 4) and client (item 6) share one implementation, and every parser can be tested and fuzzed without networking. An audio/video message body is an FLV tag body: parse it with <a href="#flv"><code>FlvTagBodyParser</code></a>.</p>
+      <pre><code class="language-csharp">public sealed class RtmpHandshake
+{
+    public const byte Version = 3;
+    public const int PacketLength = 1536;
+    public static RtmpHandshake CreateServer();  // expects C0+C1, sends S0+S1+S2, expects C2
+    public static RtmpHandshake CreateClient();  // sends C0+C1, expects S0+S1+S2, sends C2
+    public bool IsComplete { get; }
+    public int BytesExpected { get; }            // how many peer bytes Process needs next
+    public byte[] Start();                       // bytes to send first (empty for a server)
+    public byte[] Process(ReadOnlySpan&lt;byte&gt; peerBytes); // bytes to send in reply
+}
+
+public readonly record struct RtmpMessage(RtmpMessageType Type, uint StreamId, uint Timestamp, ReadOnlyMemory&lt;byte&gt; Payload)
+{
+    public const int MaxPayloadLength = 0xFFFFFF;
+}
+
+public sealed class RtmpChunkReader
+{
+    public const int DefaultChunkSize = 128;
+    public RtmpChunkReader(Action&lt;RtmpMessage&gt; onMessage, RtmpChunkReaderOptions? options = null);
+    public void Feed(ReadOnlySpan&lt;byte&gt; data);  // any piece size, straight from a socket
+    public void Complete();                       // the peer closed: a chunk or message cut short throws
+    public int ChunkSize { get; }                 // the peer's, after its Set Chunk Size
+    public long BytesReceived { get; }
+    public uint AcknowledgementWindowSize { get; }
+    public bool TryTakeAcknowledgement(out uint sequenceNumber);
+}
+
+public sealed class RtmpChunkReaderOptions
+{
+    public int MaxInboundChunkSize { get; init; } // default 65,536; hard limit 16 MiB - 1
+    public int MaxMessageLength { get; init; }    // default 8 MiB;   hard limit 16 MiB - 1
+    public int MaxChunkStreams { get; init; }     // default 64;      hard limit 1,024
+    public int MaxBufferedBytes { get; init; }    // default 16 MiB;  hard limit 256 MiB
+}
+
+public sealed class RtmpChunkWriter
+{
+    public const int MaxChunkStreamId = 65599;
+    public int ChunkSize { get; }
+    public void WriteSetChunkSize(IBufferWriter&lt;byte&gt; destination, int chunkSize);
+    public void Write(IBufferWriter&lt;byte&gt; destination, int chunkStreamId, RtmpMessage message); // not Set Chunk Size: use WriteSetChunkSize
+}
+
+public static class RtmpProtocolControl // message types 1, 2, 3, 5, 6 on chunk stream 2
+{
+    public static RtmpMessage CreateSetChunkSize(int chunkSize);       // and ReadSetChunkSize
+    public static RtmpMessage CreateAbort(int chunkStreamId);          // and ReadAbort
+    public static RtmpMessage CreateAcknowledgement(uint sequenceNumber); // and ReadAcknowledgement
+    public static RtmpMessage CreateWindowAcknowledgementSize(uint windowSize); // and ReadWindowAcknowledgementSize
+    public static RtmpMessage CreateSetPeerBandwidth(uint windowSize, RtmpPeerBandwidthLimitType limitType); // and ReadSetPeerBandwidth
+}
+
+public readonly record struct RtmpUserControl(RtmpUserControlEventType EventType, uint Value, uint BufferLength = 0)
+{
+    public static RtmpUserControl StreamBegin(uint streamId); // also StreamEof, SetBufferLength, PingRequest, PingResponse
+    public RtmpMessage ToMessage(uint timestamp = 0);
+    public static RtmpUserControl Read(ReadOnlySpan&lt;byte&gt; payload);
+}
+
+public sealed class RtmpCommand // AMF0 command message, type 20
+{
+    public RtmpCommand(string name, double transactionId, Amf0Value? commandObject, params Amf0Value[] arguments);
+    public string Name { get; }
+    public double TransactionId { get; }
+    public Amf0Value CommandObject { get; }
+    public IReadOnlyList&lt;Amf0Value&gt; Arguments { get; }
+    public string? StatusCode { get; }          // the info object's code, e.g. NetStream.Publish.Start
+    public string? GetStringArgument(int index);
+    public double? GetNumberArgument(int index);
+    public static RtmpCommand Decode(ReadOnlySpan&lt;byte&gt; payload);
+    public byte[] Encode();
+    public RtmpMessage ToMessage(uint streamId = 0, uint timestamp = 0);
+    // Connect, ConnectResult, Result, Error, CreateStream, CreateStreamResult, ReleaseStream,
+    // FCPublish, FCUnpublish, Publish, Play, DeleteStream, OnStatus
+}
+
+public sealed class RtmpDataMessage // AMF0 data message, type 18
+{
+    public static RtmpDataMessage SetDataFrame(FlvMetadata metadata); // @setDataFrame, onMetaData, properties
+    public static RtmpDataMessage Decode(ReadOnlySpan&lt;byte&gt; payload);
+    public FlvMetadata? TryGetMetadata(); // with or without the @setDataFrame wrapper
+    public byte[] Encode();
+    public RtmpMessage ToMessage(uint streamId, uint timestamp = 0);
+}
+
+public static class RtmpStatusCodes // ConnectSuccess, ConnectRejected, PublishStart, PublishBadName, ...
+public sealed class RtmpProtocolException : IOException</code></pre>
+      <p><strong>Handshake.</strong> The simple handshake from the specification: version 3, then 1536-byte packets of time, zero and random bytes, each side echoing the other's. Versions 6 and 8 (RTMPE, Adobe's encrypted RTMP, out of scope) and every other version throw <code>RtmpProtocolException</code>. The echoes are not compared byte for byte, since digest-handshake publishers don't echo exactly; a real ffmpeg 9 publish completes against the simple handshake (checked in as a wire capture).</p>
+      <p><strong>Chunk stream.</strong> The reader handles every message header type (0 absolute, 1 and 2 deltas, 3 repeating the previous delta, which right after a type 0 is that type 0's timestamp, as the specification describes), chunk stream ids 2 to 65,599 in one-, two- and three-byte basic headers, 32-bit extended timestamps (repeated on continuation chunks as the specification requires; a peer that leaves the repeat out, as some older publishers did, is recognised on its first continuation and read that way from then on), messages interleaved chunk by chunk across chunk streams, and zero-length messages. It applies Set Chunk Size, Abort and Window Acknowledgement Size itself before reporting them. Every bound is checked before anything is allocated, and buffers grow only as payload arrives, so a header that merely claims 8 MiB costs nothing. A chunk size, message length, chunk stream count or amount of partial data over its limit, a malformed control message, a type 1-3 header on a chunk stream that never had a type 0 one, and a new message header before the previous message on that chunk stream finished all throw <code>RtmpProtocolException</code>, after which the reader refuses further input. Because the reader waits for more bytes rather than guessing, truncation shows only when the caller says the input has ended: <code>Complete()</code> throws <code>RtmpProtocolException</code> if a chunk (header, extended timestamp or payload) or a message was cut short. The writer picks the most compact header the previous message on the chunk stream allows, switches to type 0 when the timestamp goes backwards, always repeats the extended timestamp, and never writes a type 3 directly after a type 0 (peers disagree on how to read that).</p>
+      <p><strong>Commands.</strong> <code>RtmpCommand.Decode</code> wraps every AMF0 error (including its nesting, string and count bounds) in an <code>RtmpProtocolException</code>; a payload that stops after the name reads as transaction id 0 with a null command object. The factories build what publishers and servers exchange: <code>connect</code> (with <code>app</code>, <code>type</code>, <code>flashVer</code>, <code>tcUrl</code> and any extra properties such as Enhanced RTMP's <code>fourCcList</code>), the <code>connect</code> <code>_result</code>, <code>createStream</code> and its result, <code>releaseStream</code>/<code>FCPublish</code>/<code>FCUnpublish</code>, <code>publish</code>, <code>play</code>, <code>deleteStream</code>, <code>_error</code> and <code>onStatus</code>.</p>
+      <pre><code class="language-csharp">// One side of a connection (network is the accepted connection's NetworkStream); the I/O stays with the caller.
+var handshake = RtmpHandshake.CreateServer();
+await network.WriteAsync(handshake.Start());
+while (!handshake.IsComplete)
+{
+    var peer = new byte[handshake.BytesExpected];
+    await network.ReadExactlyAsync(peer);
+    await network.WriteAsync(handshake.Process(peer));
+}
+
+var writer = new RtmpChunkWriter();
+var output = new ArrayBufferWriter&lt;byte&gt;();
+var reader = new RtmpChunkReader(message =&gt;
+{
+    if (message.Type == RtmpMessageType.CommandAmf0 &amp;&amp; RtmpCommand.Decode(message.Payload.Span) is { Name: "connect" } connect)
+    {
+        writer.Write(output, RtmpCommand.ChunkStreamId, RtmpCommand.ConnectResult(connect.TransactionId).ToMessage());
+    }
+});
+reader.Feed(receivedBytes); // then send output.WrittenSpan</code></pre>
     </div>
   </main>
 </div>

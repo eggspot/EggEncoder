@@ -329,13 +329,53 @@ frame and whenever its `ConfigVersion` changes (a packet whose `ConfigVersion` i
 current one throws), timestamps rescaled to ms (negative DTS or a composition offset outside signed
 24 bits throws), wrapping past 2^32 ms. Forward-only writes; the `onMetaData` duration stays 0.
 
-AMF0 (`EggEncoder.Live.Rtmp.Amf0`, shared with the coming RTMP items): `Amf0Value` (Number,
+AMF0 (`EggEncoder.Live.Rtmp.Amf0`, shared with the RTMP command/data messages): `Amf0Value` (Number,
 Boolean, String, LongString, XmlDocument, Date, Null, Undefined, Object, EcmaArray, StrictArray;
 static `From*` factories, `GetProperty(name)`), `Amf0Reader` (a ref struct over a span,
 `ReadValue()`, `Position`, `AtEnd`) and `Amf0Writer.Encode(params values)`/`Write(IBufferWriter,
 value)`. The reader bounds nesting at 32, strings at 64 KiB and properties/items at 1,024, checks
 every count against the bytes left, and rejects Reference/Typed Object/AMF3 markers, all with
 `InvalidDataException`.
+
+## RTMP protocol core
+
+`EggEncoder.Live.Rtmp` (docs/live-ingest-restream-plan.md item 3): RTMP below the "publish a
+stream" level, pure and synchronous over bytes (no sockets), shared by the coming server (item 4)
+and client (item 6). `RtmpHandshake.CreateServer()`/`CreateClient()`: send `Start()`, then loop
+`Process(readExactly(BytesExpected))` and send what it returns until `IsComplete`; version 3 only
+(6/8 = RTMPE and anything else throw `RtmpProtocolException`), echoes not compared byte for byte.
+`RtmpMessage(Type, StreamId, Timestamp, Payload)` record struct (`MaxPayloadLength` 0xFFFFFF;
+`RtmpMessageType` enum, unknown values kept). `RtmpChunkReader(onMessage, options)`: `Feed(span)`
+any size; message header types 0-3 (type 3 starting a message repeats the previous delta; right
+after a type 0 the delta is that type 0 timestamp, per the spec), chunk stream ids 2-65599
+(1/2/3-byte basic headers), extended timestamps (repeated on continuation chunks; a peer that
+omits the repeat is detected on its first continuation and read that way from then on, per chunk
+stream; the writer always repeats it and never writes type 3 right after type 0), interleaving across chunk
+streams, zero-length messages; applies Set Chunk Size (`ChunkSize`), Abort and Window
+Acknowledgement Size (`AcknowledgementWindowSize`) itself, then reports every message;
+`TryTakeAcknowledgement(out sequenceNumber)` says when an Acknowledgement is due (`BytesReceived`);
+`Complete()` (connection closed) throws `RtmpProtocolException` if a chunk or message was cut short.
+`RtmpChunkReaderOptions` (init-only, each validated 1..hard limit): `MaxInboundChunkSize` 65,536,
+`MaxMessageLength` 8 MiB, `MaxChunkStreams` 64, `MaxBufferedBytes` 16 MiB (bytes received, not
+claimed; buffers grow as data arrives). Over-limit values, malformed control messages, a type 1-3
+header on a never-started chunk stream and a new header mid-message throw `RtmpProtocolException`
+(an `IOException`) and fault the reader (`InvalidOperationException` afterwards).
+`RtmpChunkWriter`: `Write(IBufferWriter, chunkStreamId, message)` with the most compact header
+(type 0 for a first message, new stream id or backwards timestamp; 1 new length/type; 2 new delta;
+3 repeated delta; a Set Chunk Size passed to `Write` throws), `WriteSetChunkSize(destination, size)`. `RtmpProtocolControl` (`ChunkStreamId`
+2): `Create`/`Read` for SetChunkSize, Abort, Acknowledgement, WindowAcknowledgementSize,
+SetPeerBandwidth (`RtmpPeerBandwidthLimitType`). `RtmpUserControl(EventType, Value, BufferLength)`:
+`StreamBegin`/`StreamEof`/`SetBufferLength`/`PingRequest`/`PingResponse`, `ToMessage`, `Read`.
+`RtmpCommand(name, transactionId, commandObject, args)` (`ChunkStreamId` 3): `Decode` (AMF0 errors
+wrapped in `RtmpProtocolException`; name-only payloads allowed), `Encode`, `ToMessage(streamId,
+timestamp)`, `StatusCode`, `GetStringArgument`/`GetNumberArgument`, factories `Connect`,
+`ConnectResult`, `Result`, `Error`, `CreateStream`, `CreateStreamResult`, `ReleaseStream`,
+`FCPublish`, `FCUnpublish`, `Publish`, `Play`, `DeleteStream`, `OnStatus`; codes in
+`RtmpStatusCodes`. `RtmpDataMessage(name, values)`: `SetDataFrame(FlvMetadata)`, `Decode`,
+`Encode`, `ToMessage`, `TryGetMetadata()` (with or without `@setDataFrame`). Audio/video message
+bodies are FLV tag bodies (`FlvTagBodyParser`). Verified against a checked-in ffmpeg 9 publish
+capture (`src/EggEncoder.UnitTests/Live/Rtmp/ffmpeg_publish.bin`).
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

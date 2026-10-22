@@ -128,6 +128,37 @@ for now. Fixtures: ffmpeg 9-produced `h264_aac.flv` (x264 with B-frames + AAC), 
 (Enhanced FLV) and `mp3.flv`, with ffprobe ground truth in `FlvDemuxerTest`; an
 `EGGENCODER_FFMPEG_ORACLE=1`-gated test runs the real `ffprobe` on `FlvWriter` output.
 
+### RTMP protocol core (`src/EggEncoder/Live/Rtmp/`)
+
+`docs/live-ingest-restream-plan.md` item 3: pure, synchronous, socket-free building blocks the
+coming `RtmpServer` (item 4) and RTMP client (item 6) share. `RtmpHandshake` is the simple
+version-3 handshake as a byte-level state machine for either side (`Start`, then
+`Process(BytesExpected bytes)` until `IsComplete`; RTMPE and other versions throw; the C2/S2 echo
+is not compared byte for byte, since digest-handshake publishers don't echo exactly).
+`RtmpChunkReader` reassembles `RtmpMessage`s (`Type`, `StreamId`, 32-bit wrapping `Timestamp`,
+owned `Payload`) from an incremental `Feed`: header types 0-3 (a type 3 that starts a message
+repeats the previous delta; right after a type 0 that delta is the type 0 timestamp, the spec's own
+reading, decided by research in PR #140), chunk stream ids 2-65599, extended timestamps
+(continuations repeat them per the spec; a peer that omits the repeat, as older librtmp/ffmpeg did,
+is detected on the first continuation by comparing the next four bytes with the extended value,
+and that decision is latched per chunk stream), interleaving across chunk streams; it applies Set Chunk Size,
+Abort and Window Acknowledgement Size itself (`TryTakeAcknowledgement` says when to ack) and still
+reports them; `Complete()` (the connection closed) turns a chunk or message cut short into an
+`RtmpProtocolException`, since `Feed` alone can't tell truncation from a slow peer. `RtmpChunkReaderOptions` holds the security-posture bounds (chunk size, message
+length, chunk stream count, buffered bytes; defaults and hard ceilings), checked before anything
+is allocated; buffers grow only as payload arrives. Every violation throws `RtmpProtocolException`
+(an `IOException`; `InvalidDataException` is sealed) and faults the reader. `RtmpChunkWriter`
+chooses the most compact header per chunk stream (type 0 when the timestamp goes backwards; never
+a type 3 directly after a type 0, which peers read differently).
+`RtmpProtocolControl`/`RtmpUserControl` build and read control messages and events;
+`RtmpCommand` (AMF0 command, type 20; AMF0 errors wrapped) and `RtmpDataMessage` (type 18;
+`@setDataFrame`/`onMetaData` to `FlvMetadata`) build and read the NetConnection/NetStream flow.
+The AMF0 bounds stay `Amf0Reader` constants (they equal the plan's defaults). Fixture:
+`ffmpeg_publish.bin`, every byte ffmpeg 9.0.2 sent publishing `h264_aac.flv` to the test-only
+`RtmpTestReceiver` (its connect spans a type 3 continuation at the default 128-byte chunk size);
+`RtmpFfmpegOracleTest` re-runs the live publish when `EGGENCODER_FFMPEG_ORACLE=1`, and writes a new
+capture when `EGGENCODER_RTMP_CAPTURE_PATH` is also set.
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
@@ -136,8 +167,8 @@ every per-codec `XxxEncoder`/`XxxEncoderSession` whole-file type (no destination
 known total length required anywhere in this surface). See `docs/streaming-plan.md` for the full
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
-**Planned, not yet implemented**: the rest of live ingest and restream (the packet model and FLV
-demux/mux above are done; still open: RTMP server/client incl. RTMPS, video tracks in the
+**Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
+demux/mux and the RTMP protocol core above are done; still open: RTMP server/client incl. RTMPS, video tracks in the
 fMP4/MPEG-TS muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security

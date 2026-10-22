@@ -79,6 +79,45 @@ try
         }
     });
 
+    await RunCheck("RTMP core: handshake, then connect/createStream/publish and media through the chunk writer/reader", () =>
+    {
+        var client = EggEncoder.Live.Rtmp.RtmpHandshake.CreateClient();
+        var server = EggEncoder.Live.Rtmp.RtmpHandshake.CreateServer();
+        server.Start();
+        server.Process(client.Process(server.Process(client.Start())));
+
+        var output = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new EggEncoder.Live.Rtmp.RtmpChunkWriter();
+        writer.WriteSetChunkSize(output, 4096);
+        writer.Write(output, EggEncoder.Live.Rtmp.RtmpCommand.ChunkStreamId, EggEncoder.Live.Rtmp.RtmpCommand.Connect(1, "live", "rtmp://127.0.0.1/live").ToMessage());
+        writer.Write(output, EggEncoder.Live.Rtmp.RtmpCommand.ChunkStreamId, EggEncoder.Live.Rtmp.RtmpCommand.CreateStream(2).ToMessage());
+        writer.Write(output, 8, EggEncoder.Live.Rtmp.RtmpCommand.Publish("key").ToMessage(streamId: 1));
+        writer.Write(output, 6, new EggEncoder.Live.Rtmp.RtmpMessage(EggEncoder.Live.Rtmp.RtmpMessageType.Video, 1, 0x01000000, new byte[10_000]));
+
+        var commands = new List<string>();
+        var videoBytes = 0;
+        var reader = new EggEncoder.Live.Rtmp.RtmpChunkReader(message =>
+        {
+            if (message.Type == EggEncoder.Live.Rtmp.RtmpMessageType.CommandAmf0)
+            {
+                commands.Add(EggEncoder.Live.Rtmp.RtmpCommand.Decode(message.Payload.Span).Name);
+            }
+            else if (message.Type == EggEncoder.Live.Rtmp.RtmpMessageType.Video && message.Timestamp == 0x01000000)
+            {
+                videoBytes = message.Payload.Length;
+            }
+        });
+        reader.Feed(output.WrittenSpan);
+
+        if (!client.IsComplete || !server.IsComplete || reader.ChunkSize != 4096 || videoBytes != 10_000
+            || string.Join(",", commands) != "connect,createStream,publish")
+        {
+            throw new InvalidOperationException("RTMP core check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }

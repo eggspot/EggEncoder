@@ -217,7 +217,25 @@ await foreach (var packet in source.ReadPacketsAsync())
 await writer.CompleteAsync();
 ```
 
-**Planned:** the rest of live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+### RTMP protocol core
+
+`EggEncoder.Live.Rtmp` implements RTMP below the "publish a stream" level (Adobe RTMP specification 1.0), pure and synchronous over bytes so the coming server and client share it: `RtmpHandshake` (the simple version-3 handshake as a byte-level state machine for either side; RTMPE is rejected), `RtmpChunkReader` (incremental `Feed`, reassembles messages across interleaved chunk streams, every header type, extended timestamps, applies Set Chunk Size/Abort/Window Acknowledgement Size, says when an Acknowledgement is due, and `Complete()` on connection close reports a chunk or message cut short), `RtmpChunkWriter` (splits messages with the most compact header), `RtmpProtocolControl`/`RtmpUserControl` (control messages and events), `RtmpCommand` (`connect`, `createStream`, `releaseStream`, `FCPublish`, `publish`, `play`, `deleteStream`, `_result`/`_error`, `onStatus`) and `RtmpDataMessage` (`@setDataFrame`/`onMetaData` to `FlvMetadata`). Every bound from the plan's security posture is enforced before allocating (`RtmpChunkReaderOptions`: chunk size, message length, chunk stream count, buffered bytes, each with a hard ceiling), and every malformed input (truncation included, once `Complete()` is called) ends in a typed `RtmpProtocolException`. Verified against a real ffmpeg publish captured as wire bytes.
+
+```csharp
+using EggEncoder.Containers.Flv;
+using EggEncoder.Live.Rtmp;
+
+var reader = new RtmpChunkReader(message =>
+{
+    if (message.Type == RtmpMessageType.CommandAmf0)
+        Console.WriteLine(RtmpCommand.Decode(message.Payload.Span).Name); // connect, releaseStream, FCPublish, createStream, publish
+    else if (message.Type == RtmpMessageType.Video)
+        Console.WriteLine(FlvTagBodyParser.ParseVideo(message.Payload.Span).PacketType); // an RTMP media body is an FLV tag body
+});
+reader.Feed(bytesFromSocket); // any piece size, after RtmpHandshake completes
+```
+
+**Planned:** the rest of live ingest and restream — an RTMP server (on the protocol core above) that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 
