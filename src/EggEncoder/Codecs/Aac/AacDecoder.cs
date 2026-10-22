@@ -51,6 +51,10 @@ namespace EggEncoder.Codecs.Aac
                 var frameEndBitPosition = header.FrameStartBitPosition + (header.FrameLength * 8);
 
                 var outputFrame = frameDecoder.DecodeFrame(reader, channels);
+                if (reader.BitPosition > frameEndBitPosition)
+                {
+                    throw new InvalidDataException("AAC: the raw_data_block runs past the ADTS frame_length");
+                }
 
                 onBlockDecoded(outputFrame, channels, sampleRate, 16, totalSamples);
 
@@ -129,6 +133,12 @@ namespace EggEncoder.Codecs.Aac
             if (protectionAbsent == 0)
             {
                 reader.SkipBits(16);
+            }
+
+            // frame_length counts the header too, so anything shorter can't hold one.
+            if (frameStartBitPosition + (frameLength * 8) < reader.BitPosition)
+            {
+                throw new InvalidDataException($"Invalid ADTS frame_length {frameLength}: shorter than the frame's own header");
             }
 
             return new AdtsHeader

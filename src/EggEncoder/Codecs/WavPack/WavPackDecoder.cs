@@ -21,6 +21,11 @@ namespace EggEncoder.Codecs.WavPack
     // per-frame blocks; only a genuinely-more-than-2-channel sequence is rejected.
     public static class WavPackDecoder
     {
+        // ffmpeg's own WV_MAX_SAMPLES (libavcodec/wavpack.h), which its decoder also rejects blocks
+        // above (WavPackEncoder writes 4096). It bounds the per-block output arrays a corrupted
+        // block_samples field would otherwise allocate.
+        internal const int MaxBlockSamples = 150000;
+
         public static WavPackStreamInfo Decode(string filePath, AudioBlockDecodedCallback onBlockDecoded)
         {
             byte[] data;
@@ -95,16 +100,34 @@ namespace EggEncoder.Codecs.WavPack
 
                 while (true)
                 {
+                    // Checked here rather than in WavPackBlockHeader.Parse: a throw from Parse on a
+                    // later block reads as trailing tag data (see the catch above) and would end the
+                    // decode early instead of reporting the corruption.
+                    if (header.BlockSamples > MaxBlockSamples)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block claiming {header.BlockSamples} samples, more than the {MaxBlockSamples} allowed -- the file is corrupt.");
+                    }
+
                     if ((int)header.BlockSamples != blockSamples)
                     {
                         throw new InvalidDataException($"'{filePath}' has a WavPack block whose sample count doesn't match the other blocks in its own per-frame sequence -- the file is corrupt.");
                     }
 
-                    var blockEnd = offset + 8 + (int)header.CkSize;
-                    if (blockEnd > data.Length)
+                    // ckSize counts everything after itself, so it can't be smaller than the rest of
+                    // the header. Summed in long: a corrupted ckSize past int.MaxValue used to wrap
+                    // negative and pass the truncation check below.
+                    if (header.CkSize < WavPackBlockHeader.ByteLength - 8)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block whose size ({header.CkSize} bytes) is smaller than its own header -- the file is corrupt.");
+                    }
+
+                    var blockEndLong = offset + 8L + header.CkSize;
+                    if (blockEndLong > data.Length)
                     {
                         throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
                     }
+
+                    var blockEnd = (int)blockEndLong;
 
                     if (firstHeader is null)
                     {

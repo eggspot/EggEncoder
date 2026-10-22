@@ -368,6 +368,11 @@ namespace EggEncoder.Codecs.Aac
                         sectionLength += increment;
                     } while (increment == maxIncrement);
 
+                    if (sectionLength > maxScalefactorBand - band)
+                    {
+                        throw new InvalidDataException("AAC section data runs past max_sfb");
+                    }
+
                     for (var i = 0; i < sectionLength; i++)
                     {
                         bandTypes[band + i] = sectionBandType;
