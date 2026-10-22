@@ -326,6 +326,20 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         }
 
         [Fact]
+        public void Decode_Stream_WithCorruptedBlockSamples_Should_ThrowInvalidDataException()
+        {
+            // The fuzz case: the first block's block_samples field (offset 20) read 0x80000004, which
+            // went negative as an int and threw a raw OverflowException allocating the output arrays.
+            var corruptBytes = File.ReadAllBytes(_fullScaleFixturePath);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(20), 0x80000004);
+            using var stream = new MemoryStream(corruptBytes);
+
+            var act = () => WavPackDecoder.Decode(stream, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*2147483652 samples*");
+        }
+
+        [Fact]
         public void Decode_WithTruncatedSampleRateMetadata_Should_Throw()
         {
             // sample_nonstandard_rate_wavpack.wv's genuine WP_ID_SAMPLE_RATE sub-block (confirmed

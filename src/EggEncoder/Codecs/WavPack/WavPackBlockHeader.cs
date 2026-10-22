@@ -9,6 +9,11 @@ namespace EggEncoder.Codecs.WavPack
     {
         public const int ByteLength = 32;
 
+        // ffmpeg's own WV_MAX_SAMPLES (libavcodec/wavpack.h), which its decoder also rejects blocks
+        // above (WavPackEncoder writes 4096). It bounds the per-block output arrays a corrupted
+        // block_samples field would otherwise allocate.
+        public const int MaxBlockSamples = 150000;
+
         public required uint CkSize { get; init; }
 
         public required ushort Version { get; init; }
@@ -72,6 +77,16 @@ namespace EggEncoder.Codecs.WavPack
             var blockSamples = ReadUInt32(data, offset + 20);
             var flags = ReadUInt32(data, offset + 24);
             var crc = ReadUInt32(data, offset + 28);
+
+            if (blockSamples > MaxBlockSamples)
+            {
+                throw new InvalidDataException($"A WavPack block claims {blockSamples} samples, more than the {MaxBlockSamples} allowed -- the file is corrupt.");
+            }
+
+            if (ckSize > int.MaxValue - ByteLength)
+            {
+                throw new InvalidDataException($"A WavPack block claims an impossible size ({ckSize} bytes) -- the file is corrupt.");
+            }
 
             // total_samples' lower 32 bits all set is the spec's own "unknown total length"
             // sentinel -- never combined with the high byte in that case.
