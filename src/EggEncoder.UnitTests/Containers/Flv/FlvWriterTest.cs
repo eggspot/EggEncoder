@@ -81,6 +81,19 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Fact]
+        public void Open_UnencodableMetadata_Should_Throw_Before_Writing_Anything()
+        {
+            var stream = new MemoryStream();
+            var metadata = new FlvMetadata([new(new string('k', ushort.MaxValue + 1), Amf0Value.Null)]);
+            using var writer = new FlvWriter(stream, leaveOpen: true, metadata);
+
+            var act = () => writer.Open(new MediaTrackSet([AacTrack()]));
+
+            act.Should().Throw<ArgumentException>();
+            stream.Length.Should().Be(0);
+        }
+
+        [Fact]
         public void Write_Header_Should_Declare_Only_Present_Kinds()
         {
             var audioOnly = WriteAll(new MediaTrackSet([AacTrack()]), []);

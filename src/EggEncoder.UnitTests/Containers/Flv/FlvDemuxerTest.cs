@@ -245,6 +245,25 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Fact]
+        public void Demux_PendingBytesLimitReached_Should_Announce_Before_Packet_Limit()
+        {
+            var frame = new byte[1_000_000];
+            var builder = new FlvTestBuilder().AvcSequenceHeader();
+            var framesToLimit = (FlvDemuxer.MaxPendingBytes + frame.Length - 1) / (frame.Length + 4);
+            for (var i = 0; i < framesToLimit + 1; i++)
+            {
+                builder.AvcFrame((uint)(i * 40), i == 0, 0, [0, 0, 0, 0, .. frame]);
+            }
+
+            var capture = new Capture();
+            capture.Demuxer.Feed(builder.ToArray());
+
+            capture.TrackSets.Should().ContainSingle().Which.Tracks.Should().ContainSingle();
+            capture.Packets.Should().HaveCount(framesToLimit + 1);
+            framesToLimit.Should().BeLessThan(FlvDemuxer.MaxPendingPackets);
+        }
+
+        [Fact]
         public void Demux_HeaderWithoutFlags_Should_Announce_On_First_Configured_Track()
         {
             var bytes = new FlvTestBuilder(flags: 0).AacSequenceHeader().AacFrame(0, 0x21).ToArray();

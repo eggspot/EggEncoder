@@ -26,6 +26,10 @@ namespace EggEncoder.Containers.Flv
         private const int MaxCompositionTime = (1 << 23) - 1;
         private const int MinCompositionTime = -(1 << 23);
 
+        // SoundFormat 10, and the rate/size/type bits the specification says AAC always sets
+        // (44 kHz, 16-bit, stereo); the real values are in the AudioSpecificConfig.
+        private const byte AacHeaderByte = FlvTagBodyParser.SoundFormatAac << 4 | 3 << 2 | 1 << 1 | 1;
+
         private readonly Stream _destination;
         private readonly bool _leaveOpen;
         private readonly FlvMetadata? _metadata;
@@ -54,6 +58,7 @@ namespace EggEncoder.Containers.Flv
 
         /// <summary>Writes the file header and <c>onMetaData</c> for these tracks.</summary>
         /// <exception cref="NotSupportedException">More than one audio or video track, a data track, or a codec FLV can't carry (Opus).</exception>
+        /// <exception cref="ArgumentException">The metadata can't be encoded as AMF0; nothing has been written.</exception>
         public void Open(MediaTrackSet tracks)
         {
             ThrowIfDisposed();
@@ -64,6 +69,9 @@ namespace EggEncoder.Containers.Flv
             }
 
             SetTracks(tracks);
+            // Encoded before anything is written, so invalid metadata leaves the destination untouched.
+            var metadata = _metadata ?? FlvMetadata.FromTracks(tracks);
+            var metadataBody = Amf0Writer.Encode(Amf0Value.FromString("onMetaData"), Amf0Value.FromEcmaArray(metadata.Properties));
             var flags = (byte)0;
             foreach (var track in tracks.Tracks)
             {
@@ -73,10 +81,7 @@ namespace EggEncoder.Containers.Flv
             Span<byte> header = [(byte)'F', (byte)'L', (byte)'V', 1, flags, 0, 0, 0, (byte)FlvDemuxer.FileHeaderSize, 0, 0, 0, 0];
             _destination.Write(header);
             _opened = true;
-
-            var metadata = _metadata ?? FlvMetadata.FromTracks(tracks);
-            var body = Amf0Writer.Encode(Amf0Value.FromString("onMetaData"), Amf0Value.FromEcmaArray(metadata.Properties));
-            WriteTag(FlvTagType.ScriptData, 0, body);
+            WriteTag(FlvTagType.ScriptData, 0, metadataBody);
         }
 
         /// <summary>
@@ -281,10 +286,6 @@ namespace EggEncoder.Containers.Flv
                     return;
             }
         }
-
-        // SoundFormat 10, and the rate/size/type bits the specification says AAC always sets
-        // (44 kHz, 16-bit, stereo); the real values are in the AudioSpecificConfig.
-        private const byte AacHeaderByte = FlvTagBodyParser.SoundFormatAac << 4 | 3 << 2 | 1 << 1 | 1;
 
         private void WriteAudioFrame(MediaTrackInfo track, ReadOnlySpan<byte> payload, uint timestamp)
         {

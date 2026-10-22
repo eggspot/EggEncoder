@@ -50,6 +50,7 @@ namespace EggEncoder.Containers.Flv
         /// The metadata <see cref="FlvWriter"/> writes when none is given: the width/height of the video
         /// track and the codec, sample rate and channel layout of each track, plus <c>encoder</c>.
         /// </summary>
+        /// <exception cref="NotSupportedException">An audio or video track whose codec FLV can't carry; data tracks are ignored.</exception>
         public static FlvMetadata FromTracks(MediaTrackSet tracks, string? encoder = "EggEncoder")
         {
             ArgumentNullException.ThrowIfNull(tracks);

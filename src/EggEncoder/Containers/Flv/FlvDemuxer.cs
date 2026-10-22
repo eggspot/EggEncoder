@@ -19,8 +19,9 @@ namespace EggEncoder.Containers.Flv
     /// every track the FLV header declares has its configuration (an AVC/HEVC/AV1/VP9 or AAC sequence
     /// header, or the first MP3 frame), and again whenever a track appears or its configuration changes
     /// (a new sequence header whose bytes differ bumps <see cref="MediaTrackInfo.ConfigVersion"/>).
-    /// Packets that arrive before then are held, at most <see cref="MaxPendingPackets"/> of them; past
-    /// that the tracks known so far are announced anyway.
+    /// Packets that arrive before then are held, at most <see cref="MaxPendingPackets"/> of them and
+    /// <see cref="MaxPendingBytes"/> of payload; past either limit the tracks known so far are
+    /// announced anyway.
     /// </para>
     /// <para>
     /// Timestamps: FLV's 32-bit millisecond tag timestamps are unwrapped into a continuous 64-bit
@@ -50,6 +51,9 @@ namespace EggEncoder.Containers.Flv
         /// <summary>The most packets held while waiting for every declared track's configuration.</summary>
         public const int MaxPendingPackets = 1024;
 
+        /// <summary>The most payload bytes held while waiting for every declared track's configuration.</summary>
+        public const int MaxPendingBytes = 32 * 1024 * 1024;
+
         internal const int FileHeaderSize = 9;
         internal const int TagHeaderSize = 11;
         internal const int PreviousTagSizeLength = 4;
@@ -71,6 +75,7 @@ namespace EggEncoder.Containers.Flv
         private readonly Action<MediaTrackSet> _onTracks;
         private readonly Action<MediaPacket> _onPacket;
         private readonly List<MediaPacket> _pending = [];
+        private long _pendingBytes;
 
         private byte[] _buffer = new byte[4096];
         private int _bufferStart;
@@ -361,7 +366,8 @@ namespace EggEncoder.Containers.Flv
             }
 
             _pending.Add(packet);
-            if (_pending.Count >= MaxPendingPackets)
+            _pendingBytes += packet.Payload.Length;
+            if (_pending.Count >= MaxPendingPackets || _pendingBytes >= MaxPendingBytes)
             {
                 Announce();
             }
@@ -382,6 +388,7 @@ namespace EggEncoder.Containers.Flv
             }
 
             _pending.Clear();
+            _pendingBytes = 0;
         }
 
         private void PublishTracks()
