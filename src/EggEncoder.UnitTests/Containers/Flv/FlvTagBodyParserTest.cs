@@ -159,6 +159,22 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Theory]
+        [InlineData(new byte[] { 0xD0, 0x00 })] // command frame, VideoCommand byte with no FourCC
+        [InlineData(new byte[] { 0xD1 })]
+        public void ParseVideo_ExCommandFrameWithoutFourCc_Should_Be_Ignored(byte[] body)
+        {
+            FlvTagBodyParser.ParseVideo(body).PacketType.Should().Be(FlvPacketType.Ignored);
+        }
+
+        [Fact]
+        public void ParseVideo_ExMetadataTooShortForFourCc_Should_Throw()
+        {
+            Action act = () => FlvTagBodyParser.ParseVideo([0xD4, (byte)'h']);
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Theory]
         [InlineData(0x95)] // MPEG2TSSequenceStart
         [InlineData(0x96)] // Multitrack
         [InlineData(0x97)] // ModEx

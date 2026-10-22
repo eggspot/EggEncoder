@@ -121,7 +121,7 @@ namespace EggEncoder.Containers.Flv
 
         /// <summary>Parses as much of the stream as these bytes complete; the rest is kept for the next call.</summary>
         /// <exception cref="InvalidDataException">The stream is malformed; the demuxer can't be used afterwards.</exception>
-        /// <exception cref="InvalidOperationException"><see cref="Complete"/> was already called, or an earlier call threw <see cref="InvalidDataException"/>.</exception>
+        /// <exception cref="InvalidOperationException"><see cref="Complete"/> was already called, or an earlier call threw (malformed input, or a callback exception).</exception>
         public void Feed(ReadOnlySpan<byte> data)
         {
             ThrowIfUnusable();
@@ -132,8 +132,10 @@ namespace EggEncoder.Containers.Flv
                 {
                 }
             }
-            catch (InvalidDataException)
+            catch
             {
+                // Malformed input, or a callback that threw mid-tag: the buffer no longer matches
+                // what was delivered, so nothing after this point can be trusted.
                 _state = State.Faulted;
                 throw;
             }
@@ -146,7 +148,7 @@ namespace EggEncoder.Containers.Flv
         /// every held packet.
         /// </summary>
         /// <exception cref="InvalidDataException">The input ended inside the file header or a tag.</exception>
-        /// <exception cref="InvalidOperationException">An earlier <see cref="Feed"/> threw <see cref="InvalidDataException"/>.</exception>
+        /// <exception cref="InvalidOperationException">An earlier <see cref="Feed"/> threw.</exception>
         public void Complete()
         {
             if (_state == State.Completed)
@@ -158,7 +160,7 @@ namespace EggEncoder.Containers.Flv
             var leftover = _bufferEnd - _bufferStart;
             if (_state == State.FileHeader || leftover > 0)
             {
-                throw new InvalidDataException($"FLV: input ended with an incomplete {(_state == State.FileHeader ? "file header" : "tag")} ({leftover} bytes left over)");
+                throw new InvalidDataException($"FLV: input ended with an incomplete {(_state == State.FileHeader ? "file header" : _state == State.PreviousTagSize ? "PreviousTagSize" : "tag")} ({leftover} bytes left over)");
             }
 
             _state = State.Completed;
@@ -174,7 +176,7 @@ namespace EggEncoder.Containers.Flv
 
             if (_state == State.Faulted)
             {
-                throw new InvalidOperationException("The demuxer stopped at malformed input and can't continue");
+                throw new InvalidOperationException("The demuxer stopped at malformed input or a callback exception and can't continue");
             }
         }
 

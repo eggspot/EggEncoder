@@ -118,9 +118,16 @@ namespace EggEncoder.Containers.Flv
                 return Unsupported(MediaKind.Video, $"Enhanced-FLV video packet type {packetType}");
             }
 
+            if (frameType == FrameTypeCommand && packetType != ExPacketMetadata)
+            {
+                // A command frame carries a VideoCommand byte; whether a FourCC precedes it differs
+                // between Enhanced RTMP revisions, and neither layout carries media.
+                return new FlvTagBody(FlvPacketType.Ignored, MediaKind.Video, null, false, 0, ReadOnlySpan<byte>.Empty);
+            }
+
             Require(body, 5, "Enhanced-FLV video FourCC");
             var fourCc = (uint)(body[1] << 24 | body[2] << 16 | body[3] << 8 | body[4]);
-            if (frameType == FrameTypeCommand || packetType == ExPacketMetadata)
+            if (packetType == ExPacketMetadata)
             {
                 return new FlvTagBody(FlvPacketType.Ignored, MediaKind.Video, null, false, 0, ReadOnlySpan<byte>.Empty);
             }

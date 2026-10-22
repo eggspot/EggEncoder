@@ -273,14 +273,33 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Fact]
-        public void UpdateTracks_UnknownTrackOrKindChange_Should_Throw()
+        public void UpdateTracks_KindChangeOrSecondTrackOfAKind_Should_Throw()
         {
             using var writer = new FlvWriter(new MemoryStream());
             writer.Open(new MediaTrackSet([AacTrack()]));
 
-            ((Action)(() => writer.UpdateTracks(new MediaTrackSet([AvcTrack(1)])))).Should().Throw<ArgumentException>();
-            ((Action)(() => writer.UpdateTracks(new MediaTrackSet([AvcTrack(7)])))).Should().Throw<ArgumentException>();
+            ((Action)(() => writer.UpdateTracks(new MediaTrackSet([AvcTrack(1)])))).Should().Throw<ArgumentException>().WithMessage("*opened as a Audio track*");
+            ((Action)(() => writer.UpdateTracks(new MediaTrackSet([AacTrack(1), AacTrack(2)])))).Should().Throw<NotSupportedException>();
             ((Action)(() => writer.UpdateTracks(null!))).Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void UpdateTracks_LateTrack_Should_Be_Written_With_Its_Sequence_Header()
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new FlvWriter(stream, leaveOpen: true))
+            {
+                writer.Open(new MediaTrackSet([AacTrack()]));
+                writer.Write(new MediaPacket(1, 0, 0, true, 0, new byte[] { 1 }));
+                writer.UpdateTracks(new MediaTrackSet([AacTrack(), AvcTrack()]));
+                writer.Write(new MediaPacket(0, 40, 40, true, 0, new byte[] { 0, 0, 0, 1, 0x65 }));
+                writer.Complete();
+            }
+
+            var reread = FlvDemuxerTest.Demux(stream.ToArray());
+
+            reread.TrackSets[^1].Tracks.Should().HaveCount(2);
+            reread.Packets.Select(p => p.TrackId).Should().Equal(1, 0);
         }
 
         [Fact]

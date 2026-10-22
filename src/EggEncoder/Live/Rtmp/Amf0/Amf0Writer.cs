@@ -6,8 +6,11 @@ namespace EggEncoder.Live.Rtmp.Amf0
 {
     /// <summary>
     /// Writes AMF0 values (Adobe AMF0 specification): the inverse of <see cref="Amf0Reader"/> for every
-    /// value it can produce, so a write followed by a read gives back an equal value. Nesting is
-    /// capped at <see cref="Amf0Reader.MaxNestingDepth"/> so nothing written here is unreadable there.
+    /// value it can produce, so a write followed by a read gives back an equal value within the reader's bounds. Nesting is
+    /// capped at <see cref="Amf0Reader.MaxNestingDepth"/>. The reader's other bounds are deliberately
+    /// not enforced here: a string over <see cref="Amf0Reader.MaxStringBytes"/> or an object with more
+    /// than <see cref="Amf0Reader.MaxProperties"/> properties is valid AMF0 and is written, but
+    /// <see cref="Amf0Reader"/> refuses to read it back.
     /// </summary>
     public static class Amf0Writer
     {

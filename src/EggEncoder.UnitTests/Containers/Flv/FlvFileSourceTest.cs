@@ -26,6 +26,64 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Fact]
+        public async Task ReadPacketsAsync_ConfigChangeWithinOneRead_Should_Not_Advance_Tracks_Early()
+        {
+            // Regression: Tracks used to read the demuxer's live set, which already held version 1
+            // while the version-0 packets from the same 64 KiB read were still being yielded.
+            var bytes = new FlvTestBuilder(flags: 0x04)
+                .AacSequenceHeader()
+                .AacFrame(0, 1)
+                .AacFrame(23, 2)
+                .AacSequenceHeader(46, Convert.FromHexString("1210"))
+                .AacFrame(46, 3)
+                .ToArray();
+            await using var source = new FlvFileSource(new MemoryStream(bytes));
+
+            var seen = new List<(int PacketVersion, int TrackVersion, string Config)>();
+            await foreach (var packet in source.ReadPacketsAsync())
+            {
+                var track = source.Tracks!.FindTrack(packet.TrackId)!;
+                seen.Add((packet.ConfigVersion, track.ConfigVersion, Convert.ToHexString(track.CodecConfiguration.Span)));
+            }
+
+            seen.Should().Equal((0, 0, "120856E500"), (0, 0, "120856E500"), (1, 1, "1210"));
+        }
+
+        [Fact]
+        public async Task ReadPacketsAsync_RemuxThroughWriter_With_Config_Change_Should_Succeed()
+        {
+            var bytes = new FlvTestBuilder(flags: 0x04)
+                .AacSequenceHeader()
+                .AacFrame(0, 1)
+                .AacSequenceHeader(23, Convert.FromHexString("1210"))
+                .AacFrame(23, 2)
+                .ToArray();
+            await using var source = new FlvFileSource(new MemoryStream(bytes));
+            var output = new MemoryStream();
+            await using var writer = new FlvWriter(output, leaveOpen: true);
+
+            MediaTrackSet? written = null;
+            await foreach (var packet in source.ReadPacketsAsync())
+            {
+                if (written is null)
+                {
+                    await writer.OpenAsync(source.Tracks!);
+                }
+                else if (!ReferenceEquals(written, source.Tracks))
+                {
+                    writer.UpdateTracks(source.Tracks!);
+                }
+
+                written = source.Tracks;
+                await writer.WriteAsync(packet);
+            }
+
+            await writer.CompleteAsync();
+
+            FlvDemuxerTest.Demux(output.ToArray()).Packets.Select(p => p.ConfigVersion).Should().Equal(0, 1);
+        }
+
+        [Fact]
         public async Task ReadPacketsAsync_NonSeekableStream_Should_Work()
         {
             var bytes = File.ReadAllBytes(FlvDemuxerTest.Mp3Fixture);

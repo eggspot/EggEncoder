@@ -539,7 +539,7 @@ namespace EggEncoder.UnitTests.Containers.Flv
 
             var act = () => Demux(bytes[..^2]);
 
-            act.Should().Throw<InvalidDataException>();
+            act.Should().Throw<InvalidDataException>().WithMessage("*incomplete PreviousTagSize*");
         }
 
         [Fact]
@@ -562,6 +562,22 @@ namespace EggEncoder.UnitTests.Containers.Flv
             bad.Should().Throw<InvalidDataException>();
             ((Action)(() => capture.Demuxer.Feed(new FlvTestBuilder().ToArray()))).Should().Throw<InvalidOperationException>().WithMessage("*malformed*");
             ((Action)(() => capture.Demuxer.Complete())).Should().Throw<InvalidOperationException>().WithMessage("*malformed*");
+        }
+
+        [Fact]
+        public void Feed_AfterCallbackException_Should_Refuse_Further_Use_Instead_Of_Redelivering()
+        {
+            var delivered = 0;
+            var demuxer = new FlvDemuxer(_ => { }, _ =>
+            {
+                delivered++;
+                throw new InvalidOperationException("consumer failed");
+            });
+            var bytes = new FlvTestBuilder(flags: 0x04).AacSequenceHeader().AacFrame(0, 1).AacFrame(23, 2).ToArray();
+
+            ((Action)(() => demuxer.Feed(bytes))).Should().Throw<InvalidOperationException>().WithMessage("consumer failed");
+            ((Action)(() => demuxer.Feed([]))).Should().Throw<InvalidOperationException>().WithMessage("*callback exception*");
+            delivered.Should().Be(1);
         }
 
         [Fact]

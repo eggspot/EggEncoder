@@ -85,9 +85,11 @@ namespace EggEncoder.Containers.Flv
         }
 
         /// <summary>
-        /// Replaces the track set after a configuration change, keeping the same track ids and kinds.
-        /// The next packet of a track whose <see cref="MediaTrackInfo.ConfigVersion"/> changed is
-        /// preceded by a new sequence header.
+        /// Replaces the track set after a configuration change or when a track appears late (as
+        /// <see cref="FlvDemuxer"/> can report). A track already open keeps its kind; the set still
+        /// holds at most one audio and one video track. The next packet of a track whose
+        /// <see cref="MediaTrackInfo.ConfigVersion"/> changed, or that is new, is preceded by its
+        /// sequence header. The file header's audio/video flags are not rewritten.
         /// </summary>
         public void UpdateTracks(MediaTrackSet tracks)
         {
@@ -96,9 +98,9 @@ namespace EggEncoder.Containers.Flv
             ThrowIfNotWritable();
             foreach (var track in tracks.Tracks)
             {
-                if (!_tracks.TryGetValue(track.TrackId, out var existing) || existing.Kind != track.Kind)
+                if (_tracks.TryGetValue(track.TrackId, out var existing) && existing.Kind != track.Kind)
                 {
-                    throw new ArgumentException($"Track {track.TrackId} was not opened as a {track.Kind} track", nameof(tracks));
+                    throw new ArgumentException($"Track {track.TrackId} was opened as a {existing.Kind} track, not {track.Kind}", nameof(tracks));
                 }
             }
 
@@ -359,7 +361,7 @@ namespace EggEncoder.Containers.Flv
             var dataSize = bodyHeader.Length + bodyPayload.Length;
             if (dataSize > 0xFFFFFF)
             {
-                throw new ArgumentException($"A {dataSize}-byte tag body exceeds FLV's 24-bit DataSize");
+                throw new ArgumentException($"A {dataSize}-byte tag body exceeds FLV's 24-bit DataSize", "packet");
             }
 
             var total = FlvDemuxer.TagHeaderSize + dataSize + FlvDemuxer.PreviousTagSizeLength;

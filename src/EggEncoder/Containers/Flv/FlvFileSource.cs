@@ -16,7 +16,10 @@ namespace EggEncoder.Containers.Flv
         private readonly Stream _source;
         private readonly bool _leaveOpen;
         private readonly FlvDemuxer _demuxer;
-        private readonly Queue<MediaPacket> _ready = new();
+        // Track-set changes and packets in demux order, so Tracks only advances when the packets
+        // that follow a change are yielded (a config change mid-read must not run ahead of them).
+        private readonly Queue<(MediaTrackSet? Tracks, MediaPacket Packet)> _ready = new();
+        private MediaTrackSet? _tracks;
         private bool _started;
         private bool _disposed;
 
@@ -32,14 +35,15 @@ namespace EggEncoder.Containers.Flv
 
             _source = source;
             _leaveOpen = leaveOpen;
-            _demuxer = new FlvDemuxer(_ => { }, _ready.Enqueue);
+            _demuxer = new FlvDemuxer(tracks => _ready.Enqueue((tracks, default)), packet => _ready.Enqueue((null, packet)));
         }
 
         /// <summary>
-        /// The current track set: <c>null</c> until it is known, then updated (before the packets that
-        /// use it) whenever a track appears or its configuration changes.
+        /// The track set that describes the packet most recently yielded by <see cref="ReadPacketsAsync"/>:
+        /// <c>null</c> until it is known, then replaced, just before the first packet that uses it,
+        /// whenever a track appears or its configuration changes.
         /// </summary>
-        public MediaTrackSet? Tracks => _demuxer.Tracks;
+        public MediaTrackSet? Tracks => _tracks;
 
         /// <summary>The most recent <c>onMetaData</c>, or <c>null</c>.</summary>
         public FlvMetadata? Metadata => _demuxer.Metadata;
@@ -71,9 +75,15 @@ namespace EggEncoder.Containers.Flv
                     _demuxer.Feed(buffer.AsSpan(0, read));
                 }
 
-                while (_ready.TryDequeue(out var packet))
+                while (_ready.TryDequeue(out var entry))
                 {
-                    yield return packet;
+                    if (entry.Tracks is not null)
+                    {
+                        _tracks = entry.Tracks;
+                        continue;
+                    }
+
+                    yield return entry.Packet;
                 }
 
                 if (read == 0)

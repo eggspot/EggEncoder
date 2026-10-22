@@ -320,7 +320,8 @@ sequence header and input ending mid-tag throw `InvalidDataException`; unsupport
 before their sequence header, encrypted tags, unknown tag types and unreadable script tags are
 skipped and counted in `SkippedTagCount`. `FlvFileSource(stream, leaveOpen)` exposes
 `ReadPacketsAsync(CancellationToken)` (`IAsyncEnumerable<MediaPacket>`, no `CanSeek` needed),
-`Tracks`, `Metadata`. `FlvWriter(stream, leaveOpen, metadata)` implements `IMediaPacketSink` over a
+`Tracks` (the set describing the packet just yielded, advanced in order with the packets),
+`Metadata`. `UpdateTracks` also accepts a late-appearing track. `FlvWriter(stream, leaveOpen, metadata)` implements `IMediaPacketSink` over a
 synchronous `Open(tracks)`/`UpdateTracks(tracks)`/`Write(packet)`/`Complete()` core: at most one
 audio and one video track (H.264/H.265/AV1/VP9, AAC/MP3; Opus throws `NotSupportedException`),
 `onMetaData` from `FlvMetadata.FromTracks` unless given, a sequence header before each track's first

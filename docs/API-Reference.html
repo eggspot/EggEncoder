@@ -765,7 +765,7 @@ public sealed class FlvFileSource : IAsyncDisposable, IDisposable
 {
     public FlvFileSource(Stream source, bool leaveOpen = false); // no CanSeek needed
     public IAsyncEnumerable&lt;MediaPacket&gt; ReadPacketsAsync(CancellationToken cancellationToken = default);
-    public MediaTrackSet? Tracks { get; }
+    public MediaTrackSet? Tracks { get; } // describes the packet just yielded, never a later configuration
     public FlvMetadata? Metadata { get; }
 }
 
@@ -773,7 +773,7 @@ public sealed class FlvWriter : IMediaPacketSink, IDisposable
 {
     public FlvWriter(Stream destination, bool leaveOpen = false, FlvMetadata? metadata = null);
     public void Open(MediaTrackSet tracks);
-    public void UpdateTracks(MediaTrackSet tracks); // after a ConfigVersion change
+    public void UpdateTracks(MediaTrackSet tracks); // after a ConfigVersion change, or to add a late track
     public void Write(MediaPacket packet);
     public void Complete();
     // plus OpenAsync / WriteAsync / CompleteAsync / DisposeAsync from IMediaPacketSink
