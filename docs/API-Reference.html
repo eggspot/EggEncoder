@@ -936,14 +936,14 @@ public sealed class RtmpProtocolException : IOException</code></pre>
       <p><strong>Handshake.</strong> The simple handshake from the specification: version 3, then 1536-byte packets of time, zero and random bytes, each side echoing the other's. Versions 6 and 8 (RTMPE, Adobe's encrypted RTMP, out of scope) and every other version throw <code>RtmpProtocolException</code>. The echoes are not compared byte for byte, since digest-handshake publishers don't echo exactly; a real ffmpeg 9 publish completes against the simple handshake (checked in as a wire capture).</p>
       <p><strong>Chunk stream.</strong> The reader handles every message header type (0 absolute, 1 and 2 deltas, 3 repeating the previous delta), chunk stream ids 2 to 65,599 in one-, two- and three-byte basic headers, 32-bit extended timestamps (repeated on continuation chunks as the specification requires; a continuation that omits it is also read), messages interleaved chunk by chunk across chunk streams, and zero-length messages. It applies Set Chunk Size, Abort and Window Acknowledgement Size itself before reporting them. Every bound is checked before anything is allocated, and buffers grow only as payload arrives, so a header that merely claims 8 MiB costs nothing. A chunk size, message length, chunk stream count or amount of partial data over its limit, a malformed control message, a type 1-3 header on a chunk stream that never had a type 0 one, and a new message header before the previous message on that chunk stream finished all throw <code>RtmpProtocolException</code>, after which the reader refuses further input. The writer picks the most compact header the previous message on the chunk stream allows and switches to type 0 when the timestamp goes backwards.</p>
       <p><strong>Commands.</strong> <code>RtmpCommand.Decode</code> wraps every AMF0 error (including its nesting, string and count bounds) in an <code>RtmpProtocolException</code>; a payload that stops after the name reads as transaction id 0 with a null command object. The factories build what publishers and servers exchange: <code>connect</code> (with <code>app</code>, <code>type</code>, <code>flashVer</code>, <code>tcUrl</code> and any extra properties such as Enhanced RTMP's <code>fourCcList</code>), the <code>connect</code> <code>_result</code>, <code>createStream</code> and its result, <code>releaseStream</code>/<code>FCPublish</code>/<code>FCUnpublish</code>, <code>publish</code>, <code>play</code>, <code>deleteStream</code>, <code>_error</code> and <code>onStatus</code>.</p>
-      <pre><code class="language-csharp">// One side of a connection, with the socket I/O left to the caller.
+      <pre><code class="language-csharp">// One side of a connection (network is the accepted connection's NetworkStream); the I/O stays with the caller.
 var handshake = RtmpHandshake.CreateServer();
-await socket.SendAsync(handshake.Start());
+await network.WriteAsync(handshake.Start());
 while (!handshake.IsComplete)
 {
     var peer = new byte[handshake.BytesExpected];
-    await ReadExactlyAsync(socket, peer);
-    await socket.SendAsync(handshake.Process(peer));
+    await network.ReadExactlyAsync(peer);
+    await network.WriteAsync(handshake.Process(peer));
 }
 
 var writer = new RtmpChunkWriter();

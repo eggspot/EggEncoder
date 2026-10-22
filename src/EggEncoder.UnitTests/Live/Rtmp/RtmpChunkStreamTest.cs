@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using EggEncoder.Live.Rtmp;
+using EggEncoder.Live.Rtmp.Amf0;
 using FluentAssertions;
 
 namespace EggEncoder.UnitTests.Live.Rtmp
@@ -607,7 +608,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             clientWriter.WriteSetChunkSize(toServer, chunkSize);
             serverWriter.WriteSetChunkSize(toClient, chunkSize);
             clientWriter.Write(toServer, RtmpCommand.ChunkStreamId, RtmpCommand.Connect(1, "live", "rtmp://127.0.0.1/live",
-                [new("pad", EggEncoder.Live.Rtmp.Amf0.Amf0Value.FromString(new string('x', 5000)))]).ToMessage());
+                [new("pad", Amf0Value.FromString(new string('x', 5000)))]).ToMessage());
             Pump();
             clientWriter.Write(toServer, RtmpCommand.ChunkStreamId, RtmpCommand.CreateStream(2).ToMessage());
             Pump();

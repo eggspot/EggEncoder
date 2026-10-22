@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 using EggEncoder.Live.Rtmp;
+using EggEncoder.Live.Rtmp.Amf0;
 
 namespace EggEncoder.UnitTests.Live.Rtmp
 {
@@ -77,7 +78,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                     default:
                         if (command.TransactionId > 0)
                         {
-                            writer.Write(output, RtmpCommand.ChunkStreamId, RtmpCommand.Result(command.TransactionId, null, Amf0Undefined).ToMessage());
+                            writer.Write(output, RtmpCommand.ChunkStreamId, RtmpCommand.Result(command.TransactionId, null, Amf0Value.Undefined).ToMessage());
                         }
 
                         break;
@@ -107,8 +108,6 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 }
             }
         });
-
-        private static EggEncoder.Live.Rtmp.Amf0.Amf0Value Amf0Undefined => EggEncoder.Live.Rtmp.Amf0.Amf0Value.Undefined;
 
         public void Dispose() => _listener.Stop();
     }

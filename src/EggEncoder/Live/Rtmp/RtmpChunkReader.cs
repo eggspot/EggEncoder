@@ -23,7 +23,9 @@ namespace EggEncoder.Live.Rtmp
     /// repeats the previous delta (0 after a type 0 header). A value of 0xFFFFFF means a 32-bit
     /// extended timestamp follows; the continuation chunks of such a message repeat it, as the
     /// specification requires, but a continuation that omits it (some older publishers do) is also
-    /// read correctly, by checking whether its next four bytes equal the extended value.
+    /// read correctly, by checking whether its next four bytes equal the extended value (so such a
+    /// continuation is only reported once four bytes past its header have arrived, and one whose
+    /// payload happens to start with exactly those four bytes would be misread).
     /// </para>
     /// <para>
     /// Bounds (<see cref="RtmpChunkReaderOptions"/>): a chunk size, message length, chunk stream count

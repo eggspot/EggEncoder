@@ -31,6 +31,10 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             using var process = Process.Start(startInfo)!;
             var errors = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+
+            // Checked before awaiting the receiver: if ffmpeg never connected, the receiver would
+            // still be waiting in Accept (disposing it stops the listener).
+            process.ExitCode.Should().Be(0, errors);
             await receive;
 
             var capturePath = Environment.GetEnvironmentVariable("EGGENCODER_RTMP_CAPTURE_PATH");
@@ -39,7 +43,6 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 File.WriteAllBytes(capturePath, receiver.ClientBytes.ToArray());
             }
 
-            process.ExitCode.Should().Be(0, errors);
             RtmpFfmpegCaptureTest.AssertPublishSession(receiver.Messages);
         }
     }

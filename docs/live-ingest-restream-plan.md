@@ -419,7 +419,7 @@ the server (item 4) and the client (item 6).
   extended timestamp truncated, type-1 header on a never-started chunk stream, AMF nesting past
   the limit, a string length past the end) end in a typed `RtmpProtocolException`.
 
-**Status**: not started.
+**Status**: done ([PR #140](https://github.com/eggspot/EggEncoder/pull/140)). The capture is ffmpeg 9.0.2's (`src/EggEncoder.UnitTests/Live/Rtmp/ffmpeg_publish.bin`); no OBS capture yet (item 4's manual OBS check covers it). ffmpeg completes the simple handshake, so no digest handshake was implemented. The AMF0 bounds stay `Amf0Reader` constants equal to the defaults above; the chunk-level bounds are `RtmpChunkReaderOptions`, for item 4's server options to embed. `RtmpProtocolException` is an `IOException` (`InvalidDataException` is sealed). Interleaving is covered on read (hand-built chunks); `RtmpChunkWriter` writes each message whole.
 
 ## 4. RTMP server / ingest
 
