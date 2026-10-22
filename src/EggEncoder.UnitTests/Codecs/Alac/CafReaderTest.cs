@@ -259,6 +259,39 @@ namespace EggEncoder.UnitTests.Codecs.Alac
             }
         }
 
+        [Theory]
+        [InlineData(0x7FFFFFFFFFFFFFF0L)] // chunkDataStart + size overflowed to a negative position
+        [InlineData(0x00000000F0000000L)] // past int.MaxValue: MemoryStream's own Position setter threw
+        public void Open_Stream_WithIntermediateChunkSizePastEndOfStream_Should_ThrowInvalidDataException(long freeChunkSize)
+        {
+            // An oversized 'free' chunk swallows everything after it, so the walk ends cleanly and
+            // the missing 'kuki' chunk is reported -- the same outcome a FileStream source already had.
+            using var stream = new MemoryStream(BuildFileHeader()
+                .Concat(BuildDescChunk("alac"))
+                .Concat(BuildChunk("free", new byte[16], sizeOverride: freeChunkSize))
+                .Concat(BuildKukiChunk())
+                .Concat(BuildPaktChunk([3]))
+                .Concat(BuildDataChunk([1, 2, 3], useUnknownSize: false))
+                .ToArray());
+
+            var act = () => CafReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*missing a 'kuki' chunk*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithNegativeNonDataChunkSize_Should_ThrowInvalidDataException()
+        {
+            using var stream = new MemoryStream(BuildFileHeader()
+                .Concat(BuildDescChunk("alac"))
+                .Concat(BuildChunk("free", new byte[16], sizeOverride: -1))
+                .ToArray());
+
+            var act = () => CafReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*'free' chunk with a negative size*");
+        }
+
         private static string WriteBytes(byte[] bytes)
         {
             var filePath = Path.Combine(Path.GetTempPath(), $"caf_reader_{Guid.NewGuid():N}.caf");

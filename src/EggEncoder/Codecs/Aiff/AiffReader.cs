@@ -93,7 +93,10 @@ namespace EggEncoder.Codecs.Aiff
                 _ima4PendingSamples = new int[Ima4Decoder.SamplesPerChannelSubBlock * channels];
             }
 
-            _stream.Seek(sampleDataStart, SeekOrigin.Begin);
+            // Clamped for the same reason the chunk walk's own skip is: a truncated file can declare
+            // SSND data starting past EOF, which should read as zero samples (as it already does
+            // through a FileStream) rather than throw from a MemoryStream seek.
+            _stream.Seek(Math.Min(sampleDataStart, _stream.Length), SeekOrigin.Begin);
         }
 
         public int Channels { get; }
@@ -220,6 +223,13 @@ namespace EggEncoder.Codecs.Aiff
                     else if (chunkId == "SSND")
                     {
                         var offset = BinaryPrimitives.ReverseEndianness(reader.ReadUInt32());
+                        if (chunkSize < 8 || offset > chunkSize - 8)
+                        {
+                            // Both fields are uint32, so without this check chunkSize - 8 - offset
+                            // below wraps around to a huge sample data length.
+                            throw new InvalidDataException($"'{filePath}' has an 'SSND' chunk of {chunkSize} bytes, too small for its own 8-byte header plus a declared offset of {offset}");
+                        }
+
                         reader.ReadUInt32(); // blockSize -- always 0 for every compressionType this reader supports (none of them are block-structured)
                         sampleDataStart = chunkDataStart + 8 + offset;
                         sampleDataLength = chunkSize - 8 - offset;
@@ -231,14 +241,16 @@ namespace EggEncoder.Codecs.Aiff
                     // tag content entirely (the generic skip-to-next-chunk logic below still
                     // advances past it correctly, using uint/long arithmetic that never needs the
                     // cast) rather than risking the BCL's own ArgumentOutOfRangeException from a
-                    // negative-after-overflow ReadBytes count.
-                    else if (chunkId is "NAME" or "AUTH" or "(c) " && chunkSize <= int.MaxValue)
+                    // negative-after-overflow ReadBytes count. The size is also checked against
+                    // the bytes actually left in the stream, since ReadBytes allocates its full
+                    // count up front -- a corrupted size would otherwise demand a multi-GB buffer.
+                    else if (chunkId is "NAME" or "AUTH" or "(c) " && chunkSize <= int.MaxValue && chunkSize <= stream.Length - chunkDataStart)
                     {
                         var textBytes = reader.ReadBytes((int)chunkSize);
                         tags ??= [];
                         tags[chunkId] = Encoding.UTF8.GetString(textBytes).TrimEnd('\0');
                     }
-                    else if (chunkId == "ID3 " && chunkSize <= int.MaxValue)
+                    else if (chunkId == "ID3 " && chunkSize <= int.MaxValue && chunkSize <= stream.Length - chunkDataStart)
                     {
                         var id3Bytes = reader.ReadBytes((int)chunkSize);
                         using var id3Stream = new MemoryStream(id3Bytes);
@@ -252,8 +264,9 @@ namespace EggEncoder.Codecs.Aiff
                         }
                     }
 
+                    // Clamped to the stream's length -- see WavReader's own identical chunk walk.
                     var paddedChunkSize = chunkSize + (chunkSize % 2);
-                    stream.Position = chunkDataStart + paddedChunkSize;
+                    stream.Position = Math.Min(chunkDataStart + paddedChunkSize, stream.Length);
                 }
 
                 if (channels is null || totalSampleFrames is null || bitsPerSample is null || sampleRate is null)

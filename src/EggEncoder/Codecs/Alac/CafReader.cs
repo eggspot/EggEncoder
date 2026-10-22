@@ -119,7 +119,15 @@ namespace EggEncoder.Codecs.Alac
                         break;
                     }
 
-                    stream.Position = chunkDataStart + chunkSize;
+                    if (chunkSize < 0)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a '{chunkType}' chunk with a negative size ({chunkSize}); only the 'data' chunk may use -1");
+                    }
+
+                    // Clamped to the stream's length (compared by subtraction, since chunkSize is a
+                    // full int64 and chunkDataStart + chunkSize can overflow) -- see WavReader's own
+                    // identical chunk walk for why a past-EOF position must not reach a MemoryStream.
+                    stream.Position = chunkSize > stream.Length - chunkDataStart ? stream.Length : chunkDataStart + chunkSize;
                 }
 
                 if (!sawDescChunk)
