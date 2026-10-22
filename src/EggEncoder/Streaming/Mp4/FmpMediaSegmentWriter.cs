@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Media;
 
@@ -332,23 +333,22 @@ namespace EggEncoder.Streaming.Mp4
             // sits at moof's own total size (the base) plus its offset; the first track's first
             // sample immediately follows mdat's own 8-byte box header, and each later track's
             // samples follow the earlier tracks' in mdat.
-            var dataOffset = (long)(moof.Length - moofSizeFieldOffset) + 8;
+            var moofSize = moof.Length - moofSizeFieldOffset;
+            var payloadLength = 0L;
             for (var f = 0; f < fragments.Count; f++)
             {
-                moof.PatchUInt32(dataOffsetFieldOffsets[f], checked((uint)dataOffset));
+                moof.PatchUInt32(dataOffsetFieldOffsets[f], checked((uint)(moofSize + 8 + payloadLength)));
                 foreach (var sample in fragments[f].Samples)
                 {
-                    dataOffset += sample.Payload.Length;
+                    payloadLength += sample.Payload.Length;
                 }
             }
 
-            var segment = new Mp4BoxBuilder();
-            segment.WriteBytes(moof.ToArray());
-            segment.WriteBox("mdat", BuildMdatContent(fragments));
+            var segment = AppendMdat(moof.ToArray(), fragments, payloadLength);
 
             _nextSequenceNumber++;
 
-            return segment.ToArray();
+            return segment;
         }
 
         private byte[] BuildMfhdContent()
@@ -375,29 +375,27 @@ namespace EggEncoder.Streaming.Mp4
                 .ToArray();
         }
 
-        private static byte[] BuildMdatContent(IReadOnlyList<TrackFragment> fragments)
+        // The payloads (megabytes per segment, for video) are copied once, straight into the
+        // segment, rather than through Mp4BoxBuilder.
+        private static byte[] AppendMdat(byte[] moof, IReadOnlyList<TrackFragment> fragments, long payloadLength)
         {
-            var totalLength = 0L;
-            foreach (var fragment in fragments)
-            {
-                foreach (var sample in fragment.Samples)
-                {
-                    totalLength += sample.Payload.Length;
-                }
-            }
+            var mdatSize = checked((uint)(8 + payloadLength));
+            var segment = new byte[checked(moof.Length + (int)mdatSize)];
+            moof.CopyTo(segment, 0);
+            BinaryPrimitives.WriteUInt32BigEndian(segment.AsSpan(moof.Length), mdatSize);
+            "mdat"u8.CopyTo(segment.AsSpan(moof.Length + 4));
 
-            var content = new byte[checked((int)totalLength)];
-            var offset = 0;
+            var offset = moof.Length + 8;
             foreach (var fragment in fragments)
             {
                 foreach (var sample in fragment.Samples)
                 {
-                    sample.Payload.Span.CopyTo(content.AsSpan(offset));
+                    sample.Payload.Span.CopyTo(segment.AsSpan(offset));
                     offset += sample.Payload.Length;
                 }
             }
 
-            return content;
+            return segment;
         }
 
         private static long SumSampleCounts(IReadOnlyList<Mp4EncodedFrame> frames)
