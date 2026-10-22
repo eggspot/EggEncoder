@@ -13,10 +13,15 @@ namespace EggEncoder.Media
     /// <param name="SequenceParameterSets">SPS NAL units, each with its NAL header byte.</param>
     /// <param name="PictureParameterSets">PPS NAL units, each with its NAL header byte.</param>
     /// <param name="HighProfileExtension">
-    /// The chroma format / bit depth / SPS-extension fields the record carries for the high profiles
-    /// (100, 110, 122, 144), or <c>null</c> when the record ends after its PPS list (allowed for
-    /// those profiles too, by encoders predating that extension).
+    /// The chroma format / bit depth / SPS-extension fields the record carries for every profile other
+    /// than Baseline, Main and Extended (66, 77, 88), as current editions of ISO/IEC 14496-15 specify
+    /// (the first edition listed only 100, 110, 122 and 144); <c>null</c> when the record ends after
+    /// its PPS list, which encoders predating that extension still write.
     /// </param>
+    /// <remarks>
+    /// Record equality compares the NAL unit lists by reference, not by contents; compare
+    /// <see cref="ToArray"/> output to test two records for byte equality.
+    /// </remarks>
     public sealed record AvcDecoderConfigurationRecord(
         int ProfileIndication,
         int ProfileCompatibility,
@@ -58,7 +63,7 @@ namespace EggEncoder.Media
             var pps = reader.ReadNalUnits(reader.ReadByte());
 
             AvcHighProfileExtension? extension = null;
-            if (!reader.AtEnd && profile is 100 or 110 or 122 or 144)
+            if (!reader.AtEnd && profile is not (66 or 77 or 88))
             {
                 var chromaFormat = reader.ReadByte() & 0x03;
                 var bitDepthLuma = (reader.ReadByte() & 0x07) + 8;

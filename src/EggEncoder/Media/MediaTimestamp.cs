@@ -10,7 +10,8 @@ namespace EggEncoder.Media
         /// <summary>
         /// <c>value * toTimescale / fromTimescale</c>, rounded half to even. The intermediate product is
         /// 128-bit, so it never overflows; a result that doesn't fit in a <see cref="long"/> throws
-        /// <see cref="OverflowException"/> rather than wrapping.
+        /// <see cref="OverflowException"/> rather than wrapping. Note ffmpeg's default rounding is half
+        /// away from zero, so at an exact half this can differ from an ffmpeg-computed value by one tick.
         /// </summary>
         public static long Rescale(long value, int fromTimescale, int toTimescale)
         {

@@ -18,6 +18,10 @@ namespace EggEncoder.Media
     /// <param name="TemporalIdNested">temporalIdNested.</param>
     /// <param name="NalLengthSize">Bytes per NAL length prefix in this track's packets: 1, 2 or 4.</param>
     /// <param name="Arrays">The parameter-set arrays (VPS, SPS, PPS, SEI), in record order.</param>
+    /// <remarks>
+    /// Record equality compares <see cref="Arrays"/> by reference, not by contents; compare
+    /// <see cref="ToArray"/> output to test two records for byte equality.
+    /// </remarks>
     public sealed record HevcDecoderConfigurationRecord(
         HevcProfileTierLevel ProfileTierLevel,
         int MinSpatialSegmentationIdc,

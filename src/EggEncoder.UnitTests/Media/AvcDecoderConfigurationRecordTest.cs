@@ -68,9 +68,12 @@ namespace EggEncoder.UnitTests.Media
         [InlineData(110, true)]
         [InlineData(122, true)]
         [InlineData(144, true)]
+        [InlineData(244, true)]
+        [InlineData(118, true)]
+        [InlineData(66, false)]
         [InlineData(77, false)]
-        [InlineData(244, false)]
-        public void Parse_TrailingBytes_Should_Be_The_Extension_Only_For_Its_Four_Profiles(int profile, bool hasExtension)
+        [InlineData(88, false)]
+        public void Parse_TrailingBytes_Should_Be_The_Extension_For_Every_Profile_But_66_77_88(int profile, bool hasExtension)
         {
             byte[] avcC = [1, (byte)profile, 0, 30, 0xFF, 0xE1, 0, 1, 0x67, 1, 0, 1, 0x68, 0xFD, 0xF9, 0xFA, 0];
 

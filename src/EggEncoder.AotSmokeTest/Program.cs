@@ -38,7 +38,8 @@ try
         if (sps.Width != 1920 || sps.Height != 1080 || sps.CodecsString != "avc1.640028"
             || !record.ToArray().AsSpan().SequenceEqual(avcC)
             || !EggEncoder.Media.AnnexBConverter.ToLengthPrefixed(annexB).AsSpan().SequenceEqual(accessUnit)
-            || EggEncoder.Media.MediaTimestamp.Rescale(1024, 44100, 90000) != 2090)
+            || EggEncoder.Media.MediaTimestamp.Rescale(1024, 44100, 90000) != 2090
+            || !HevcCheckPasses())
         {
             throw new InvalidOperationException("Media packet model check produced unexpected results");
         }
@@ -63,4 +64,13 @@ static async Task RunCheck(string name, Func<Task> action)
 {
     Console.WriteLine($"-> {name}");
     await action();
+}
+
+static bool HevcCheckPasses()
+{
+    var hvcC = Convert.FromHexString("01016000000090000000000078f000fcfdf8f800000f03a00001001840010c01ffff016000000300900000030000030078959809a10001002a420101016000000300900000030000030078a003c08010e596566924caf0168080000003008000000c84a2000100074401c172b46240");
+    var record = EggEncoder.Media.HevcDecoderConfigurationRecord.Parse(hvcC);
+    var sps = EggEncoder.Media.H265SpsParser.Parse(record.GetNalUnits(EggEncoder.Media.HevcDecoderConfigurationRecord.SpsNalUnitType)[0].Span);
+    return sps.Width == 1920 && sps.Height == 1080 && sps.CodecsString == "hvc1.1.6.L120.90"
+        && record.ToArray().AsSpan().SequenceEqual(hvcC);
 }
