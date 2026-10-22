@@ -34,5 +34,15 @@ namespace EggEncoder.UnitTests.Media
             new HevcProfileTierLevel(2, false, 1, 0x40000000, 0x900001000000, 60).ToCodecsString()
                 .Should().Be("hvc1.B1.2.L60.90.0.1");
         }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void ToCodecsString_NullOrEmptyFourCc_Should_Throw(string? fourCc)
+        {
+            var act = () => new HevcProfileTierLevel(0, false, 1, 0, 0, 30).ToCodecsString(fourCc!);
+
+            act.Should().Throw<ArgumentException>();
+        }
     }
 }

@@ -93,6 +93,21 @@ namespace EggEncoder.UnitTests.Media
         }
 
         [Fact]
+        public void MediaTrackSet_Equality_Should_Compare_Tracks_In_Order()
+        {
+            var video = VideoTrack();
+            var audio = AudioTrack();
+
+            var set = new MediaTrackSet([video, audio]);
+
+            set.Should().Be(new MediaTrackSet([video, audio]));
+            set.GetHashCode().Should().Be(new MediaTrackSet([video, audio]).GetHashCode());
+            set.Should().NotBe(new MediaTrackSet([audio, video]));
+            set.Should().NotBe(new MediaTrackSet([video]));
+            set.Equals(null).Should().BeFalse();
+        }
+
+        [Fact]
         public void MediaTrackSet_Empty_Should_Be_Allowed()
         {
             new MediaTrackSet([]).Tracks.Should().BeEmpty();

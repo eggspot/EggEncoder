@@ -27,8 +27,11 @@ namespace EggEncoder.Media
         /// letter + profile, the compatibility flags bit-reversed in hex, tier letter + level, then
         /// each constraint byte in hex with trailing zero bytes omitted.
         /// </summary>
+        /// <param name="sampleEntryFourCc">The sample entry type: <c>hvc1</c> (parameter sets only in the configuration record) or <c>hev1</c> (also in band).</param>
         public string ToCodecsString(string sampleEntryFourCc = "hvc1")
         {
+            ArgumentException.ThrowIfNullOrEmpty(sampleEntryFourCc);
+
             var builder = new StringBuilder(sampleEntryFourCc).Append('.');
             if (ProfileSpace > 0)
             {

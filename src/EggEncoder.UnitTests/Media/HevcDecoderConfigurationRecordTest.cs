@@ -97,9 +97,9 @@ namespace EggEncoder.UnitTests.Media
             { [.. Header(lengthSizeByte: 0x0E), 0], "*lengthSizeMinusOne of 2*" },
             { [.. Header(), 0], "*no sequence parameter set*" },
             { [.. Header(), 1, 0xA0, 0, 1, 0, 2, 0x40, 0x01], "*no sequence parameter set*" },
-            { [.. Header(), 1, 0xA1, 0, 1, 0, 0], "*zero-length NAL unit*" },
+            { [.. Header(), 1, 0xA1, 0, 1, 0, 0, 0x42], "*zero-length NAL unit*" },
             { [.. Header(), 1, 0xA1, 0, 1, 0, 9, 0x42], "*truncated*" },
-            { [.. Header(), 1, 0xA1, 0xFF, 0xFF, 0, 1, 0x42], "*truncated*" },
+            { [.. Header(), 1, 0xA1, 0xFF, 0xFF, 0, 1, 0x42], "*65535 NAL units can't fit in the 3 bytes left*" },
             { [.. Header(), 2, 0xA1, 0, 1, 0, 1, 0x42], "*truncated*" }
         };
 

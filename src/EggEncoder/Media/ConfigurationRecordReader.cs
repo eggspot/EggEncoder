@@ -49,6 +49,13 @@ namespace EggEncoder.Media
         // `count` NAL units, each a 16-bit length then that many bytes; copied out.
         public IReadOnlyList<ReadOnlyMemory<byte>> ReadNalUnits(int count)
         {
+            // Each NAL unit takes at least 3 bytes (a 2-byte length and a non-empty body), so a
+            // count the remaining bytes can't hold is rejected before anything is allocated for it.
+            if ((long)count * 3 > _data.Length - _position)
+            {
+                throw new InvalidDataException($"{_what} is truncated: {count} NAL units can't fit in the {_data.Length - _position} bytes left");
+            }
+
             var nalUnits = new ReadOnlyMemory<byte>[count];
             for (var i = 0; i < count; i++)
             {
@@ -73,78 +80,5 @@ namespace EggEncoder.Media
                 throw new InvalidDataException($"{_what} is truncated at offset {_position}");
             }
         }
-    }
-
-    // The serializing counterpart of ConfigurationRecordReader.
-    internal sealed class ConfigurationRecordWriter
-    {
-        private readonly MemoryStream _buffer = new();
-        private readonly string _what;
-
-        public ConfigurationRecordWriter(string what)
-        {
-            _what = what;
-        }
-
-        public void WriteByte(int value)
-        {
-            if (value is < 0 or > 0xFF)
-            {
-                throw new InvalidOperationException($"{_what}: byte field value {value} is out of range");
-            }
-
-            _buffer.WriteByte((byte)value);
-        }
-
-        public void WriteUInt16(int value)
-        {
-            if (value is < 0 or > 0xFFFF)
-            {
-                throw new InvalidOperationException($"{_what}: 16-bit field value {value} is out of range");
-            }
-
-            _buffer.WriteByte((byte)(value >> 8));
-            _buffer.WriteByte((byte)value);
-        }
-
-        public void WriteBigEndian(ulong value, int byteCount)
-        {
-            for (var i = byteCount - 1; i >= 0; i--)
-            {
-                _buffer.WriteByte((byte)(value >> (8 * i)));
-            }
-        }
-
-        // A count (in the low `countBits` bits of one byte, OR'd with `countPrefix`), then each
-        // NAL unit as a 16-bit length and its bytes.
-        public void WriteNalUnits(IReadOnlyList<ReadOnlyMemory<byte>> nalUnits, int countBits, int countPrefix, int minimumCount)
-        {
-            ArgumentNullException.ThrowIfNull(nalUnits);
-            var maxCount = (1 << countBits) - 1;
-            if (nalUnits.Count < minimumCount || nalUnits.Count > maxCount)
-            {
-                throw new InvalidOperationException($"{_what}: NAL unit count {nalUnits.Count} must be {minimumCount}-{maxCount}");
-            }
-
-            WriteByte(countPrefix | nalUnits.Count);
-            WriteNalUnitList(nalUnits);
-        }
-
-        // Each NAL unit as a 16-bit length and its bytes, no count.
-        public void WriteNalUnitList(IReadOnlyList<ReadOnlyMemory<byte>> nalUnits)
-        {
-            foreach (var nalUnit in nalUnits)
-            {
-                if (nalUnit.Length is 0 or > 0xFFFF)
-                {
-                    throw new InvalidOperationException($"{_what}: NAL unit length {nalUnit.Length} must be 1-65535");
-                }
-
-                WriteUInt16(nalUnit.Length);
-                _buffer.Write(nalUnit.Span);
-            }
-        }
-
-        public byte[] ToArray() => _buffer.ToArray();
     }
 }

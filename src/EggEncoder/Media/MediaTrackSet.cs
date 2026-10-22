@@ -31,6 +31,21 @@ namespace EggEncoder.Media
         /// <summary>The tracks, in the order given. A defensive copy: later changes to the caller's list don't show here.</summary>
         public IReadOnlyList<MediaTrackInfo> Tracks { get; }
 
+        /// <summary>Two sets are equal when they hold equal tracks in the same order.</summary>
+        public bool Equals(MediaTrackSet? other) =>
+            other is not null && Tracks.SequenceEqual(other.Tracks);
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            foreach (var track in Tracks)
+            {
+                hash.Add(track);
+            }
+
+            return hash.ToHashCode();
+        }
+
         /// <summary>The track with this id, or <c>null</c> if the set has none.</summary>
         public MediaTrackInfo? FindTrack(int trackId)
         {
