@@ -254,8 +254,10 @@ defaults every network-facing item must meet.
   `ArgumentException` before anything is written (a failed call leaves the writer unchanged): unknown
   track, `ConfigVersion` mismatch (config changes are item 5c's), negative or not strictly
   increasing DTS per track (across segments too), composition offsets or durations past 32 bits.
-  Calling the other mode's overload throws `InvalidOperationException`; the frame mode's bytes are
-  unchanged. Cross-checked by the `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`
+  Calling the other mode's overload throws `InvalidOperationException`. The frame mode's bytes are
+  unchanged up to 65,535 Hz; above that `mp4a`'s 16.16 samplerate is now written as 0, as ffmpeg
+  does (it used to wrap), and an AudioSpecificConfig channelConfiguration of 0 (a PCE layout) writes
+  channelcount 2. Cross-checked by the `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`
   run on init + segments made from the `h264_aac.flv` fixture.
 - `Streaming.IStreamingSink` (`Streaming/IStreamingSink.cs`) -- an I/O-agnostic HLS output
   destination (init segment, media segments, a playlist rewritten on every change, and segment

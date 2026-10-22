@@ -120,6 +120,10 @@ namespace EggEncoder.Streaming.Mp4
                         throw new ArgumentException($"AAC track {track.TrackId} has no usable sample rate.", TracksParameter);
                     }
 
+                    // channelConfiguration 0 means the layout lives in a program config element;
+                    // mp4a's channelcount then says 2, as ffmpeg writes it.
+                    channels = channels == 0 ? 2 : channels;
+
                     return new InitTrack(mp4TrackId, MediaKind.Audio, "mp4a", track.Timescale, configuration, sampleRate, RequireUInt16(track, channels), 0, 0);
                 }
 

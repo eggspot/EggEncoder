@@ -194,6 +194,29 @@ namespace EggEncoder.UnitTests.Streaming.Mp4
         }
 
         [Fact]
+        public void BuildInitSegment_FrameModeAt96000Hz_Should_Write_Zero_SampleRate_Not_A_Wrapped_One()
+        {
+            using var stream = new MemoryStream(FmpInitSegmentWriter.BuildInitSegment(1, 96000));
+            var audio = ReadSingleTrak(stream);
+
+            ReadUInt32(stream, audio.SampleEntryContentStart + 24).Should().Be(0, "96000 << 16 used to wrap to 0x77000000");
+            audio.Timescale.Should().Be(96000);
+        }
+
+        [Fact]
+        public void BuildInitSegment_AacConfigWithChannelConfigurationZero_Should_Write_Two_Channels()
+        {
+            // AAC-LC, 44100 Hz, channelConfiguration 0 (the layout is in a program config element).
+            byte[] config = [0x12, 0x00];
+            var track = new MediaTrackInfo(0, MediaKind.Audio, MediaCodec.Aac, 44100, config, 0);
+
+            using var stream = new MemoryStream(FmpInitSegmentWriter.BuildInitSegment(new MediaTrackSet([track])));
+            var audio = ReadSingleTrak(stream);
+
+            ReadUInt16(stream, audio.SampleEntryContentStart + 16).Should().Be(2);
+        }
+
+        [Fact]
         public void BuildInitSegment_Null_Should_Throw()
         {
             var act = () => FmpInitSegmentWriter.BuildInitSegment((MediaTrackSet)null!);

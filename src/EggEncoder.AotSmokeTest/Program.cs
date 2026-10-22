@@ -99,7 +99,7 @@ try
         // video payloads, then the audio one.
         var initHex = Convert.ToHexString(init);
         if (!initHex.Contains(Convert.ToHexString("avcC"u8))
-            ||!initHex.Contains("0040000000400000") // tkhd width/height: 64 << 16
+            || !initHex.Contains("0040000000400000") // tkhd width/height: 64 << 16
             || !Convert.ToHexString(segment).EndsWith("0000000165" + "0000000141" + "21"))
         {
             throw new InvalidOperationException("fMP4 packet mode produced unexpected results");
