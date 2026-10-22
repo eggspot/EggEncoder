@@ -30,7 +30,9 @@ namespace EggEncoder.Live.Rtmp
         private readonly RtmpChunkWriter _writer = new();
         private readonly ArrayBufferWriter<byte> _output = new();
         private readonly List<RtmpMessage> _incoming = [];
-        private readonly List<(MediaTrackSet? Tracks, MediaPacket Packet)> _produced = [];
+        // Demuxed entries not yet handed to the ingest stream; an entry leaves only once it is queued,
+        // so a stall that interrupts a batch never queues anything twice.
+        private readonly Queue<(MediaTrackSet? Tracks, MediaPacket Packet)> _produced = new();
         private readonly FlvTagDemuxer _tags;
 
         private IReadOnlyList<KeyValuePair<string, Amf0Value>>? _connectProperties;
@@ -52,7 +54,7 @@ namespace EggEncoder.Live.Rtmp
             _remoteEndPoint = TryGetRemoteEndPoint(socket);
             _timeout = new CancellationTokenSource(Timeout.InfiniteTimeSpan, _options.TimeProvider);
             _stall = new CancellationTokenSource(Timeout.InfiniteTimeSpan, _options.TimeProvider);
-            _tags = new FlvTagDemuxer(tracks => _produced.Add((tracks, default)), packet => _produced.Add((null, packet)));
+            _tags = new FlvTagDemuxer(tracks => _produced.Enqueue((tracks, default)), packet => _produced.Enqueue((null, packet)));
         }
 
         /// <summary>Ends the connection from outside (the ingest stream was disposed, or the server is stopping).</summary>
@@ -115,11 +117,18 @@ namespace EggEncoder.Live.Rtmp
             finally
             {
                 EndPublish(error);
-                if (stream is not null)
+                try
                 {
-                    await stream.DisposeAsync().ConfigureAwait(false);
+                    if (stream is not null)
+                    {
+                        await stream.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
-                else
+                catch (Exception e) when (e is IOException or SocketException or ObjectDisposedException)
+                {
+                    // Closing a connection that is already broken.
+                }
+                finally
                 {
                     _socket.Dispose();
                 }
@@ -372,13 +381,14 @@ namespace EggEncoder.Live.Rtmp
             // pauses and the stall timer runs instead.
             _timeout.CancelAfter(Timeout.InfiniteTimeSpan);
             _stall.CancelAfter(_options.ConsumerStallTimeout);
-            foreach (var (tracks, packet) in _produced)
+            while (_produced.TryPeek(out var entry))
             {
-                await _ingest!.EnqueueAsync(tracks, packet, _stall.Token).ConfigureAwait(false);
+                await _ingest!.EnqueueAsync(entry.Tracks, entry.Packet, _stall.Token).ConfigureAwait(false);
+                _produced.Dequeue();
             }
 
             _stall.CancelAfter(Timeout.InfiniteTimeSpan);
-            _produced.Clear();
+            _timeout.CancelAfter(_options.IdleTimeout);
         }
 
         // Metadata naming neither codec says nothing about the tracks, so both are expected.
@@ -401,9 +411,9 @@ namespace EggEncoder.Live.Rtmp
                 // Packets still held for a missing sequence header, and any a stalled enqueue left
                 // behind, go to the consumer before the end (bounded by FlvDemuxer.MaxPendingPackets).
                 _tags.Complete();
-                foreach (var (tracks, packet) in _produced)
+                while (_produced.TryDequeue(out var entry))
                 {
-                    _ingest.EnqueueUnbounded(tracks, packet);
+                    _ingest.EnqueueUnbounded(entry.Tracks, entry.Packet);
                 }
             }
 

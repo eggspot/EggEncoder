@@ -29,6 +29,8 @@ namespace EggEncoder.Live.Rtmp
     /// </remarks>
     public sealed class RtmpServer : IAsyncDisposable
     {
+        private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(50);
+
         private readonly object _gate = new();
         private readonly HashSet<(string App, string Key)> _liveStreams = [];
         private readonly ConcurrentDictionary<RtmpServerConnection, Task> _connections = new();
@@ -183,7 +185,17 @@ namespace EggEncoder.Live.Rtmp
                 }
                 catch (SocketException)
                 {
-                    // A connection reset before it was accepted; keep listening.
+                    // A connection reset before it was accepted, or the process is out of sockets for
+                    // a moment: keep listening, without spinning on an error that repeats.
+                    try
+                    {
+                        await Task.Delay(AcceptRetryDelay, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
                     continue;
                 }
 

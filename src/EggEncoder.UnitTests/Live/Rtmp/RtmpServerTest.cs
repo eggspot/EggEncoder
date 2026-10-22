@@ -968,7 +968,8 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 var stream = await consumer.Started;
                 await stream.Completion.WaitAsync(TestTimeout);
 
-                // Everything read from the publisher before the stall still reaches a late reader.
+                // Everything read from the publisher before the stall still reaches a late reader,
+                // in order and exactly once: a prefix of the fixture's packets.
                 var packets = new List<MediaPacket>();
                 await foreach (var packet in stream.ReadPacketsAsync())
                 {
@@ -976,6 +977,41 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 }
 
                 packets.Should().NotBeEmpty();
+                var expected = FlvDemuxerTest.Demux(File.ReadAllBytes(FlvDemuxerTest.H264AacFixture)).Packets;
+                AssertSamePackets(packets, expected.Take(packets.Count).ToList());
+            }
+        }
+
+        [Fact]
+        public async Task Consumer_Stall_InTheMiddleOfAHeldBatch_Should_Queue_Every_Packet_Exactly_Once()
+        {
+            // No metadata, so both tracks are expected: the video frames are held until the audio
+            // sequence header, then released as one batch, which the full queue interrupts.
+            var time = new FakeTimeProvider();
+            await using var server = await StartAsync(AcceptAll(new RtmpServerOptions { TimeProvider = time, PacketQueueCapacity = 2 }));
+            var consumer = new Consumer(server, read: false);
+            var flv = new FlvTestBuilder()
+                .AvcSequenceHeader()
+                .AvcFrame(0, keyframe: true, compositionTime: 0, 0, 0, 0, 1, 0x65)
+                .AvcFrame(40, keyframe: false, compositionTime: 0, 0, 0, 0, 1, 0x41)
+                .AvcFrame(80, keyframe: false, compositionTime: 0, 0, 0, 0, 1, 0x41)
+                .AacSequenceHeader(80)
+                .ToArray();
+            var (publisher, _) = await RtmpTestPublisher.PublishAsync(server.LocalEndPoint!);
+            await using (publisher)
+            {
+                await publisher.SendFlvAsync(flv);
+
+                (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(10))).Should().BeTrue();
+                var stream = await consumer.Started;
+                await stream.Completion.WaitAsync(TestTimeout);
+                var packets = new List<MediaPacket>();
+                await foreach (var packet in stream.ReadPacketsAsync())
+                {
+                    packets.Add(packet);
+                }
+
+                AssertSamePackets(packets, FlvDemuxerTest.Demux(flv).Packets);
             }
         }
 
