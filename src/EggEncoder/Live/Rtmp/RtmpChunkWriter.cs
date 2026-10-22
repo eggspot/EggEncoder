@@ -14,7 +14,9 @@ namespace EggEncoder.Live.Rtmp
     /// <remarks>
     /// Header choice per chunk stream: type 0 for its first message, a different message stream id, or
     /// a timestamp that goes backwards; type 1 when the length or type changed; type 2 when only the
-    /// timestamp delta is new; type 3 when even the delta repeats the previous type 1/2 delta.
+    /// timestamp delta is new; type 3 when even the delta repeats the previous type 1/2 delta. A type 3
+    /// directly after a type 0 is never written, although the specification allows it (the type 0
+    /// timestamp then serves as the delta): peers disagree on how to read it.
     /// Timestamps and deltas of 0xFFFFFF or more use the extended timestamp field, repeated in every
     /// continuation chunk of that message.
     /// </remarks>

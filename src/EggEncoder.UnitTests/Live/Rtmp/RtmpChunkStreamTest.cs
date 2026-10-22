@@ -292,13 +292,25 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 Header(1, 4, 5, 1, 9), [9],
                 Header(3, 4), [10]);
 
+            // Directly after a type 0 header, its timestamp is the delta (the specification's own
+            // type 3 description), so the second message is at 2000.
             Read(bytes).Select(m => (m.Timestamp, m.Type)).Should().Equal(
                 (1000u, RtmpMessageType.Audio),
-                (1000u, RtmpMessageType.Audio),
-                (1020u, RtmpMessageType.Audio),
-                (1040u, RtmpMessageType.Audio),
-                (1045u, RtmpMessageType.Video),
-                (1050u, RtmpMessageType.Video));
+                (2000u, RtmpMessageType.Audio),
+                (2020u, RtmpMessageType.Audio),
+                (2040u, RtmpMessageType.Audio),
+                (2045u, RtmpMessageType.Video),
+                (2050u, RtmpMessageType.Video));
+        }
+
+        [Fact]
+        public void Reader_Type3AfterExtendedType0_Should_Read_The_Extended_Field_And_Use_It_As_The_Delta()
+        {
+            var bytes = Concat(
+                Header(0, 4, 0xFFFFFF, 1, 9, 1), UInt32(0x01000000), [1],
+                Header(3, 4), UInt32(0x01000000), [2]);
+
+            Read(bytes).Select(m => m.Timestamp).Should().Equal(0x01000000u, 0x02000000u);
         }
 
         [Fact]
@@ -314,6 +326,42 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             ShouldMatch(Read(withRepeat), [expected]);
             ShouldMatch(Read(withoutRepeat), [expected]);
             ShouldMatch(Read(withoutRepeat, feedSize: 1), [expected]);
+        }
+
+        [Fact]
+        public void Reader_PeerThatOmitsTheRepeat_Should_Be_Read_That_Way_For_Every_Later_Continuation()
+        {
+            // The first continuation shows this peer omits the repeat; a later continuation whose
+            // payload happens to start with the extended value's bytes is then still payload.
+            var first = Payload(200, 5);
+            var second = Payload(200, 6);
+            UInt32(0x01020304).CopyTo(second, 128);
+            var bytes = Concat(
+                Header(0, 3, 0xFFFFFF, first.Length, 9, 1), UInt32(0x01020304), first[..128], Header(3, 3), first[128..],
+                Header(0, 3, 0xFFFFFF, second.Length, 9, 1), UInt32(0x01020304), second[..128], Header(3, 3), second[128..]);
+
+            ShouldMatch(Read(bytes),
+            [
+                new RtmpMessage(RtmpMessageType.Video, 1, 0x01020304, first),
+                new RtmpMessage(RtmpMessageType.Video, 1, 0x01020304, second)
+            ]);
+        }
+
+        [Fact]
+        public void Reader_PeerThatRepeats_Should_Consume_The_Field_On_Every_Later_Continuation()
+        {
+            // Once the peer is known to repeat the field, it is consumed even if its value differs.
+            var first = Payload(200, 7);
+            var second = Payload(200, 8);
+            var bytes = Concat(
+                Header(0, 3, 0xFFFFFF, first.Length, 9, 1), UInt32(0x01020304), first[..128], Header(3, 3), UInt32(0x01020304), first[128..],
+                Header(0, 3, 0xFFFFFF, second.Length, 9, 1), UInt32(0x01020305), second[..128], Header(3, 3), UInt32(0x0BADF00D), second[128..]);
+
+            ShouldMatch(Read(bytes, feedSize: 1),
+            [
+                new RtmpMessage(RtmpMessageType.Video, 1, 0x01020304, first),
+                new RtmpMessage(RtmpMessageType.Video, 1, 0x01020305, second)
+            ]);
         }
 
         [Fact]
@@ -334,8 +382,8 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
             var messages = Read(bytes);
 
-            messages.Should().HaveCount(2);
-            messages.Should().OnlyContain(m => m.Payload.IsEmpty && m.Timestamp == 7);
+            messages.Select(m => m.Timestamp).Should().Equal(7u, 14u);
+            messages.Should().OnlyContain(m => m.Payload.IsEmpty);
         }
 
         [Fact]

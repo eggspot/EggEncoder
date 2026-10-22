@@ -346,9 +346,11 @@ and client (item 6). `RtmpHandshake.CreateServer()`/`CreateClient()`: send `Star
 (6/8 = RTMPE and anything else throw `RtmpProtocolException`), echoes not compared byte for byte.
 `RtmpMessage(Type, StreamId, Timestamp, Payload)` record struct (`MaxPayloadLength` 0xFFFFFF;
 `RtmpMessageType` enum, unknown values kept). `RtmpChunkReader(onMessage, options)`: `Feed(span)`
-any size; message header types 0-3 (type 3 starting a message repeats the previous delta, 0 after
-a type 0), chunk stream ids 2-65599 (1/2/3-byte basic headers), extended timestamps (repeated on
-continuation chunks; an omitted repeat is detected and also read), interleaving across chunk
+any size; message header types 0-3 (type 3 starting a message repeats the previous delta; right
+after a type 0 the delta is that type 0 timestamp, per the spec), chunk stream ids 2-65599
+(1/2/3-byte basic headers), extended timestamps (repeated on continuation chunks; a peer that
+omits the repeat is detected on its first continuation and read that way from then on, per chunk
+stream; the writer always repeats it and never writes type 3 right after type 0), interleaving across chunk
 streams, zero-length messages; applies Set Chunk Size (`ChunkSize`), Abort and Window
 Acknowledgement Size (`AcknowledgementWindowSize`) itself, then reports every message;
 `TryTakeAcknowledgement(out sequenceNumber)` says when an Acknowledgement is due (`BytesReceived`).

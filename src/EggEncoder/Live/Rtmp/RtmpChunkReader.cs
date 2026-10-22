@@ -20,12 +20,16 @@ namespace EggEncoder.Live.Rtmp
     /// <para>
     /// Timestamps: a type 0 header carries the absolute timestamp, type 1 and 2 a delta from the
     /// previous message on the same chunk stream, and a type 3 header that starts a new message
-    /// repeats the previous delta (0 after a type 0 header). A value of 0xFFFFFF means a 32-bit
-    /// extended timestamp follows; the continuation chunks of such a message repeat it, as the
-    /// specification requires, but a continuation that omits it (some older publishers do) is also
-    /// read correctly, by checking whether its next four bytes equal the extended value (so such a
-    /// continuation is only reported once four bytes past its header have arrived, and one whose
-    /// payload happens to start with exactly those four bytes would be misread).
+    /// repeats the previous delta. Directly after a type 0 header that delta is the type 0
+    /// timestamp itself, as the specification's type 3 description says (a message at 20 followed
+    /// by a type 3 one puts the second at 40). A value of 0xFFFFFF means a 32-bit extended
+    /// timestamp follows. The continuation chunks of such a message repeat it, as the specification
+    /// requires, but some older publishers leave it out; the first continuation on a chunk stream
+    /// decides which kind of peer this is (its next four bytes either equal the extended value or
+    /// they are payload), and every later continuation on that chunk stream is read the same way.
+    /// Until that first decision, a continuation is only read once four bytes past its header have
+    /// arrived, and one from an omitting peer whose payload starts with exactly those four bytes
+    /// would be misread.
     /// </para>
     /// <para>
     /// Bounds (<see cref="RtmpChunkReaderOptions"/>): a chunk size, message length, chunk stream count
@@ -56,6 +60,10 @@ namespace EggEncoder.Live.Rtmp
             public uint StreamId;
             public bool HasExtendedTimestamp;
             public uint ExtendedTimestamp;
+
+            // Whether this peer repeats the extended timestamp on continuation chunks; null until
+            // the first such continuation shows it.
+            public bool? ContinuationRepeatsExtendedTimestamp;
 
             // Non-null while a message is being assembled on this chunk stream.
             public byte[]? Buffer;
@@ -213,7 +221,8 @@ namespace EggEncoder.Live.Rtmp
 
             var hasExtendedTimestamp = format <= 2 ? timestampField == ExtendedTimestampMarker : stream!.HasExtendedTimestamp;
             var extendedTimestamp = 0u;
-            if (hasExtendedTimestamp)
+            var repeatsExtendedTimestamp = stream?.ContinuationRepeatsExtendedTimestamp;
+            if (hasExtendedTimestamp && !(isContinuation && repeatsExtendedTimestamp == false))
             {
                 if (available.Length < position + 4)
                 {
@@ -221,7 +230,12 @@ namespace EggEncoder.Live.Rtmp
                 }
 
                 extendedTimestamp = BinaryPrimitives.ReadUInt32BigEndian(available[position..]);
-                if (!isContinuation || extendedTimestamp == stream!.ExtendedTimestamp)
+                if (isContinuation && repeatsExtendedTimestamp is null)
+                {
+                    repeatsExtendedTimestamp = extendedTimestamp == stream!.ExtendedTimestamp;
+                }
+
+                if (!isContinuation || repeatsExtendedTimestamp == true)
                 {
                     position += 4;
                 }
@@ -251,6 +265,11 @@ namespace EggEncoder.Live.Rtmp
             {
                 stream = new ChunkStream();
                 _chunkStreams.Add(chunkStreamId, stream);
+            }
+
+            if (isContinuation && hasExtendedTimestamp)
+            {
+                stream.ContinuationRepeatsExtendedTimestamp = repeatsExtendedTimestamp;
             }
 
             if (!isContinuation)
@@ -291,7 +310,7 @@ namespace EggEncoder.Live.Rtmp
             {
                 case 0:
                     stream.Timestamp = timestampValue;
-                    stream.TimestampDelta = 0;
+                    stream.TimestampDelta = timestampValue;
                     stream.StreamId = streamId;
                     break;
                 case 1:

@@ -137,15 +137,18 @@ version-3 handshake as a byte-level state machine for either side (`Start`, then
 is not compared byte for byte, since digest-handshake publishers don't echo exactly).
 `RtmpChunkReader` reassembles `RtmpMessage`s (`Type`, `StreamId`, 32-bit wrapping `Timestamp`,
 owned `Payload`) from an incremental `Feed`: header types 0-3 (a type 3 that starts a message
-repeats the previous delta, 0 after a type 0), chunk stream ids 2-65599, extended timestamps
-(continuations repeat them per the spec; an omitted repeat is detected by comparing the next four
-bytes with the extended value), interleaving across chunk streams; it applies Set Chunk Size,
+repeats the previous delta; right after a type 0 that delta is the type 0 timestamp, the spec's own
+reading, decided by research in PR #140), chunk stream ids 2-65599, extended timestamps
+(continuations repeat them per the spec; a peer that omits the repeat, as older librtmp/ffmpeg did,
+is detected on the first continuation by comparing the next four bytes with the extended value,
+and that decision is latched per chunk stream), interleaving across chunk streams; it applies Set Chunk Size,
 Abort and Window Acknowledgement Size itself (`TryTakeAcknowledgement` says when to ack) and still
 reports them. `RtmpChunkReaderOptions` holds the security-posture bounds (chunk size, message
 length, chunk stream count, buffered bytes; defaults and hard ceilings), checked before anything
 is allocated; buffers grow only as payload arrives. Every violation throws `RtmpProtocolException`
 (an `IOException`; `InvalidDataException` is sealed) and faults the reader. `RtmpChunkWriter`
-chooses the most compact header per chunk stream (type 0 when the timestamp goes backwards).
+chooses the most compact header per chunk stream (type 0 when the timestamp goes backwards; never
+a type 3 directly after a type 0, which peers read differently).
 `RtmpProtocolControl`/`RtmpUserControl` build and read control messages and events;
 `RtmpCommand` (AMF0 command, type 20; AMF0 errors wrapped) and `RtmpDataMessage` (type 18;
 `@setDataFrame`/`onMetaData` to `FlvMetadata`) build and read the NetConnection/NetStream flow.
