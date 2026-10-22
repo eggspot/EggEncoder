@@ -801,6 +801,48 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 }
 await writer.CompleteAsync(cancellationToken);</code></pre>
 
+      <h2 id="fmp4-packet-mode">Fragmented MP4 (fMP4/CMAF) from Packets</h2>
+      <p>Namespace: <code>EggEncoder.Streaming.Mp4</code>. Writes fragmented MP4 init and media segments, the format HLS and DASH serve, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5a of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the same two types also keep their original single mono AAC track mode (<code>BuildInitSegment(channels, sampleRate)</code> and <code>BuildMediaSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter uses today.</p>
+      <pre><code class="language-csharp">public static class FmpInitSegmentWriter
+{
+    public static byte[] BuildInitSegment(MediaTrackSet tracks); // ftyp + moov: avc1/avcC, hvc1/hvcC, mp4a/esds
+    public static byte[] BuildInitSegment(int channels, int sampleRate); // frame mode: one mono AAC-LC track
+}
+
+public sealed class FmpMediaSegmentWriter // stateful: one instance per rendition
+{
+    public FmpMediaSegmentWriter(MediaTrackSet tracks); // packet mode
+    public FmpMediaSegmentWriter();                     // frame mode
+    public byte[] BuildMediaSegment(IReadOnlyList&lt;MediaPacket&gt; packets, IReadOnlyDictionary&lt;int, long&gt;? nextDecodeTimes = null);
+    public byte[] BuildMediaSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt; frames);
+}</code></pre>
+      <p><strong>Init segment.</strong> One <code>trak</code> per track, in the set's order; a track's MP4 <code>track_ID</code> is its position plus one (ffmpeg's default; packet track ids may be 0), and its <code>mdhd</code> timescale is its own <code>Timescale</code>, so timestamps are written exactly as given. The avcC/hvcC and AudioSpecificConfig bytes are copied as-is (avcC/hvcC are validated first). A video track with unknown dimensions gets them from its SPS; an AAC track with an unknown sample rate or channel count gets them from its AudioSpecificConfig. AAC may be mono or stereo. MP3, Opus, AV1 and VP9 tracks throw <code>NotSupportedException</code>; an empty set, a missing or invalid codec configuration, or a dimension or channel count past 16 bits throws <code>ArgumentException</code>. No edit list is written.</p>
+      <p><strong>Media segments.</strong> One <code>moof</code> + <code>mdat</code> per call, with a <code>traf</code> for each track that has packets in it. Each <code>tfdt</code> is that track's first DTS in the segment, and each sample's duration is the next DTS of its track minus its own. The last sample of a track has no next DTS in the segment, so it takes, in order: the <code>nextDecodeTimes</code> entry for its track id (a segmenter that cuts when the next keyframe arrives knows the video one), the previous duration in the segment, the track's last duration from the previous segment, or a default of 1024 samples for AAC and 1/30 s for video. Because the next <code>tfdt</code> always comes from the real DTS, a guessed duration never accumulates drift. Video samples carry sync/non-sync flags and, when any PTS differs from its DTS, signed composition offsets (version 1 <code>trun</code>). Packets must belong to the set, carry their track's <code>ConfigVersion</code>, and have a non-negative DTS that strictly increases per track, across segments too; otherwise, or when an offset or duration doesn't fit 32 bits, the call throws <code>ArgumentException</code> and the writer is left unchanged. Timestamps are never rebased. Calling the other mode's <code>BuildMediaSegment</code> throws <code>InvalidOperationException</code>.</p>
+      <pre><code class="language-csharp">// Remux an FLV (or an RTMP ingest's packets) to fMP4: an init segment, then one segment per GOP.
+await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+await using var output = File.Create("out.mp4");
+FmpMediaSegmentWriter? writer = null;
+var gop = new List&lt;MediaPacket&gt;();
+await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
+{
+    if (writer is null)
+    {
+        output.Write(FmpInitSegmentWriter.BuildInitSegment(source.Tracks!));
+        writer = new FmpMediaSegmentWriter(source.Tracks!);
+    }
+
+    var isVideoKeyframe = packet.IsKeyframe &amp;&amp; source.Tracks!.FindTrack(packet.TrackId)!.Kind == MediaKind.Video;
+    if (isVideoKeyframe &amp;&amp; gop.Count &gt; 0)
+    {
+        output.Write(writer.BuildMediaSegment(gop, new Dictionary&lt;int, long&gt; { [packet.TrackId] = packet.Dts }));
+        gop.Clear();
+    }
+
+    gop.Add(packet);
+}
+
+if (gop.Count &gt; 0) output.Write(writer!.BuildMediaSegment(gop));</code></pre>
+
       <h2 id="amf0">AMF0</h2>
       <p>Namespace: <code>EggEncoder.Live.Rtmp.Amf0</code>. The Action Message Format 0 codec FLV <code>onMetaData</code> and RTMP command messages use, hand-written with no reflection (AOT-safe).</p>
       <pre><code class="language-csharp">public enum Amf0Type : byte { Number, Boolean, String, Object, Null, Undefined, EcmaArray, StrictArray, Date, LongString, XmlDocument }

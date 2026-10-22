@@ -199,8 +199,8 @@ known total length required anywhere in this surface). See `docs/streaming-plan.
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
-demux/mux, the RTMP protocol core and the RTMP ingest server above are done; still open: RTMP client incl. RTMPS push, video tracks in the
-fMP4/MPEG-TS muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+demux/mux, the RTMP protocol core, the RTMP ingest server and video tracks in the fMP4 writers are done; still open: RTMP client incl. RTMPS push, video tracks in the
+MPEG-TS muxer, packet-driven HLS, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.
@@ -236,6 +236,27 @@ defaults every network-facing item must meet.
   gap in `AacFrameEncoder`'s own bitstream (reproducible identically from its existing ADTS file
   output) -- `ffprobe`'s own container-metadata reporting (this item's actual acceptance bar) is
   unaffected and passes; see `docs/streaming-plan.md` item 2's own status note for the full detail.
+  **Packet mode** (`docs/live-ingest-restream-plan.md` item 5a): `BuildInitSegment(MediaTrackSet)`
+  and `new FmpMediaSegmentWriter(MediaTrackSet)` + `BuildMediaSegment(IReadOnlyList<MediaPacket>,
+  IReadOnlyDictionary<int, long>? nextDecodeTimes)` take any set of H.264 (`avc1`+`avcC`), H.265
+  (`hvc1`+`hvcC`) and AAC (`mp4a`+`esds`, mono or stereo, the AudioSpecificConfig copied as-is)
+  tracks; MP3/Opus/AV1/VP9 throw `NotSupportedException`. MP4 `track_ID` = position in the set + 1
+  (ffmpeg's default; `MediaTrackInfo.TrackId` may be 0), `mvhd` timescale 1000, each track keeps its
+  own timescale; unknown video dimensions are read from the SPS and unknown AAC rate/channels from
+  the AudioSpecificConfig (the reader moved from `FlvTagDemuxer` to the internal
+  `Media.AudioSpecificConfigReader`, shared by both). One `traf` per track with packets, `tfdt` = the
+  track's first DTS as given (no rebasing: that's item 8), version 1 `trun` with signed composition
+  offsets only when some video PTS != DTS, sync/non-sync sample flags (`0x02000000`/`0x01010000`, as
+  ffmpeg) on video only, no edit list. A sample's duration is the next DTS of its track minus its
+  own; the last one per track takes the caller's `nextDecodeTimes` hint, else the previous delta in
+  the segment, else the track's last duration from the previous segment, else 1024 AAC samples or
+  1/30 s -- harmless, since the next `tfdt` comes from the real DTS. Rejected with
+  `ArgumentException` before anything is written (a failed call leaves the writer unchanged): unknown
+  track, `ConfigVersion` mismatch (config changes are item 5c's), negative or not strictly
+  increasing DTS per track (across segments too), composition offsets or durations past 32 bits.
+  Calling the other mode's overload throws `InvalidOperationException`; the frame mode's bytes are
+  unchanged. Cross-checked by the `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`
+  run on init + segments made from the `h264_aac.flv` fixture.
 - `Streaming.IStreamingSink` (`Streaming/IStreamingSink.cs`) -- an I/O-agnostic HLS output
   destination (init segment, media segments, a playlist rewritten on every change, and segment
   deletion for a future live sliding window). Three implementations, all in `Streaming/`:

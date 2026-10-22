@@ -500,7 +500,26 @@ without decoding.
   `ffmpeg -i playlist.m3u8 -f null -` decodes without errors.
 - Existing audio-only streaming tests pass unchanged.
 
-**Status**: not started.
+**Split** (recorded per "How to use this plan" rule 4; decided by research in PR #143, following
+`docs/streaming-plan.md` item 8's sub-item precedent): item 5 ships as three PRs, in order. **5a**:
+multi-track packet mode for `FmpInitSegmentWriter`/`FmpMediaSegmentWriter`. **5b**: video, PCR and
+Annex B conversion in `MpegTsMuxer`. **5c**: packet-driven `HlsSegmenter` (keyframe-aligned cuts,
+`ConfigVersion` → new init segment + `EXT-X-DISCONTINUITY`, an `UpdateTracks` on the fMP4 writer
+that keeps its sequence number and per-track state), master-playlist `CODECS` from the SPS, and
+`MediaPacketSinkAdapter`. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
+
+**Status**: in progress. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):
+`BuildInitSegment(MediaTrackSet)` and `FmpMediaSegmentWriter(MediaTrackSet)` +
+`BuildMediaSegment(packets, nextDecodeTimes)` write H.264/H.265/AAC (mono or stereo) tracks;
+self-parsed by `MovAtomReader` and a test-only multi-`traf` reader (per-sample flags and signed
+offsets), and the `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null` run on
+init + segments from `h264_aac.flv` passes locally (ffmpeg 9.0.2). Decided by research (PR #143):
+MP4 `track_ID` = position in the set + 1; the last sample of a track takes the caller's
+`nextDecodeTimes` hint, else the previous delta, else the track's last duration, else 1024 AAC
+samples or 1/30 s (the next `tfdt` is always the real DTS, so no drift); negative or not strictly
+increasing DTS, a `ConfigVersion` mismatch and 32-bit overflows throw instead of rebasing (rebasing
+is item 8); no edit list (signed version 1 `trun` offsets instead); MP3/Opus/AV1/VP9 tracks throw
+`NotSupportedException`. 5b and 5c not started.
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 
