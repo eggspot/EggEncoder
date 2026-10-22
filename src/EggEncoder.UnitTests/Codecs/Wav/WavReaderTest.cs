@@ -7,6 +7,76 @@ namespace EggEncoder.UnitTests.Codecs.Wav
 {
     public class WavReaderTest
     {
+        // -------- Corrupted chunk sizes pointing past EOF (found by fuzzing Probe(Stream)) --------
+
+        private static readonly int[] PastEofTestSamples = [100, -200, 300, -400];
+
+        private static byte[] BuildMonoPcm16Wav(params byte[][] trailingChunks)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = WavWriter.Create(stream, 1, 8000, 16, PastEofTestSamples.Length))
+            {
+                writer.WriteInterleavedSamples(PastEofTestSamples, PastEofTestSamples.Length);
+                writer.Finish();
+            }
+
+            return [.. stream.ToArray(), .. trailingChunks.SelectMany(c => c)];
+        }
+
+        private static byte[] RiffChunkHeader(string id, uint size)
+        {
+            var bytes = new byte[8];
+            Encoding.ASCII.GetBytes(id).CopyTo(bytes, 0);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), size);
+            return bytes;
+        }
+
+        private static int[] ReadAllMono(WavReader reader)
+        {
+            var buffer = new int[64];
+            var frames = reader.ReadInterleavedSamples(buffer, buffer.Length);
+            return buffer[..frames];
+        }
+
+        [Fact]
+        public void Open_Stream_WithTrailingChunkSizePastEndOfStream_Should_StillDecodeTheAudio()
+        {
+            // 0xFFFFFFF0 puts the skip-to-next-chunk position past int.MaxValue, which MemoryStream's
+            // own Position setter used to reject with a raw ArgumentOutOfRangeException.
+            using var stream = new MemoryStream(BuildMonoPcm16Wav([.. RiffChunkHeader("junk", 0xFFFFFFF0), 1, 2, 3, 4]));
+
+            using var reader = WavReader.Open(stream);
+
+            ReadAllMono(reader).Should().Equal(PastEofTestSamples);
+        }
+
+        [Fact]
+        public void Open_Stream_WithFmtChunkSizePastEndOfStream_Should_ThrowInvalidDataException()
+        {
+            var bytes = BuildMonoPcm16Wav();
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), 0x95000010); // the 'fmt ' chunk's own size field
+            using var stream = new MemoryStream(bytes);
+
+            var act = () => WavReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*missing a 'data' chunk*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithListChunkSizePastEndOfStream_Should_IgnoreTheOversizedTag_And_DecodeTheAudio()
+        {
+            // Both the LIST size and its one sub-chunk's size are corrupted. The sub-chunk size used to
+            // pass the "fits inside the LIST" bounds check, so ReadBytes allocated a 256MB buffer and
+            // the parse then ran past EOF into a raw BinaryReader exception.
+            byte[] list = [.. RiffChunkHeader("LIST", 0x7FFFFFF0), .. "INFO"u8.ToArray(), .. RiffChunkHeader("ISFT", 0x10000000), .. "Lavf"u8.ToArray()];
+            using var stream = new MemoryStream(BuildMonoPcm16Wav(list));
+
+            using var reader = WavReader.Open(stream);
+
+            (reader.Tags?.ContainsKey("ISFT") ?? false).Should().BeFalse();
+            ReadAllMono(reader).Should().Equal(PastEofTestSamples);
+        }
+
         // -------- Stream-based Open --------
 
         [Fact]

@@ -8,6 +8,99 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
 {
     public class AiffReaderTest
     {
+        // -------- Corrupted chunk sizes pointing past EOF (found by fuzzing Probe(Stream)) --------
+
+        private static readonly int[] PastEofTestSamples = [100, -200, 300, -400];
+
+        private static byte[] BuildMonoPcm16Aiff(params byte[][] trailingChunks)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = AiffWriter.Create(stream, 1, 8000, 16, PastEofTestSamples.Length))
+            {
+                writer.WriteInterleavedSamples(PastEofTestSamples, PastEofTestSamples.Length);
+                writer.Finish();
+            }
+
+            return [.. stream.ToArray(), .. trailingChunks.SelectMany(c => c)];
+        }
+
+        private static int IndexOfChunk(byte[] bytes, string id) => bytes.AsSpan().IndexOf(System.Text.Encoding.ASCII.GetBytes(id));
+
+        private static int[] ReadAllMono(AiffReader reader)
+        {
+            var buffer = new int[64];
+            var frames = reader.ReadInterleavedSamples(buffer, buffer.Length);
+            return buffer[..frames];
+        }
+
+        [Fact]
+        public void Open_Stream_WithTrailingChunkSizePastEndOfStream_Should_StillDecodeTheAudio()
+        {
+            var junk = new byte[12];
+            "junk"u8.CopyTo(junk);
+            BinaryPrimitives.WriteUInt32BigEndian(junk.AsSpan(4), 0xFFFFFFF0);
+            using var stream = new MemoryStream(BuildMonoPcm16Aiff(junk));
+
+            using var reader = AiffReader.Open(stream);
+
+            ReadAllMono(reader).Should().Equal(PastEofTestSamples);
+        }
+
+        [Fact]
+        public void Open_Stream_WithCommChunkSizePastEndOfStream_Should_ThrowInvalidDataException()
+        {
+            var bytes = BuildMonoPcm16Aiff();
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(IndexOfChunk(bytes, "COMM") + 4), 0xE1000012);
+            using var stream = new MemoryStream(bytes);
+
+            var act = () => AiffReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*missing an 'SSND' chunk*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithSsndOffsetLargerThanTheChunk_Should_ThrowInvalidDataException()
+        {
+            // The offset used to be added to the data start unchecked, seeking past int.MaxValue
+            // (a raw ArgumentOutOfRangeException from MemoryStream), and chunkSize - 8 - offset
+            // wrapped around as uint32 arithmetic.
+            var bytes = BuildMonoPcm16Aiff();
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(IndexOfChunk(bytes, "SSND") + 8), 0xBC000000);
+            using var stream = new MemoryStream(bytes);
+
+            var act = () => AiffReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*'SSND' chunk*declared offset*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithSsndChunkSmallerThanItsOwnHeader_Should_ThrowInvalidDataException()
+        {
+            var bytes = BuildMonoPcm16Aiff();
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(IndexOfChunk(bytes, "SSND") + 4), 4);
+            using var stream = new MemoryStream(bytes);
+
+            var act = () => AiffReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*'SSND' chunk of 4 bytes*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithSsndDataStartingPastEndOfStream_Should_ReadZeroSamples()
+        {
+            // A truncated file: SSND's own size and offset are consistent with each other, but the
+            // data they describe starts past the real end of the stream.
+            var bytes = BuildMonoPcm16Aiff();
+            var ssnd = IndexOfChunk(bytes, "SSND");
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(ssnd + 4), 0xF0000008);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(ssnd + 8), 0xE0000000);
+            using var stream = new MemoryStream(bytes);
+
+            using var reader = AiffReader.Open(stream);
+
+            ReadAllMono(reader).Should().BeEmpty();
+        }
+
         // -------- Tags --------
 
         [Fact]

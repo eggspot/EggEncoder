@@ -299,8 +299,11 @@ namespace EggEncoder.Codecs.Wav
                         }
                     }
 
+                    // Clamped to the stream's length: a corrupted chunk size can point far past EOF,
+                    // which a FileStream accepts (ending the walk) but a MemoryStream rejects with a
+                    // raw ArgumentOutOfRangeException once the offset passes int.MaxValue.
                     var paddedChunkSize = chunkSize + (chunkSize % 2);
-                    stream.Position = chunkDataStart + paddedChunkSize;
+                    stream.Position = Math.Min(chunkDataStart + paddedChunkSize, stream.Length);
                 }
 
                 if (channels is null || sampleRate is null || bitsPerSample is null)
@@ -489,7 +492,10 @@ namespace EggEncoder.Codecs.Wav
                 return null;
             }
 
-            var listEnd = chunkDataStart + chunkSize;
+            // Bounded by the stream's real length too: a corrupted LIST size would otherwise let a
+            // sub-chunk's own (equally corrupted) size pass the bounds check below, allocating a
+            // buffer that large and then reading past EOF.
+            var listEnd = Math.Min(chunkDataStart + chunkSize, reader.BaseStream.Length);
             if (new string(reader.ReadChars(4)) != "INFO")
             {
                 return null;
