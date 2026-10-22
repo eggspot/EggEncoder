@@ -378,7 +378,7 @@ body) and the format ffmpeg's `-f flv` writes. It is the shortest path to ingest
   a truncated `avcC`, a sequence header with no NAL units — all rejected cleanly. A negative
   `CompositionTime` is legal (the field is signed) and must round-trip, with its own test.
 
-**Status**: not started.
+**Status**: done ([PR #139](https://github.com/eggspot/EggEncoder/pull/139)). Deliberately left out: `.flv` is not wired into `NativeEncoder`/`IMediaEncoder` (`Probe`/`ConvertFile`/`CutFile`), tracked as `docs/feature-roadmap.md` item 8 (decided by research: `docs/video-support-backlog.md` rule 7, and `AacFrameDecoder` is mono-only today); the `onMetaData` duration is written as 0 and never patched (the writer is forward-only, the live-FLV convention); no AVC end-of-sequence tag is written on `Complete`; Enhanced RTMP v2 audio (`ExAudioTagHeader`, so Opus/FLAC in FLV), Multitrack and ModEx are typed `Unsupported` on read and not writable; AMF0 reader bounds are fixed constants for now (item 3 makes them options). The ffprobe cross-check is gated on `EGGENCODER_FFMPEG_ORACLE=1` (xUnit 2 has no dynamic skip), and passes locally against ffmpeg 9.0.2.
 
 ## 3. RTMP core: AMF0, handshake, chunk stream, control and command messages
 

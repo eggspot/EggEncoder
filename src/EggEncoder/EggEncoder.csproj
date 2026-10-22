@@ -13,7 +13,7 @@
     <PackageProjectUrl>https://github.com/eggspot/EggEncoder</PackageProjectUrl>
     <RepositoryUrl>https://github.com/eggspot/EggEncoder</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;alac;aiff;au;opus;vorbis;tta;wavpack;adpcm;pcm;codec;waveform;audio-processing;transcoding;csharp;dotnet</PackageTags>
+    <PackageTags>audio;encoder;decoder;mp3;flac;aac;wma;alac;aiff;au;opus;vorbis;tta;wavpack;adpcm;pcm;codec;flv;amf0;waveform;audio-processing;transcoding;csharp;dotnet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Copyright>Copyright © Eggspot</Copyright>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

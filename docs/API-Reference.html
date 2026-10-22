@@ -726,6 +726,122 @@ using var aac = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame
     pts += frame.SampleCount;
     // ... hand packet to an IMediaPacketSink
 });</code></pre>
+
+      <h2 id="flv">FLV Demux and Mux</h2>
+      <p>Namespace: <code>EggEncoder.Containers.Flv</code>. Reads and writes FLV (Adobe FLV specification v10.1 Annex E plus Enhanced FLV) at the <a href="#media-packet-model">packet</a> level: H.264/H.265/AV1/VP9 video and AAC/MP3 audio are remuxed, never decoded. This is item 2 of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; an RTMP audio/video message body has exactly the FLV tag-body layout, so the RTMP items reuse <code>FlvTagBodyParser</code>.</p>
+      <pre><code class="language-csharp">public static class FlvTagBodyParser
+{
+    public static FlvTagBody ParseVideo(ReadOnlySpan&lt;byte&gt; body); // legacy AVC (+ HEVC CodecID 12), Enhanced avc1/hvc1/av01/vp09
+    public static FlvTagBody ParseAudio(ReadOnlySpan&lt;byte&gt; body); // AAC, MP3
+}
+
+public readonly ref struct FlvTagBody
+{
+    public FlvPacketType PacketType { get; }   // SequenceHeader, CodedFrame, SequenceEnd, Ignored, Unsupported
+    public MediaKind Kind { get; }
+    public MediaCodec? Codec { get; }          // null when Unsupported
+    public bool IsKeyframe { get; }
+    public int CompositionTime { get; }        // signed ms, PTS - DTS
+    public ReadOnlySpan&lt;byte&gt; Payload { get; } // avcC/hvcC/AudioSpecificConfig, or the coded frame
+    public int SoundRate { get; }              // legacy audio header hints
+    public int SoundChannels { get; }
+    public string? UnsupportedReason { get; }
+}
+
+public sealed class FlvDemuxer
+{
+    public const int VideoTrackId = 0, AudioTrackId = 1, Timescale = 1000, MaxPendingPackets = 1024;
+    public FlvDemuxer(Action&lt;MediaTrackSet&gt; onTracks, Action&lt;MediaPacket&gt; onPacket);
+    public void Feed(ReadOnlySpan&lt;byte&gt; data); // any chunk size
+    public void Complete();
+    public MediaTrackSet? Tracks { get; }
+    public FlvMetadata? Metadata { get; }
+    public bool HeaderDeclaresAudio { get; }
+    public bool HeaderDeclaresVideo { get; }
+    public int SkippedTagCount { get; }
+}
+
+public sealed class FlvFileSource : IAsyncDisposable, IDisposable
+{
+    public FlvFileSource(Stream source, bool leaveOpen = false); // no CanSeek needed
+    public IAsyncEnumerable&lt;MediaPacket&gt; ReadPacketsAsync(CancellationToken cancellationToken = default);
+    public MediaTrackSet? Tracks { get; } // describes the packet just yielded, never a later configuration
+    public FlvMetadata? Metadata { get; }
+}
+
+public sealed class FlvWriter : IMediaPacketSink, IDisposable
+{
+    public FlvWriter(Stream destination, bool leaveOpen = false, FlvMetadata? metadata = null);
+    public void Open(MediaTrackSet tracks);
+    public void UpdateTracks(MediaTrackSet tracks); // after a ConfigVersion change, or to add a late track
+    public void Write(MediaPacket packet);
+    public void Complete();
+    // plus OpenAsync / WriteAsync / CompleteAsync / DisposeAsync from IMediaPacketSink
+}
+
+public sealed class FlvMetadata // onMetaData
+{
+    public FlvMetadata(IEnumerable&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; properties);
+    public IReadOnlyList&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; Properties { get; }
+    public double? Duration { get; }  // also Width, Height, FrameRate, VideoDataRate, AudioDataRate, AudioSampleRate
+    public string? Encoder { get; }
+    public Amf0Value? Find(string name);
+    public static FlvMetadata FromTracks(MediaTrackSet tracks, string? encoder = "EggEncoder");
+}</code></pre>
+      <p><strong>Demuxing.</strong> Video is track 0 and audio track 1, both in milliseconds. The track set is announced once every track the FLV header declares has its configuration (an AVC/HEVC/AV1/VP9 or AAC sequence header, or the first MP3 frame), holding at most 1,024 packets until then, and again whenever a track appears or a sequence header with different bytes bumps its <code>ConfigVersion</code>. avcC/hvcC are validated and the display size read from the SPS; AAC sample rate and channels come from the AudioSpecificConfig, MP3's from the first frame's MPEG header (FLV's own rate field can't say 48 kHz). FLV's 32-bit timestamps are unwrapped into a continuous <code>long</code>, and a frame's PTS is its DTS plus the signed composition time. A bad signature, version or DataOffset, a <code>PreviousTagSize</code> mismatch, a malformed sequence header, or input that ends mid-tag throws <code>InvalidDataException</code>; an unsupported codec, a frame before its sequence header, an encrypted or unknown tag, or an unreadable script tag is skipped and counted in <code>SkippedTagCount</code>. A missing final <code>PreviousTagSize</code> is tolerated.</p>
+      <p><strong>Writing.</strong> At most one audio and one video track. H.264, AAC and MP3 use legacy tags; H.265, AV1 and VP9 use Enhanced-FLV FourCC tags (HEVC frames with no composition offset use CodedFramesX, as ffmpeg does). A sequence header goes before each track's first frame and again whenever its <code>ConfigVersion</code> changes: call <code>UpdateTracks</code> first, since a packet whose <code>ConfigVersion</code> isn't the track's current one throws. Timestamps are rescaled to milliseconds with <code>MediaTimestamp.Rescale</code>; a negative DTS, a composition offset outside FLV's signed 24 bits, or a nonzero offset on audio/AV1/VP9 throws. Writes are forward-only, so the <code>onMetaData</code> duration stays 0, the live-FLV convention. Opus throws <code>NotSupportedException</code> (that needs Enhanced RTMP v2 audio, not implemented).</p>
+      <pre><code class="language-csharp">// Remux an FLV: demux packets, write them back out unchanged.
+await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+await using var writer = new FlvWriter(File.Create("out.flv"));
+var opened = false;
+await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
+{
+    if (!opened) { await writer.OpenAsync(source.Tracks!, cancellationToken); opened = true; }
+    await writer.WriteAsync(packet, cancellationToken);
+}
+await writer.CompleteAsync(cancellationToken);</code></pre>
+
+      <h2 id="amf0">AMF0</h2>
+      <p>Namespace: <code>EggEncoder.Live.Rtmp.Amf0</code>. The Action Message Format 0 codec FLV <code>onMetaData</code> and RTMP command messages use, hand-written with no reflection (AOT-safe).</p>
+      <pre><code class="language-csharp">public enum Amf0Type : byte { Number, Boolean, String, Object, Null, Undefined, EcmaArray, StrictArray, Date, LongString, XmlDocument }
+
+public sealed class Amf0Value
+{
+    public static readonly Amf0Value Null, Undefined;
+    public static Amf0Value FromNumber(double value);
+    public static Amf0Value FromBoolean(bool value);
+    public static Amf0Value FromString(string value);     // a LongString past 65,535 UTF-8 bytes
+    public static Amf0Value FromLongString(string value);
+    public static Amf0Value FromXmlDocument(string value);
+    public static Amf0Value FromDate(double millisecondsSinceEpoch, short timeZone = 0);
+    public static Amf0Value FromObject(IEnumerable&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; properties);
+    public static Amf0Value FromEcmaArray(IEnumerable&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; properties);
+    public static Amf0Value FromStrictArray(IEnumerable&lt;Amf0Value&gt; items);
+    public Amf0Type Type { get; }
+    public double Number { get; }   // also a Date's milliseconds
+    public bool Boolean { get; }
+    public string? String { get; }
+    public short TimeZone { get; }
+    public IReadOnlyList&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; Properties { get; }
+    public IReadOnlyList&lt;Amf0Value&gt; Items { get; }
+    public Amf0Value? GetProperty(string name);
+}
+
+public ref struct Amf0Reader
+{
+    public const int MaxNestingDepth = 32, MaxStringBytes = 65536, MaxProperties = 1024;
+    public Amf0Reader(ReadOnlySpan&lt;byte&gt; data);
+    public Amf0Value ReadValue();
+    public int Position { get; }
+    public bool AtEnd { get; }
+}
+
+public static class Amf0Writer
+{
+    public static byte[] Encode(params Amf0Value[] values);
+    public static void Write(IBufferWriter&lt;byte&gt; destination, Amf0Value value);
+}</code></pre>
+      <p>The reader bounds every length before allocating: nesting past 32 levels, a string over 64 KiB, more than 1,024 properties or items, a count larger than the bytes left, truncation, and the Reference, Typed Object and AMF3-switch markers all throw <code>InvalidDataException</code>. An ECMA array's count is treated as a hint; its object-end marker terminates it. The writer is the reader's inverse and refuses to nest deeper than the reader accepts.</p>
     </div>
   </main>
 </div>

@@ -47,6 +47,38 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("FLV: write H.264 + AAC packets with onMetaData (AMF0), demux them back", async () =>
+    {
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var tracks = new EggEncoder.Media.MediaTrackSet(
+        [
+            new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, avcC, 0, width: 64, height: 64),
+            new EggEncoder.Media.MediaTrackInfo(1, EggEncoder.Media.MediaKind.Audio, EggEncoder.Media.MediaCodec.Aac, 44100, new byte[] { 0x12, 0x08 }, 0, 44100, 1)
+        ]);
+        var stream = new MemoryStream();
+        await using (var writer = new EggEncoder.Containers.Flv.FlvWriter(stream, leaveOpen: true))
+        {
+            await writer.OpenAsync(tracks);
+            await writer.WriteAsync(new EggEncoder.Media.MediaPacket(0, 80, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 }));
+            await writer.WriteAsync(new EggEncoder.Media.MediaPacket(1, 1024, 1024, true, 0, new byte[] { 0x21 }));
+            await writer.CompleteAsync();
+        }
+
+        stream.Position = 0;
+        var packets = new List<EggEncoder.Media.MediaPacket>();
+        await using var source = new EggEncoder.Containers.Flv.FlvFileSource(stream);
+        await foreach (var packet in source.ReadPacketsAsync())
+        {
+            packets.Add(packet);
+        }
+
+        if (packets.Count != 2 || packets[0].CompositionOffset != 80 || packets[1].Dts != 23
+            || source.Tracks!.Tracks.Count != 2 || source.Tracks.Tracks[0].Width != 64 || source.Metadata?.Width != 64)
+        {
+            throw new InvalidOperationException("FLV round trip produced unexpected results");
+        }
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
