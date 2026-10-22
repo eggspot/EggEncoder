@@ -92,6 +92,13 @@ every per-codec `XxxEncoder`/`XxxEncoderSession` whole-file type (no destination
 known total length required anywhere in this surface). See `docs/streaming-plan.md` for the full
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
+**Planned, not yet implemented**: live ingest and restream (RTMP server/client incl. RTMPS, FLV
+demux/mux, a packet-level media model for video passthrough, video tracks in the fMP4/MPEG-TS
+muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+`docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
+(an explicit exception to this surface's synchronous-callback idiom) and the listener security
+defaults every network-facing item must meet.
+
 - `IStreamingEncoder`/`EncodedAudioFrame`/`EncodedAudioFrameCallback` (`Streaming/IStreamingEncoder.cs`,
   `Streaming/EncodedAudioFrame.cs`) — `Write(ReadOnlySpan<int>)` buffers PCM and invokes the callback
   once per encoded frame as soon as a full codec-native frame's worth of samples has arrived;
