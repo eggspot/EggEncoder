@@ -325,18 +325,72 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             }
         }
 
-        [Fact]
-        public void Decode_Stream_WithCorruptedBlockSamples_Should_ThrowInvalidDataException()
+        [Theory]
+        [InlineData(0, WavPackDecoder.MaxBlockSamples + 1u)]
+        [InlineData(0, 0x80000004u)] // the fuzz value: went negative as an int, OverflowException on allocation
+        [InlineData(0, uint.MaxValue)]
+        [InlineData(1, WavPackDecoder.MaxBlockSamples + 1u)] // a later sequence start: Parse's catch must not swallow it
+        [InlineData(1, 0x80000004u)]
+        [InlineData(21, WavPackDecoder.MaxBlockSamples + 1u)]
+        public void Decode_Stream_WithCorruptedBlockSamples_Should_ThrowInvalidDataException(int blockNumber, uint blockSamples)
         {
-            // The fuzz case: the first block's block_samples field (offset 20) read 0x80000004, which
-            // went negative as an int and threw a raw OverflowException allocating the output arrays.
-            var corruptBytes = File.ReadAllBytes(_fullScaleFixturePath);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(20), 0x80000004);
+            // sample_ffmpeg.wv is stereo in single blocks (22 of them), so every block starts its own sequence.
+            var corruptBytes = File.ReadAllBytes(_stereoFixturePath);
+            var blockOffset = BlockOffset(corruptBytes, blockNumber);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(blockOffset + 20), blockSamples);
             using var stream = new MemoryStream(corruptBytes);
 
             var act = () => WavPackDecoder.Decode(stream, (_, _, _, _, _) => { });
 
-            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*2147483652 samples*");
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage($"*claiming {blockSamples} samples*");
+        }
+
+        [Fact]
+        public void Decode_Stream_WithLargestBlockSamplesInSecondBlockOfSequence_Should_ReportMismatchNotBound()
+        {
+            // A block_samples at exactly MaxBlockSamples passes the bound, so the decoder's own
+            // "doesn't match its sequence" check is what reports it.
+            var corruptBytes = File.ReadAllBytes(_splitMonoBlocksFixturePath);
+            var secondBlockOffset = BlockOffset(corruptBytes, 1);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(secondBlockOffset + 20), WavPackDecoder.MaxBlockSamples);
+            using var stream = new MemoryStream(corruptBytes);
+
+            var act = () => WavPackDecoder.Decode(stream, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*doesn't match the other blocks*");
+        }
+
+        [Fact]
+        public void Decode_Stream_WithFalseStereoFlagOnMonoBlock_Should_DecodeAsPlainMono()
+        {
+            // The fuzz case: flipping the false-stereo flag (bit 30) on a mono block made the decoder
+            // copy into a second output channel that didn't exist (IndexOutOfRangeException). Like
+            // ffmpeg, the combination decodes as plain mono.
+            var fixturePath = Path.GetFullPath("Codecs/WavPack/sample_fullscale_allones_wavpack.wv");
+            var expected = new List<int>();
+            var expectedInfo = WavPackDecoder.Decode(fixturePath, (block, _, _, _, _) => expected.AddRange(block.ToArray()));
+            expectedInfo.Channels.Should().Be(1, "the fixture must be mono");
+            var corruptBytes = File.ReadAllBytes(fixturePath);
+            corruptBytes[BlockOffset(corruptBytes, 0) + 27] |= 0x40;
+            using var stream = new MemoryStream(corruptBytes);
+            var actual = new List<int>();
+
+            var info = WavPackDecoder.Decode(stream, (block, _, _, _, _) => actual.AddRange(block.ToArray()));
+
+            info.Channels.Should().Be(1);
+            actual.Should().Equal(expected);
+        }
+
+        private static int BlockOffset(byte[] data, int blockNumber)
+        {
+            var offset = 0;
+            for (var i = 0; i < blockNumber; i++)
+            {
+                offset += 8 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 4));
+            }
+
+            data.AsSpan(offset, 4).ToArray().Should().Equal("wvpk"u8.ToArray(), $"the fixture must have a block {blockNumber}");
+            return offset;
         }
 
         [Theory]
@@ -347,8 +401,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         public void Decode_Stream_WithCorruptedSecondBlockCkSize_Should_ThrowInvalidDataException(uint ckSize, string expectedMessage)
         {
             var corruptBytes = File.ReadAllBytes(_fullScaleFixturePath);
-            var secondBlockOffset = 8 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(corruptBytes.AsSpan(4));
-            corruptBytes.AsSpan(secondBlockOffset, 4).ToArray().Should().Equal("wvpk"u8.ToArray(), "the fixture must have a second block");
+            var secondBlockOffset = BlockOffset(corruptBytes, 1);
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(secondBlockOffset + 4), ckSize);
             using var stream = new MemoryStream(corruptBytes);
 

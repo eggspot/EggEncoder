@@ -86,7 +86,9 @@ namespace EggEncoder.Codecs.WavPack
                     pos = (pos + 1) & 7;
                 }
 
-                if (header.IsFalseStereo)
+                // A corrupted header can set false stereo on a mono block; like ffmpeg, that decodes
+                // as plain mono (there is no second channel to copy into).
+                if (header.IsFalseStereo && channels == 2)
                 {
                     Array.Copy(outputs[0], outputs[1], blockSamples);
                 }

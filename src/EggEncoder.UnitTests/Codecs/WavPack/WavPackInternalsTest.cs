@@ -97,37 +97,6 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
                 .Which.Message.Should().Contain("WP_ID_ENTROPY_VARS metadata is");
         }
 
-        [Theory]
-        [InlineData(0u)]
-        [InlineData((uint)WavPackBlockHeader.MaxBlockSamples)]
-        public void BlockHeaderParse_WithBlockSamplesWithinLimit_Should_Parse(uint blockSamples)
-        {
-            var header = WavPackBlockHeader.Parse(BuildHeaderBytes(blockSamples), 0);
-
-            header.BlockSamples.Should().Be(blockSamples);
-        }
-
-        [Theory]
-        [InlineData((uint)WavPackBlockHeader.MaxBlockSamples + 1)]
-        [InlineData(0x80000004u)] // the fuzz value: (int) cast went negative, OverflowException on allocation
-        [InlineData(uint.MaxValue)]
-        public void BlockHeaderParse_WithTooManyBlockSamples_Should_ThrowInvalidDataException(uint blockSamples)
-        {
-            var act = () => WavPackBlockHeader.Parse(BuildHeaderBytes(blockSamples), 0);
-
-            act.Should().ThrowExactly<InvalidDataException>().WithMessage($"*{blockSamples} samples*");
-        }
-
-        private static byte[] BuildHeaderBytes(uint blockSamples)
-        {
-            var bytes = new byte[WavPackBlockHeader.ByteLength];
-            "wvpk"u8.CopyTo(bytes);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), 24);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(20), blockSamples);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24), 0x1805); // mono | initial | final | 16-bit
-            return bytes;
-        }
-
         // bit 2 (0x4) = mono; bits 11/12 (0x800/0x1000) = initial+final block of sequence; bits
         // 0-1 = 01 (2 bytes/sample, 16-bit) -- a minimal, otherwise-unremarkable mono block header.
         private static WavPackBlockHeader MakeMonoHeader() => WavPackBlockHeader.Parse(
