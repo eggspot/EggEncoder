@@ -996,7 +996,10 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
                 // Pings are answered but don't count as activity: only media keeps a publish alive.
                 await publisher.SendAsync(RtmpUserControl.PingRequest(1).ToMessage(), RtmpProtocolControl.ChunkStreamId);
-                (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(5))).Should().BeTrue();
+                await publisher.WaitForAsync(() => publisher.Received.FirstOrDefault(m => m.Type == RtmpMessageType.UserControl
+                    && RtmpUserControl.Read(m.Payload.Span).EventType == RtmpUserControlEventType.PingResponse) is { Payload.Length: > 0 } pong ? new[] { pong } : null);
+                time.Advance(TimeSpan.FromSeconds(11));
+                (await publisher.WaitForCloseAsync(TestTimeout)).Should().BeTrue("31 s after the publish began, with nothing but a ping since");
                 await (await consumer.Started).Completion.WaitAsync(TestTimeout);
             }
         }

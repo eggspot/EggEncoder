@@ -58,7 +58,7 @@ namespace EggEncoder.Live.Rtmp
             _tags = new FlvTagDemuxer(tracks => _produced.Enqueue((tracks, default)), packet => _produced.Enqueue((null, packet)));
         }
 
-        /// <summary>Ends the connection from outside (the ingest stream was disposed, or the server is stopping).</summary>
+        /// <summary>Ends the connection from outside (<see cref="RtmpIngestStream.Disconnect"/>, or the server is stopping).</summary>
         public void Disconnect()
         {
             if (_finished)
@@ -66,10 +66,16 @@ namespace EggEncoder.Live.Rtmp
                 return;
             }
 
+            Cancel(_stall);
+            Cancel(_timeout);
+        }
+
+        // Each on its own, so a throwing registration on one can't leave the other running.
+        private static void Cancel(CancellationTokenSource source)
+        {
             try
             {
-                _timeout.Cancel();
-                _stall.Cancel();
+                source.Cancel();
             }
             catch (Exception e) when (e is ObjectDisposedException or AggregateException)
             {
