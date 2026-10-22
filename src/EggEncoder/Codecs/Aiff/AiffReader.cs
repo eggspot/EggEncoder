@@ -241,14 +241,16 @@ namespace EggEncoder.Codecs.Aiff
                     // tag content entirely (the generic skip-to-next-chunk logic below still
                     // advances past it correctly, using uint/long arithmetic that never needs the
                     // cast) rather than risking the BCL's own ArgumentOutOfRangeException from a
-                    // negative-after-overflow ReadBytes count.
-                    else if (chunkId is "NAME" or "AUTH" or "(c) " && chunkSize <= int.MaxValue)
+                    // negative-after-overflow ReadBytes count. The size is also checked against
+                    // the bytes actually left in the stream, since ReadBytes allocates its full
+                    // count up front -- a corrupted size would otherwise demand a multi-GB buffer.
+                    else if (chunkId is "NAME" or "AUTH" or "(c) " && chunkSize <= int.MaxValue && chunkSize <= stream.Length - chunkDataStart)
                     {
                         var textBytes = reader.ReadBytes((int)chunkSize);
                         tags ??= [];
                         tags[chunkId] = Encoding.UTF8.GetString(textBytes).TrimEnd('\0');
                     }
-                    else if (chunkId == "ID3 " && chunkSize <= int.MaxValue)
+                    else if (chunkId == "ID3 " && chunkSize <= int.MaxValue && chunkSize <= stream.Length - chunkDataStart)
                     {
                         var id3Bytes = reader.ReadBytes((int)chunkSize);
                         using var id3Stream = new MemoryStream(id3Bytes);

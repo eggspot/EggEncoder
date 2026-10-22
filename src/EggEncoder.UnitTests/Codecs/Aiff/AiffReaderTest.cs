@@ -46,6 +46,25 @@ namespace EggEncoder.UnitTests.Codecs.Aiff
             ReadAllMono(reader).Should().Equal(PastEofTestSamples);
         }
 
+        [Theory]
+        [InlineData("NAME")]
+        [InlineData("ID3 ")]
+        public void Open_Stream_WithTagChunkSizePastEndOfStream_Should_SkipTheTag_And_DecodeTheAudio(string chunkId)
+        {
+            // BinaryReader.ReadBytes allocates its full count up front, so this used to request a
+            // ~2GB buffer (OutOfMemoryException) for a tag chunk only a few bytes long on disk.
+            var tag = new byte[12];
+            System.Text.Encoding.ASCII.GetBytes(chunkId).CopyTo(tag, 0);
+            BinaryPrimitives.WriteUInt32BigEndian(tag.AsSpan(4), 0x7FFFFFF0);
+            "abcd"u8.CopyTo(tag.AsSpan(8));
+            using var stream = new MemoryStream(BuildMonoPcm16Aiff(tag));
+
+            using var reader = AiffReader.Open(stream);
+
+            reader.Tags.Should().BeNull();
+            ReadAllMono(reader).Should().Equal(PastEofTestSamples);
+        }
+
         [Fact]
         public void Open_Stream_WithCommChunkSizePastEndOfStream_Should_ThrowInvalidDataException()
         {
