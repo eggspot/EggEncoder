@@ -353,7 +353,8 @@ omits the repeat is detected on its first continuation and read that way from th
 stream; the writer always repeats it and never writes type 3 right after type 0), interleaving across chunk
 streams, zero-length messages; applies Set Chunk Size (`ChunkSize`), Abort and Window
 Acknowledgement Size (`AcknowledgementWindowSize`) itself, then reports every message;
-`TryTakeAcknowledgement(out sequenceNumber)` says when an Acknowledgement is due (`BytesReceived`).
+`TryTakeAcknowledgement(out sequenceNumber)` says when an Acknowledgement is due (`BytesReceived`);
+`Complete()` (connection closed) throws `RtmpProtocolException` if a chunk or message was cut short.
 `RtmpChunkReaderOptions` (init-only, each validated 1..hard limit): `MaxInboundChunkSize` 65,536,
 `MaxMessageLength` 8 MiB, `MaxChunkStreams` 64, `MaxBufferedBytes` 16 MiB (bytes received, not
 claimed; buffers grow as data arrives). Over-limit values, malformed control messages, a type 1-3
@@ -361,7 +362,7 @@ header on a never-started chunk stream and a new header mid-message throw `RtmpP
 (an `IOException`) and fault the reader (`InvalidOperationException` afterwards).
 `RtmpChunkWriter`: `Write(IBufferWriter, chunkStreamId, message)` with the most compact header
 (type 0 for a first message, new stream id or backwards timestamp; 1 new length/type; 2 new delta;
-3 repeated delta), `WriteSetChunkSize(destination, size)`. `RtmpProtocolControl` (`ChunkStreamId`
+3 repeated delta; a Set Chunk Size passed to `Write` throws), `WriteSetChunkSize(destination, size)`. `RtmpProtocolControl` (`ChunkStreamId`
 2): `Create`/`Read` for SetChunkSize, Abort, Acknowledgement, WindowAcknowledgementSize,
 SetPeerBandwidth (`RtmpPeerBandwidthLimitType`). `RtmpUserControl(EventType, Value, BufferLength)`:
 `StreamBegin`/`StreamEof`/`SetBufferLength`/`PingRequest`/`PingResponse`, `ToMessage`, `Read`.

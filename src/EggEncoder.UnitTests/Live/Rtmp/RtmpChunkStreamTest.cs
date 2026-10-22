@@ -207,6 +207,8 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             writer.Invoking(w => w.Write(output, RtmpChunkWriter.MaxChunkStreamId + 1, message)).Should().Throw<ArgumentOutOfRangeException>();
             writer.Invoking(w => w.Write(output, 3, new RtmpMessage(RtmpMessageType.Video, 1, 0, new byte[RtmpMessage.MaxPayloadLength + 1])))
                 .Should().Throw<ArgumentException>().WithParameterName("message");
+            writer.Invoking(w => w.Write(output, 2, RtmpProtocolControl.CreateSetChunkSize(4096)))
+                .Should().Throw<ArgumentException>().WithMessage("*WriteSetChunkSize*");
             writer.Invoking(w => w.WriteSetChunkSize(null!, 128)).Should().Throw<ArgumentNullException>();
             writer.Invoking(w => w.WriteSetChunkSize(output, 0)).Should().Throw<ArgumentOutOfRangeException>();
             writer.Invoking(w => w.WriteSetChunkSize(output, RtmpMessage.MaxPayloadLength + 1)).Should().Throw<ArgumentOutOfRangeException>();
@@ -376,6 +378,24 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         }
 
         [Fact]
+        public void Reader_Type3StartingAMessageWithADifferentExtendedDelta_Should_Use_The_Field()
+        {
+            var payload = Payload(200, 9);
+            var bytes = Concat(
+                Header(0, 3, 100, 1, 8, 1), [1],
+                Header(2, 3, 0xFFFFFF), UInt32(0x01000000), [2],
+                Header(1, 3, 0xFFFFFF, payload.Length, 8), UInt32(0x01000000), payload[..128],
+                Header(3, 3), UInt32(0x01000000), payload[128..],
+                Header(3, 3), UInt32(0x02000000), payload[..128],
+                Header(3, 3), UInt32(0x02000000), payload[128..]);
+
+            var messages = Read(bytes);
+
+            messages.Select(m => m.Timestamp).Should().Equal(100u, 100u + 0x01000000, 100u + 0x02000000, 100u + 0x04000000);
+            messages[3].Payload.ToArray().Should().Equal(payload);
+        }
+
+        [Fact]
         public void Reader_ZeroLengthMessage_Should_Be_Reported_With_An_Empty_Payload()
         {
             var bytes = Concat(Header(0, 3, 7, 0, 20, 0), Header(3, 3));
@@ -493,6 +513,49 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
             feed.Should().Throw<RtmpProtocolException>(name);
             reader.Invoking(r => r.Feed([0x03])).Should().Throw<InvalidOperationException>(name);
+        }
+
+        public static TheoryData<string, byte[]> TruncatedStreams => new()
+        {
+            { "mid basic header", [0x00] },
+            { "mid message header", Header(0, 3, 0, 10, 9, 1)[..5] },
+            { "mid extended timestamp", Concat(Header(0, 3, 0xFFFFFF, 10, 9, 1), [0x01, 0x00]) },
+            { "mid chunk payload", Concat(Header(0, 3, 0, 10, 9, 1), Payload(4)) },
+            { "mid message, between chunks", Concat(Header(0, 3, 0, 200, 9, 1), Payload(128)) },
+        };
+
+        [Theory]
+        [MemberData(nameof(TruncatedStreams))]
+        public void Complete_InputCutShort_Should_Throw_Protocol_Exception_Then_Refuse_Further_Calls(string name, byte[] bytes)
+        {
+            var reader = new RtmpChunkReader(_ => { });
+            reader.Feed(bytes);
+
+            reader.Invoking(r => r.Complete()).Should().Throw<RtmpProtocolException>(name).WithMessage("*ended mid-*");
+            reader.Invoking(r => r.Complete()).Should().Throw<InvalidOperationException>(name);
+            reader.Invoking(r => r.Feed([0x03])).Should().Throw<InvalidOperationException>(name);
+        }
+
+        [Fact]
+        public void Complete_AfterWholeMessages_Should_Succeed_Once_And_Then_Refuse_Input()
+        {
+            var (bytes, _) = KitchenSink(128);
+            var reader = new RtmpChunkReader(_ => { });
+            reader.Feed(bytes);
+
+            reader.Complete();
+            reader.Complete();
+            reader.Invoking(r => r.Feed(bytes)).Should().Throw<InvalidOperationException>().WithMessage("*completed*");
+            new RtmpChunkReader(_ => { }).Invoking(r => r.Complete()).Should().NotThrow();
+        }
+
+        [Fact]
+        public void Complete_AfterAProtocolError_Should_Throw_Invalid_Operation()
+        {
+            var reader = new RtmpChunkReader(_ => { });
+            reader.Invoking(r => r.Feed(Header(1, 4, 0, 1, 9))).Should().Throw<RtmpProtocolException>();
+
+            reader.Invoking(r => r.Complete()).Should().Throw<InvalidOperationException>();
         }
 
         [Fact]

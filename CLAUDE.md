@@ -143,7 +143,8 @@ reading, decided by research in PR #140), chunk stream ids 2-65599, extended tim
 is detected on the first continuation by comparing the next four bytes with the extended value,
 and that decision is latched per chunk stream), interleaving across chunk streams; it applies Set Chunk Size,
 Abort and Window Acknowledgement Size itself (`TryTakeAcknowledgement` says when to ack) and still
-reports them. `RtmpChunkReaderOptions` holds the security-posture bounds (chunk size, message
+reports them; `Complete()` (the connection closed) turns a chunk or message cut short into an
+`RtmpProtocolException`, since `Feed` alone can't tell truncation from a slow peer. `RtmpChunkReaderOptions` holds the security-posture bounds (chunk size, message
 length, chunk stream count, buffered bytes; defaults and hard ceilings), checked before anything
 is allocated; buffers grow only as payload arrives. Every violation throws `RtmpProtocolException`
 (an `IOException`; `InvalidDataException` is sealed) and faults the reader. `RtmpChunkWriter`

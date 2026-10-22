@@ -52,7 +52,8 @@ namespace EggEncoder.Live.Rtmp
         /// <summary>
         /// The most bytes of partially received messages held at once, across every chunk stream of a
         /// connection (default 16 MiB). Buffers grow only as payload actually arrives, so a header that
-        /// merely claims a large length costs nothing until the bytes come.
+        /// merely claims a large length costs nothing until the bytes come. Buffers grow by doubling, so
+        /// memory actually allocated can reach about twice this.
         /// </summary>
         public int MaxBufferedBytes
         {

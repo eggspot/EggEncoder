@@ -28,15 +28,17 @@ namespace EggEncoder.Live.Rtmp
     /// decides which kind of peer this is (its next four bytes either equal the extended value or
     /// they are payload), and every later continuation on that chunk stream is read the same way.
     /// Until that first decision, a continuation is only read once four bytes past its header have
-    /// arrived, and one from an omitting peer whose payload starts with exactly those four bytes
-    /// would be misread.
+    /// arrived; and if an omitting peer's first continuation payload starts with exactly those four
+    /// bytes, the peer is taken for one that repeats the field, which misreads every later
+    /// continuation on that chunk stream.
     /// </para>
     /// <para>
     /// Bounds (<see cref="RtmpChunkReaderOptions"/>): a chunk size, message length, chunk stream count
     /// or amount of partially received data over its limit, a malformed control message, a type 1-3
     /// header on a chunk stream that never had a type 0 one, and a new message header on a chunk
     /// stream whose previous message is unfinished all throw <see cref="RtmpProtocolException"/>,
-    /// after which the reader is unusable.
+    /// after which the reader is unusable; so does input that ends mid-chunk or mid-message, once
+    /// <see cref="Complete"/> says it has ended.
     /// </para>
     /// </remarks>
     public sealed class RtmpChunkReader
@@ -80,6 +82,7 @@ namespace EggEncoder.Live.Rtmp
         private int _bufferedMessageBytes;
         private long _lastAcknowledged;
         private bool _faulted;
+        private bool _completed;
 
         /// <param name="onMessage">Called with each complete message, after any protocol control it carries has been applied.</param>
         /// <param name="options">The bounds to enforce; <c>null</c> uses the defaults.</param>
@@ -119,13 +122,10 @@ namespace EggEncoder.Live.Rtmp
 
         /// <summary>Parses every chunk these bytes complete; a partial chunk is kept for the next call.</summary>
         /// <exception cref="RtmpProtocolException">The peer broke the protocol or a bound; the reader can't be used afterwards.</exception>
-        /// <exception cref="InvalidOperationException">An earlier call threw (a protocol error, or a callback exception).</exception>
+        /// <exception cref="InvalidOperationException">An earlier call threw (a protocol error, or a callback exception), or <see cref="Complete"/> was called.</exception>
         public void Feed(ReadOnlySpan<byte> data)
         {
-            if (_faulted)
-            {
-                throw new InvalidOperationException("The chunk reader faulted on an earlier call and can't be used.");
-            }
+            ThrowIfUnusable();
 
             try
             {
@@ -146,6 +146,47 @@ namespace EggEncoder.Live.Rtmp
                 // point can be trusted.
                 _faulted = true;
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Declares the input over (the peer closed the connection): a chunk or message cut short is a
+        /// protocol error, since a reader fed bytes as they arrive can't otherwise tell truncation from
+        /// a slow peer. Calling it again does nothing.
+        /// </summary>
+        /// <exception cref="RtmpProtocolException">The input ended mid-chunk (including mid-header or mid-extended-timestamp) or mid-message.</exception>
+        /// <exception cref="InvalidOperationException">An earlier call threw.</exception>
+        public void Complete()
+        {
+            if (_completed)
+            {
+                return;
+            }
+
+            ThrowIfUnusable();
+            var leftover = _bufferEnd - _bufferStart;
+            var unfinished = _chunkStreams.FirstOrDefault(pair => pair.Value.Buffer is not null);
+            if (leftover > 0 || unfinished.Value is not null)
+            {
+                _faulted = true;
+                throw new RtmpProtocolException(leftover > 0
+                    ? $"RTMP chunk: input ended mid-chunk ({leftover} bytes left over)"
+                    : $"RTMP chunk: input ended mid-message on chunk stream {unfinished.Key} ({unfinished.Value!.Received} of {unfinished.Value.Length} bytes)");
+            }
+
+            _completed = true;
+        }
+
+        private void ThrowIfUnusable()
+        {
+            if (_faulted)
+            {
+                throw new InvalidOperationException("The chunk reader faulted on an earlier call and can't be used.");
+            }
+
+            if (_completed)
+            {
+                throw new InvalidOperationException("The chunk reader has already completed.");
             }
         }
 
@@ -274,6 +315,13 @@ namespace EggEncoder.Live.Rtmp
 
             if (!isContinuation)
             {
+                if (format == 3 && hasExtendedTimestamp)
+                {
+                    // The repeated field carries the delta; trust it over the stored one.
+                    stream.TimestampDelta = extendedTimestamp;
+                    stream.ExtendedTimestamp = extendedTimestamp;
+                }
+
                 StartMessage(stream, format, hasExtendedTimestamp ? extendedTimestamp : timestampField, length, type, streamId);
                 if (format <= 2)
                 {

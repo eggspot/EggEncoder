@@ -56,16 +56,27 @@ namespace EggEncoder.Live.Rtmp
             ArgumentNullException.ThrowIfNull(destination);
             ArgumentOutOfRangeException.ThrowIfLessThan(chunkSize, 1);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(chunkSize, RtmpMessage.MaxPayloadLength);
-            Write(destination, RtmpProtocolControl.ChunkStreamId, RtmpProtocolControl.CreateSetChunkSize(chunkSize));
+            WriteMessage(destination, RtmpProtocolControl.ChunkStreamId, RtmpProtocolControl.CreateSetChunkSize(chunkSize));
             ChunkSize = chunkSize;
         }
 
         /// <summary>Writes <paramref name="message"/> as chunks on <paramref name="chunkStreamId"/>.</summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkStreamId"/> is outside 2..<see cref="MaxChunkStreamId"/>.</exception>
-        /// <exception cref="ArgumentException">The payload is longer than <see cref="RtmpMessage.MaxPayloadLength"/>.</exception>
+        /// <exception cref="ArgumentException">The payload is longer than <see cref="RtmpMessage.MaxPayloadLength"/>, or the message is a Set Chunk Size (use <see cref="WriteSetChunkSize"/>, so this writer switches too).</exception>
         public void Write(IBufferWriter<byte> destination, int chunkStreamId, RtmpMessage message)
         {
             ArgumentNullException.ThrowIfNull(destination);
+            if (message.Type == RtmpMessageType.SetChunkSize)
+            {
+                throw new ArgumentException(
+                    "Write a Set Chunk Size with WriteSetChunkSize, which also switches this writer to the new size.", nameof(message));
+            }
+
+            WriteMessage(destination, chunkStreamId, message);
+        }
+
+        private void WriteMessage(IBufferWriter<byte> destination, int chunkStreamId, RtmpMessage message)
+        {
             ValidateChunkStreamId(chunkStreamId);
             var payload = message.Payload.Span;
             if (payload.Length > RtmpMessage.MaxPayloadLength)
