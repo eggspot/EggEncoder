@@ -28,6 +28,23 @@ try
     await RunCheck("Convert WAV -> WavPack (pure managed encode, no native call)", () => encoder.ConvertFile(sourceWav, wvPath));
     await RunCheck("Probe + decode produced WavPack (pure managed decode, no native call)", () => encoder.Probe(wvPath));
     await RunCheck("Cut source WAV", () => encoder.CutFile(sourceWav, cutPath, 0, 1));
+    await RunCheck("Media packet model: avcC/SPS parse, Annex B round trip, timestamp rescale", () =>
+    {
+        var avcC = Convert.FromHexString("01640028ffe1001b67640028acd940780227e5c044000003000400000300c83c60c65801000668ebe3cb22c0fdf8f800");
+        var record = EggEncoder.Media.AvcDecoderConfigurationRecord.Parse(avcC);
+        var sps = EggEncoder.Media.H264SpsParser.Parse(record.SequenceParameterSets[0].Span);
+        byte[] accessUnit = [0, 0, 0, 2, 0x65, 0x88];
+        var annexB = EggEncoder.Media.AnnexBConverter.ToAnnexB(accessUnit);
+        if (sps.Width != 1920 || sps.Height != 1080 || sps.CodecsString != "avc1.640028"
+            || !record.ToArray().AsSpan().SequenceEqual(avcC)
+            || !EggEncoder.Media.AnnexBConverter.ToLengthPrefixed(annexB).AsSpan().SequenceEqual(accessUnit)
+            || EggEncoder.Media.MediaTimestamp.Rescale(1024, 44100, 90000) != 2090)
+        {
+            throw new InvalidOperationException("Media packet model check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
 
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;

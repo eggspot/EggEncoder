@@ -185,6 +185,20 @@ using var flacEncoder = FlacStreamingEncoder.Create(channels: 1, sampleRate: 441
 });
 ```
 
+### Media packet model (live ingest foundation)
+
+`EggEncoder.Media` is the codec-agnostic, already-encoded packet model every future live source (RTMP ingest, FLV/MP4/MPEG-TS files) and output (RTMP push, HLS with video, recording) shares, so video can be remuxed without decoding: `MediaTrackInfo`/`MediaTrackSet` describe tracks (codec, timescale, codec configuration, a `ConfigVersion` that bumps on a mid-stream change), `MediaPacket` carries one access unit with PTS/DTS ticks and a keyframe flag, and `IMediaPacketSink` is the async output contract. Supporting pieces: `MediaTimestamp.Rescale` (128-bit, round-half-to-even timescale conversion), `AnnexBConverter` (H.264/H.265 length-prefixed ↔ Annex B start codes), `AvcDecoderConfigurationRecord`/`HevcDecoderConfigurationRecord` (avcC/hvcC parse + build, byte-exact round trip), `H264SpsParser`/`H265SpsParser` (profile, level, chroma format, bit depth and cropped size from an SPS, plus the RFC 6381 `CODECS` string), and `MediaPacketFactory.FromEncodedAudioFrame` so every `IStreamingEncoder` can feed it. Video is parsed for parameter-set headers only, never decoded.
+
+```csharp
+using EggEncoder.Media;
+
+var avcC = AvcDecoderConfigurationRecord.Parse(avcCBytes);
+var sps = H264SpsParser.Parse(avcC.SequenceParameterSets[0].Span); // 1920x1080, "avc1.640028"
+var video = new MediaTrackInfo(1, MediaKind.Video, MediaCodec.H264, timescale: 1000, avcCBytes, configVersion: 0, width: sps.Width, height: sps.Height);
+byte[] annexB = AnnexBConverter.ToAnnexB(packet.Payload.Span, avcC.NalLengthSize); // for MPEG-TS
+long pts90k = MediaTimestamp.Rescale(packet.Pts, fromTimescale: 1000, toTimescale: 90000);
+```
+
 **Planned:** live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, FLV, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. None of this is shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats

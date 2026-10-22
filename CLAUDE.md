@@ -84,6 +84,27 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 **Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O; `float.NaN` maps to 0 (silence) rather than the unspecified result of a raw `(int)double.NaN` cast, and `float.PositiveInfinity`/`NegativeInfinity` clamp to ±1.0. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. A float WAV *source* has always decoded transparently into int PCM through `Convert`/`Cut`/`Mix`/`Concatenate` (`WavReader.IsFloatFormat` handles this on read); for a float WAV *destination*, `WavSampleFormat.Float32` (`Codecs/WavSampleFormat.cs`) can be passed to those same entry points (`Convert`/`Cut` via `CutOptions.DestinationWavFormat`/`Mix`/`Concatenate`) — it requires the destination's bit depth to already be 32 and throws `NotSupportedException` against a non-WAV destination. The default, `WavSampleFormat.Integer`, is unchanged from before this option existed.
 
+### Media packet model (`src/EggEncoder/Media/`)
+
+The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`
+(item 1), so video is remuxed without decoding. `MediaKind`/`MediaCodec`, `MediaTrackInfo` (a
+validating record: timescale > 0, ids/sizes non-negative; codec configuration is track-level and a
+mid-stream change bumps `ConfigVersion`), `MediaTrackSet` (unique track ids), `MediaPacket` (`readonly
+record struct`, `long` PTS/DTS ticks in the track's own timescale, length-prefixed AVCC/HVCC payloads
+for H.264/H.265, raw AAC access units with no ADTS) and `IMediaPacketSink` (the async output
+contract; no implementation yet). `MediaTimestamp.Rescale` is the only timescale conversion
+(`Int128` intermediate, round half to even, `OverflowException` instead of wrapping).
+`AnnexBConverter` converts one access unit AVCC ↔ Annex B. `AvcDecoderConfigurationRecord`/
+`HevcDecoderConfigurationRecord` parse and build avcC/hvcC byte-exactly via the internal, bounds-checked
+`ConfigurationRecordReader`/`ConfigurationRecordWriter`. `H264SpsParser`/`H265SpsParser` read SPS
+header fields only (profile/level/chroma/bit depth/cropped size, plus the RFC 6381 `CODECS` string via
+`H264SpsInfo.CodecsString`/`HevcProfileTierLevel.ToCodecsString`) through the internal `RbspReader`
+(emulation-prevention removal + Exp-Golomb on top of `Transform.BitReader`, every overrun an
+`InvalidDataException`). `MediaPacketFactory.FromEncodedAudioFrame` adapts `IStreamingEncoder` output.
+Tests use `Codecs/Mov/test.mp4` (real H.264 access units via `MovVideoDemuxer`) plus real
+ffmpeg/x264/x265-produced avcC/hvcC records baked in as hex (`Media/MediaFixtures.cs`) and a synthetic
+`TestUtilities/RbspBuilder` for SPS branches no fixture reaches.
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container

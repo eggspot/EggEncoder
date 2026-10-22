@@ -660,6 +660,72 @@ public static class MovDecoder
 
 public delegate void AudioBlockDecodedCallback(ReadOnlySpan&lt;int&gt; block, int channels, int sampleRate, int bitsPerSample, long totalSamplesPerChannel);</code></pre>
       <p><code>block</code> is interleaved samples for whatever chunk the decoder just produced — accumulate it yourself (into a <code>List&lt;int&gt;</code>, a <code>WaveformCalculator</code>, an <code>IAudioSink</code>) as needed.</p>
+
+      <h2 id="media-packet-model">Media Packet Model</h2>
+      <p>Namespace: <code>EggEncoder.Media</code>. The codec-agnostic, already-encoded packet model every live source (RTMP ingest, FLV/MP4/MPEG-TS files) and output (RTMP push, HLS with video, recordings) in <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a> shares, so H.264/H.265 is remuxed without ever being decoded. This is that plan's item 1, the foundation; sources and sinks that produce and consume it arrive with later items.</p>
+      <pre><code class="language-csharp">public enum MediaKind { Audio, Video, Data }
+public enum MediaCodec { Aac, Mp3, Opus, H264, H265, Av1, Vp9 }
+
+public sealed record MediaTrackInfo(
+    int trackId, MediaKind kind, MediaCodec codec,
+    int timescale,                           // ticks per second for this track's Pts/Dts; must be positive
+    ReadOnlyMemory&lt;byte&gt; codecConfiguration, // avcC / hvcC / AudioSpecificConfig
+    int configVersion,                       // bumps on a mid-stream configuration change
+    int sampleRate = 0, int channels = 0, int width = 0, int height = 0);
+
+public sealed record MediaTrackSet(IReadOnlyList&lt;MediaTrackInfo&gt; tracks) // unique track ids
+{
+    public MediaTrackInfo? FindTrack(int trackId);
+}
+
+public readonly record struct MediaPacket(int TrackId, long Pts, long Dts, bool IsKeyframe, int ConfigVersion, ReadOnlyMemory&lt;byte&gt; Payload)
+{
+    public long CompositionOffset { get; } // Pts - Dts
+}
+
+public interface IMediaPacketSink : IAsyncDisposable
+{
+    ValueTask OpenAsync(MediaTrackSet tracks, CancellationToken cancellationToken = default);
+    ValueTask WriteAsync(MediaPacket packet, CancellationToken cancellationToken = default);
+    ValueTask CompleteAsync(CancellationToken cancellationToken = default);
+}
+
+public static class MediaTimestamp
+{
+    // value * to / from with a 128-bit intermediate, rounded half to even; OverflowException if the result doesn't fit.
+    public static long Rescale(long value, int fromTimescale, int toTimescale);
+}
+
+public static class AnnexBConverter // one H.264/H.265 access unit, NAL contents untouched
+{
+    public static byte[] ToAnnexB(ReadOnlySpan&lt;byte&gt; lengthPrefixed, int nalLengthSize = 4);
+    public static byte[] ToLengthPrefixed(ReadOnlySpan&lt;byte&gt; annexB, int nalLengthSize = 4);
+}
+
+public sealed record AvcDecoderConfigurationRecord(...)  // avcC: Parse(span) / ToArray(), exact inverses
+public sealed record HevcDecoderConfigurationRecord(...) // hvcC: Parse(span) / ToArray() / GetNalUnits(type)
+
+public static class H264SpsParser { public static H264SpsInfo Parse(ReadOnlySpan&lt;byte&gt; spsNalUnit); }
+public static class H265SpsParser { public static H265SpsInfo Parse(ReadOnlySpan&lt;byte&gt; spsNalUnit); }
+
+public static class MediaPacketFactory
+{
+    public static MediaPacket FromEncodedAudioFrame(EncodedAudioFrame frame, int trackId, long pts, int configVersion = 0);
+}</code></pre>
+      <p>Timestamps stay in each track's own timescale (1000 for RTMP/FLV, 90000 for MPEG-TS, the sample rate for audio from this library's encoders) until a muxer needs another one; <code>MediaTimestamp.Rescale</code> is the only conversion, and doesn't drift the way a fixed per-frame delta would (1024 samples at 44.1 kHz is 2089.8 ticks at 90 kHz). H.264/H.265 payloads are length-prefixed (AVCC/HVCC, what FLV, RTMP and MP4 use); <code>AnnexBConverter</code> converts to and from the start-code framing MPEG-TS uses. <code>H264SpsInfo</code>/<code>H265SpsInfo</code> report profile, level, chroma format, bit depth and the display size with SPS cropping / conformance window applied, plus an RFC 6381 <code>CodecsString</code> for an HLS <code>CODECS</code> attribute (<code>avc1.64001E</code>, <code>hvc1.1.6.L120.90</code>). Only parameter-set headers are parsed; slice data is never read. Every parser throws <code>InvalidDataException</code> on malformed input: truncation, zero NAL counts, a length running past the end, or a field outside its spec range.</p>
+      <pre><code class="language-csharp">var avcC = AvcDecoderConfigurationRecord.Parse(avcCBytes);
+var sps = H264SpsParser.Parse(avcC.SequenceParameterSets[0].Span);
+var video = new MediaTrackInfo(1, MediaKind.Video, MediaCodec.H264, timescale: 1000, avcCBytes, configVersion: 0,
+    width: sps.Width, height: sps.Height);
+
+// Feed any IStreamingEncoder into the packet model.
+long pts = 0;
+using var aac = AacStreamingEncoder.Create(channels: 1, sampleRate: 44100, frame =>
+{
+    var packet = MediaPacketFactory.FromEncodedAudioFrame(frame, trackId: 2, pts);
+    pts += frame.SampleCount;
+    // ... hand packet to an IMediaPacketSink
+});</code></pre>
     </div>
   </main>
 </div>
