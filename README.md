@@ -185,7 +185,7 @@ using var flacEncoder = FlacStreamingEncoder.Create(channels: 1, sampleRate: 441
 });
 ```
 
-**Planned:** live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, FLV, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Nothing of this is shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+**Planned:** live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, FLV, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. None of this is shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 

@@ -183,7 +183,7 @@ decoding video: each source only has to speak "packets", and each output only ha
 Decided by research for this plan (recorded in the PR that added this file, so the owner can
 overrule it). Three layers, each with its own idiom:
 
-1. **Pure, synchronous parsers and writers** — `FlvTagReader`/`FlvWriter`, the RTMP chunk
+1. **Pure, synchronous parsers and writers** — `FlvTagBodyParser`/`FlvDemuxer`/`FlvWriter`, the RTMP chunk
    (de)multiplexer, the AMF0 codec, `AnnexBConverter`, every muxer. They take `ReadOnlySpan<byte>`
    input or write to a `Stream`/buffer and never touch a socket. This keeps the existing codebase
    idiom (`EncodedAudioFrameCallback`, `IStreamingSink`, `MpegTsMuxer.BuildSegment`) and makes
@@ -383,9 +383,10 @@ the server (item 4) and the client (item 6).
   ECMA Array, Strict Array, Date, Object End; references and AMF3 switch (marker 0x11) rejected
   with a typed error. Values as a small `Amf0Value` discriminated type, no reflection. Every bound
   from "Security posture".
-- `RtmpHandshake`: the simple (non-digest) C0/C1/C2 ↔ S0/S1/S2 exchange as a state machine over
-  bytes; the server side also accepts the digest-style C1 that Flash-era clients send by echoing it
-  (no digest validation; RTMPE is out of scope).
+- `RtmpHandshake`: the simple C0/C1/C2 ↔ S0/S1/S2 exchange from the spec, as a state machine over
+  bytes. Whether common publishers (ffmpeg, OBS, vMix) also expect the server to answer the
+  undocumented digest-style handshake is checked against captured wire bytes in this item and
+  implemented only if a real client needs it (never RTMPE).
 - `RtmpChunkReader`/`RtmpChunkWriter`: basic header (1-3 bytes, chunk stream ids 2..65599), message
   header types 0-3, extended timestamps (including the type-3 extended-timestamp rule), per chunk
   stream reassembly state, `Set Chunk Size`/`Abort`/`Acknowledgement`/`Window Acknowledgement
@@ -402,8 +403,9 @@ the server (item 4) and the client (item 6).
 - A full handshake + `connect` + `createStream` + `publish` exchange between `RtmpChunkWriter` and
   `RtmpChunkReader` over an in-memory pipe, at chunk sizes 128 (default), 4096 and 65536, with
   messages that span many chunks and interleave across chunk stream ids.
-- Wire bytes of `connect`/`publish` captured once from a real `ffmpeg` and OBS publish (stored as a
-  checked-in binary fixture, captured as data) parse correctly.
+- Wire bytes of `connect`/`publish` captured once from a real `ffmpeg` publish (and OBS, when a
+  session has it available), stored as a checked-in binary fixture captured as data, parse
+  correctly.
 - Fuzz/malformed tests for every bound (oversized chunk size, message length over the limit,
   extended timestamp truncated, type-1 header on a never-started chunk stream, AMF nesting past
   the limit, a string length past the end) end in a typed `RtmpProtocolException`.
