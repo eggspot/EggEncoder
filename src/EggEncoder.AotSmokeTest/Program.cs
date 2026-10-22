@@ -118,6 +118,56 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("RTMP server: loopback publish of H.264 + AAC, received as packets", async () =>
+    {
+        await using var server = new EggEncoder.Live.Rtmp.RtmpServer(new EggEncoder.Live.Rtmp.RtmpServerOptions
+        {
+            EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0),
+            AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.StreamKey == "key")
+        });
+        var received = new TaskCompletionSource<List<EggEncoder.Media.MediaPacket>>();
+        server.PublishStarted += stream => _ = Task.Run(async () =>
+        {
+            var packets = new List<EggEncoder.Media.MediaPacket>();
+            await foreach (var packet in stream.ReadPacketsAsync())
+            {
+                packets.Add(packet);
+            }
+
+            received.SetResult(packets);
+        });
+        await server.StartAsync();
+
+        using var client = new System.Net.Sockets.TcpClient();
+        await client.ConnectAsync(server.LocalEndPoint!);
+        var network = client.GetStream();
+        var handshake = EggEncoder.Live.Rtmp.RtmpHandshake.CreateClient();
+        await network.WriteAsync(handshake.Start());
+        var reply = new byte[handshake.BytesExpected];
+        await network.ReadExactlyAsync(reply);
+        await network.WriteAsync(handshake.Process(reply));
+
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var output = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new EggEncoder.Live.Rtmp.RtmpChunkWriter();
+        writer.WriteSetChunkSize(output, 4096);
+        writer.Write(output, 3, EggEncoder.Live.Rtmp.RtmpCommand.Connect(1, "live", "rtmp://127.0.0.1/live").ToMessage());
+        writer.Write(output, 3, EggEncoder.Live.Rtmp.RtmpCommand.CreateStream(2).ToMessage());
+        writer.Write(output, 8, EggEncoder.Live.Rtmp.RtmpCommand.Publish("key").ToMessage(streamId: 1));
+        writer.Write(output, 6, new EggEncoder.Live.Rtmp.RtmpMessage(EggEncoder.Live.Rtmp.RtmpMessageType.Video, 1, 0, (byte[])[0x17, 0, 0, 0, 0, .. avcC]));
+        writer.Write(output, 4, new EggEncoder.Live.Rtmp.RtmpMessage(EggEncoder.Live.Rtmp.RtmpMessageType.Audio, 1, 0, new byte[] { 0xAF, 0, 0x12, 0x08 }));
+        writer.Write(output, 6, new EggEncoder.Live.Rtmp.RtmpMessage(EggEncoder.Live.Rtmp.RtmpMessageType.Video, 1, 0, new byte[] { 0x17, 1, 0, 0, 0x50, 0, 0, 0, 1, 0x65 }));
+        writer.Write(output, 4, new EggEncoder.Live.Rtmp.RtmpMessage(EggEncoder.Live.Rtmp.RtmpMessageType.Audio, 1, 23, new byte[] { 0xAF, 1, 0x21 }));
+        writer.Write(output, 3, EggEncoder.Live.Rtmp.RtmpCommand.DeleteStream(3, 1).ToMessage());
+        await network.WriteAsync(output.WrittenMemory);
+
+        var packets = await received.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        if (packets.Count != 2 || packets[0].CompositionOffset != 80 || packets[1].Dts != 23)
+        {
+            throw new InvalidOperationException("RTMP server check produced unexpected results");
+        }
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
