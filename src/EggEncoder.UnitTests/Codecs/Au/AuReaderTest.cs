@@ -294,6 +294,79 @@ namespace EggEncoder.UnitTests.Codecs.Au
             }
         }
 
+        // A header built in memory: magic, headerSize, dataSize, encoding, sampleRate, channels, then data.
+        private static byte[] BuildHeader(uint headerSize, uint dataSize, uint encoding, uint sampleRate, uint channels, byte[] data)
+        {
+            var bytes = new byte[24 + data.Length];
+            ".snd"u8.CopyTo(bytes);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(4), headerSize);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(8), dataSize);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(12), encoding);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(16), sampleRate);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(20), channels);
+            data.CopyTo(bytes, 24);
+            return bytes;
+        }
+
+        [Theory]
+        [InlineData(513u)]
+        [InlineData(0x27000001u)] // the corrupted-header value fuzzing found: Probe(Stream) tried to allocate a loudness filter per channel and never finished
+        [InlineData(0x80000000u)] // wraps to a negative int
+        public void Open_Stream_WithAbsurdChannelCount_Should_ThrowInvalidDataException(uint channels)
+        {
+            using var stream = new MemoryStream(BuildHeader(24, 4, encoding: 3, sampleRate: 44100, channels, [0, 0, 0, 0]));
+
+            var act = () => AuReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*channels*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithMaxChannels_Should_Succeed()
+        {
+            using var stream = new MemoryStream(BuildHeader(24, 1024, encoding: 3, sampleRate: 44100, (uint)AuReader.MaxChannels, new byte[1024]));
+
+            using var reader = AuReader.Open(stream);
+
+            reader.Channels.Should().Be(AuReader.MaxChannels);
+            reader.TotalSamples.Should().Be(1);
+        }
+
+        [Theory]
+        [InlineData(0u)]
+        [InlineData(0x80000000u)] // wraps to a negative int
+        public void Open_Stream_WithNonPositiveSampleRate_Should_ThrowInvalidDataException(uint sampleRate)
+        {
+            using var stream = new MemoryStream(BuildHeader(24, 2, encoding: 3, sampleRate, channels: 1, [0, 0]));
+
+            var act = () => AuReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*sample rate*");
+        }
+
+        [Theory]
+        [InlineData(0xED000020u, 2u)]           // past int.MaxValue: MemoryStream's own seek used to throw ArgumentOutOfRangeException
+        [InlineData(27u, 0xFFFFFFFFu)]          // one byte past EOF with an unknown data size: used to compute a negative data length
+        public void Open_Stream_WithHeaderSizePastEndOfStream_Should_ThrowInvalidDataException(uint headerSize, uint dataSize)
+        {
+            using var stream = new MemoryStream(BuildHeader(headerSize, dataSize, encoding: 3, sampleRate: 44100, channels: 1, [0, 0]));
+
+            var act = () => AuReader.Open(stream).Dispose();
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*past the end*");
+        }
+
+        [Fact]
+        public void Open_Stream_WithHeaderSizeExactlyAtEndOfStream_Should_ReadZeroSamples()
+        {
+            using var stream = new MemoryStream(BuildHeader(24, 0xFFFFFFFF, encoding: 3, sampleRate: 44100, channels: 1, []));
+
+            using var reader = AuReader.Open(stream);
+
+            reader.TotalSamples.Should().Be(0);
+            reader.ReadInterleavedSamples(new int[16], 16).Should().Be(0);
+        }
+
         [Fact]
         public void Open_WithZeroChannels_Should_Throw()
         {

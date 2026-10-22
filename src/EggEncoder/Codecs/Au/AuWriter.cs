@@ -61,6 +61,7 @@ namespace EggEncoder.Codecs.Au
         /// </summary>
         public static AuWriter Create(string filePath, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat)
         {
+            ValidateChannelsAndSampleRate(channels, sampleRate);
             var (encodingValue, bytesPerDiskSample) = DetermineEncoding(filePath, sampleFormat, bitsPerSample);
 
             // No outer try/catch needed here -- WriteAndCreate's own catch already disposes stream
@@ -78,10 +79,26 @@ namespace EggEncoder.Codecs.Au
         public static AuWriter Create(Stream destStream, int channels, int sampleRate, int bitsPerSample, long totalFrames, AuSampleFormat sampleFormat)
         {
             ArgumentNullException.ThrowIfNull(destStream);
+            ValidateChannelsAndSampleRate(channels, sampleRate);
 
             var (encodingValue, bytesPerDiskSample) = DetermineEncoding("<stream>", sampleFormat, bitsPerSample);
 
             return WriteAndCreate(destStream, leaveOpen: true, channels, sampleRate, totalFrames, sampleFormat, encodingValue, bytesPerDiskSample);
+        }
+
+        // The same limits AuReader.Open enforces on read, checked before the destination file is
+        // even created -- so this writer can never produce a file this project's own reader rejects.
+        private static void ValidateChannelsAndSampleRate(int channels, int sampleRate)
+        {
+            if (channels is < 1 or > AuReader.MaxChannels)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channels), channels, $"Channel count must be 1-{AuReader.MaxChannels}");
+            }
+
+            if (sampleRate <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive");
+            }
         }
 
         private static AuWriter WriteAndCreate(Stream stream, bool leaveOpen, int channels, int sampleRate, long totalFrames, AuSampleFormat sampleFormat, uint encodingValue, int bytesPerDiskSample)

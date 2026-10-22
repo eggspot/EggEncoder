@@ -236,6 +236,26 @@ namespace EggEncoder.UnitTests
         }
 
         [Fact]
+        public async Task Probe_Stream_AuFormat_WithCorruptedChannelCount_Should_ThrowInvalidDataException()
+        {
+            // Bytes a fuzzing pass produced from a real A-law fixture: one corrupted channels byte
+            // (0x27000001 channels). Before AuReader capped the channel count, Probe(Stream) tried to
+            // allocate one loudness filter per channel and exhausted memory (crashing the test host).
+            var bytes = new byte[24 + 64];
+            ".snd"u8.CopyTo(bytes);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(4), 24);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(8), 64);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(12), 27);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(16), 44100);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(20), 0x27000001);
+            using var stream = new MemoryStream(bytes);
+
+            var act = () => _nativeEncoder.Probe(stream, AudioFormat.Au);
+
+            await act.Should().ThrowExactlyAsync<InvalidDataException>().WithMessage("*channels*");
+        }
+
+        [Fact]
         public async Task Probe_Stream_AuFormat_Should_Return_Correct_Metadata()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

@@ -73,6 +73,43 @@ namespace EggEncoder.UnitTests.Codecs.Au
             act.Should().NotThrow();
         }
 
+        [Theory]
+        [InlineData(0, 44100)]
+        [InlineData(-1, 44100)]
+        [InlineData(AuReader.MaxChannels + 1, 44100)]
+        [InlineData(1, 0)]
+        [InlineData(1, -8000)]
+        public void Create_WithOutOfRangeChannelsOrSampleRate_Should_Throw_BeforeCreatingTheFile(int channels, int sampleRate)
+        {
+            var filePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".au");
+
+            var pathAct = () => AuWriter.Create(filePath, channels, sampleRate, 16, 0, AuSampleFormat.Integer).Dispose();
+            var streamAct = () => AuWriter.Create(new MemoryStream(), channels, sampleRate, 16, 0).Dispose();
+
+            pathAct.Should().ThrowExactly<ArgumentOutOfRangeException>();
+            streamAct.Should().ThrowExactly<ArgumentOutOfRangeException>();
+            File.Exists(filePath).Should().BeFalse();
+        }
+
+        [Fact]
+        public void Create_WithMaxChannels_Should_Round_Trip_Through_AuReader()
+        {
+            var samples = Enumerable.Range(0, AuReader.MaxChannels).Select(i => i - 256).ToArray();
+            using var stream = new MemoryStream();
+
+            using (var writer = AuWriter.Create(stream, AuReader.MaxChannels, 8000, 16, 1))
+            {
+                writer.WriteInterleavedSamples(samples, 1);
+            }
+
+            stream.Position = 0;
+            using var reader = AuReader.Open(stream);
+            var decoded = new int[AuReader.MaxChannels];
+            reader.ReadInterleavedSamples(decoded, 1).Should().Be(1);
+            reader.Channels.Should().Be(AuReader.MaxChannels);
+            decoded.Should().Equal(samples);
+        }
+
         [Fact]
         public void Create_Stream_WithNullStream_Should_Throw()
         {
