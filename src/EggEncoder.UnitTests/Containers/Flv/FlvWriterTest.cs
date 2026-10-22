@@ -214,11 +214,13 @@ namespace EggEncoder.UnitTests.Containers.Flv
         [Fact]
         public void Open_UnsupportedTrackSets_Should_Throw()
         {
-            var opus = new MediaTrackInfo(1, MediaKind.Audio, MediaCodec.Opus, 48000, ReadOnlyMemory<byte>.Empty, 0);
             var data = new MediaTrackInfo(2, MediaKind.Data, MediaCodec.Aac, 1000, ReadOnlyMemory<byte>.Empty, 0);
-            var aacVideo = new MediaTrackInfo(3, MediaKind.Video, MediaCodec.Aac, 1000, ReadOnlyMemory<byte>.Empty, 0);
+            var aacVideo = new MediaTrackInfo(3, MediaKind.Video, MediaCodec.Aac, 1000, new byte[] { 1 }, 0);
 
+            var opus = new MediaTrackInfo(1, MediaKind.Audio, MediaCodec.Opus, 48000, new byte[] { 1 }, 0);
+            var emptyAvc = new MediaTrackInfo(0, MediaKind.Video, MediaCodec.H264, 1000, ReadOnlyMemory<byte>.Empty, 0);
             OpenAction(new MediaTrackSet([opus])).Should().Throw<NotSupportedException>().WithMessage("*Opus*");
+            OpenAction(new MediaTrackSet([emptyAvc])).Should().Throw<ArgumentException>().WithMessage("*no codec configuration*");
             OpenAction(new MediaTrackSet([data])).Should().Throw<NotSupportedException>().WithMessage("*data track*");
             OpenAction(new MediaTrackSet([aacVideo])).Should().Throw<NotSupportedException>();
             OpenAction(new MediaTrackSet([AacTrack(1), AacTrack(2)])).Should().Throw<NotSupportedException>().WithMessage("*at most one*");

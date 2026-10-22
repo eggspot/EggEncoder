@@ -69,7 +69,8 @@ namespace EggEncoder.Containers.Flv
             FileHeader,
             PreviousTagSize,
             Tag,
-            Completed
+            Completed,
+            Faulted
         }
 
         private readonly Action<MediaTrackSet> _onTracks;
@@ -119,18 +120,22 @@ namespace EggEncoder.Containers.Flv
         public int SkippedTagCount { get; private set; }
 
         /// <summary>Parses as much of the stream as these bytes complete; the rest is kept for the next call.</summary>
-        /// <exception cref="InvalidDataException">The stream is malformed.</exception>
-        /// <exception cref="InvalidOperationException"><see cref="Complete"/> was already called.</exception>
+        /// <exception cref="InvalidDataException">The stream is malformed; the demuxer can't be used afterwards.</exception>
+        /// <exception cref="InvalidOperationException"><see cref="Complete"/> was already called, or an earlier call threw <see cref="InvalidDataException"/>.</exception>
         public void Feed(ReadOnlySpan<byte> data)
         {
-            if (_state == State.Completed)
-            {
-                throw new InvalidOperationException("The demuxer has already completed");
-            }
-
+            ThrowIfUnusable();
             Append(data);
-            while (TryParseNext())
+            try
             {
+                while (TryParseNext())
+                {
+                }
+            }
+            catch (InvalidDataException)
+            {
+                _state = State.Faulted;
+                throw;
             }
 
             Compact();
@@ -141,6 +146,7 @@ namespace EggEncoder.Containers.Flv
         /// every held packet.
         /// </summary>
         /// <exception cref="InvalidDataException">The input ended inside the file header or a tag.</exception>
+        /// <exception cref="InvalidOperationException">An earlier <see cref="Feed"/> threw <see cref="InvalidDataException"/>.</exception>
         public void Complete()
         {
             if (_state == State.Completed)
@@ -148,6 +154,7 @@ namespace EggEncoder.Containers.Flv
                 return;
             }
 
+            ThrowIfUnusable();
             var leftover = _bufferEnd - _bufferStart;
             if (_state == State.FileHeader || leftover > 0)
             {
@@ -156,6 +163,19 @@ namespace EggEncoder.Containers.Flv
 
             _state = State.Completed;
             Announce();
+        }
+
+        private void ThrowIfUnusable()
+        {
+            if (_state == State.Completed)
+            {
+                throw new InvalidOperationException("The demuxer has already completed");
+            }
+
+            if (_state == State.Faulted)
+            {
+                throw new InvalidOperationException("The demuxer stopped at malformed input and can't continue");
+            }
         }
 
         private bool TryParseNext()

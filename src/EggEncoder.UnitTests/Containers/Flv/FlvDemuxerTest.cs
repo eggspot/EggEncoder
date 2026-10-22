@@ -554,6 +554,17 @@ namespace EggEncoder.UnitTests.Containers.Flv
         }
 
         [Fact]
+        public void Feed_AfterMalformedInput_Should_Refuse_Further_Use()
+        {
+            var capture = new Capture();
+            var bad = () => capture.Demuxer.Feed([(byte)'X', (byte)'L', (byte)'V', 1, 5, 0, 0, 0, 9]);
+
+            bad.Should().Throw<InvalidDataException>();
+            ((Action)(() => capture.Demuxer.Feed(new FlvTestBuilder().ToArray()))).Should().Throw<InvalidOperationException>().WithMessage("*malformed*");
+            ((Action)(() => capture.Demuxer.Complete())).Should().Throw<InvalidOperationException>().WithMessage("*malformed*");
+        }
+
+        [Fact]
         public void Constructor_NullCallbacks_Should_Throw()
         {
             ((Action)(() => new FlvDemuxer(null!, _ => { }))).Should().Throw<ArgumentNullException>();

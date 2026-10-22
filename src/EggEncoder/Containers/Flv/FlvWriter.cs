@@ -58,7 +58,7 @@ namespace EggEncoder.Containers.Flv
 
         /// <summary>Writes the file header and <c>onMetaData</c> for these tracks.</summary>
         /// <exception cref="NotSupportedException">More than one audio or video track, a data track, or a codec FLV can't carry (Opus).</exception>
-        /// <exception cref="ArgumentException">The metadata can't be encoded as AMF0; nothing has been written.</exception>
+        /// <exception cref="ArgumentException">A track other than MP3 with no codec configuration, or metadata that can't be encoded as AMF0; nothing has been written.</exception>
         public void Open(MediaTrackSet tracks)
         {
             ThrowIfDisposed();
@@ -240,6 +240,13 @@ namespace EggEncoder.Containers.Flv
             var video = 0;
             foreach (var track in tracks.Tracks)
             {
+                // MP3 is the only carried codec with no configuration record; an empty one for any
+                // other would be written as a sequence header no demuxer can use.
+                if (track.Codec != MediaCodec.Mp3 && track.Kind != MediaKind.Data && track.CodecConfiguration.IsEmpty)
+                {
+                    throw new ArgumentException($"Track {track.TrackId} ({track.Codec}) has no codec configuration", nameof(tracks));
+                }
+
                 switch (track.Kind)
                 {
                     case MediaKind.Audio:
