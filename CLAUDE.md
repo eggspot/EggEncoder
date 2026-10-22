@@ -169,7 +169,10 @@ capture when `EGGENCODER_RTMP_CAPTURE_PATH` is also set.
 (`connect` → Window Ack Size/Set Peer Bandwidth/Set Chunk Size/`_result`; `releaseStream`/
 `FCPublish`/`getStreamLength` → `_result`; unknown calls → `_error` `NetConnection.Call.Failed`;
 `createStream`; one `publish` per connection; `play` refused; `FCUnpublish`/`deleteStream` end the
-publish), pings and acknowledgements. `RtmpServerOptions` holds every security-posture default with
+publish and close the connection), pings and acknowledgements (neither pushes back the idle timeout:
+only media does). Events are `EventHandler<RtmpIngestStream>`; `RtmpIngestStream.Disconnect()` kicks a
+publisher; the authorization callback is awaited with `WaitAsync` on the publish deadline, so one that
+ignores its token can't hold a connection open. `RtmpServerOptions` holds every security-posture default with
 hard ceilings (loopback bind, `AuthorizePublishAsync` null = reject all, `MaxConnections`,
 `MaxNameLength` checked before the callback, chunk bounds via `RtmpChunkReaderOptions`, the four
 timeouts on one `TimeProvider`-backed `CancellationTokenSource` per connection rearmed with

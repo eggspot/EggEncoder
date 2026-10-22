@@ -24,8 +24,9 @@ namespace EggEncoder.Live.Rtmp
     /// The publish ends when the publisher unpublishes (<c>FCUnpublish</c>/<c>deleteStream</c>),
     /// disconnects, times out, or the server stops: the packet enumeration then finishes normally once
     /// every queued packet has been read, and <see cref="Completion"/> completes. Only a publisher that
-    /// broke the protocol (or sent a malformed sequence header) ends it with an exception, thrown from
-    /// <see cref="ReadPacketsAsync"/> and carried by <see cref="Completion"/>.
+    /// broke the protocol (or sent a malformed sequence header), or a <see cref="RtmpServer.PublishStarted"/>
+    /// handler that threw, ends it with an exception, thrown from <see cref="ReadPacketsAsync"/> and
+    /// carried by <see cref="Completion"/>. <see cref="Disconnect"/> ends it from the consumer's side.
     /// </para>
     /// <para>
     /// Tracks: the server expects the tracks the publisher's <c>onMetaData</c> names
@@ -35,7 +36,7 @@ namespace EggEncoder.Live.Rtmp
     /// <see cref="FlvDemuxer.VideoTrackId"/>/<see cref="FlvDemuxer.AudioTrackId"/>, timescale 1000).
     /// </para>
     /// </remarks>
-    public sealed class RtmpIngestStream : IAsyncDisposable
+    public sealed class RtmpIngestStream
     {
         private readonly Channel<(MediaTrackSet? Tracks, MediaPacket Packet)> _queue =
             Channel.CreateUnbounded<(MediaTrackSet?, MediaPacket)>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
@@ -62,7 +63,7 @@ namespace EggEncoder.Live.Rtmp
         /// <summary>The application name (<c>live</c> in <c>rtmp://host/live/key</c>).</summary>
         public string AppName => Request.AppName;
 
-        /// <summary>The stream key (a secret: don't log it).</summary>
+        /// <summary>The stream key (a secret: don't log it). See <see cref="RtmpPublishRequest.StreamKey"/>.</summary>
         public string StreamKey => Request.StreamKey;
 
         /// <summary>The publisher's address, when known.</summary>
@@ -84,11 +85,16 @@ namespace EggEncoder.Live.Rtmp
         /// <summary>The publisher's most recent <c>onMetaData</c>, or <c>null</c> if it sent none (yet).</summary>
         public FlvMetadata? Metadata => _metadata;
 
-        /// <summary>Completes when the publish has ended and every packet was queued; faults only on a protocol error.</summary>
+        /// <summary>
+        /// Completes when the publish has ended and every packet was queued. Faults only on a protocol
+        /// error (<see cref="RtmpProtocolException"/>) or with the exception a
+        /// <see cref="RtmpServer.PublishStarted"/> handler threw.
+        /// </summary>
         public Task Completion => _completion.Task;
 
         /// <summary>Yields every packet of the publish, in order, until it ends. Can be enumerated once.</summary>
         /// <exception cref="RtmpProtocolException">The publisher broke the protocol or sent malformed media configuration.</exception>
+        /// <exception cref="Exception">Whatever a <see cref="RtmpServer.PublishStarted"/> handler threw, which also ends the publish.</exception>
         /// <exception cref="InvalidOperationException">Already enumerated.</exception>
         public async IAsyncEnumerable<MediaPacket> ReadPacketsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
@@ -120,12 +126,8 @@ namespace EggEncoder.Live.Rtmp
             }
         }
 
-        /// <summary>Disconnects the publisher, ending the publish (a way to kick a stream).</summary>
-        public ValueTask DisposeAsync()
-        {
-            _disconnect();
-            return ValueTask.CompletedTask;
-        }
+        /// <summary>Disconnects the publisher, ending the publish (a way to kick a stream). Does nothing once it has ended.</summary>
+        public void Disconnect() => _disconnect();
 
         internal void SetMetadata(FlvMetadata? metadata) => _metadata = metadata;
 

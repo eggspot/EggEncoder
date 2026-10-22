@@ -126,7 +126,7 @@ try
             AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.StreamKey == "key")
         });
         var received = new TaskCompletionSource<List<EggEncoder.Media.MediaPacket>>();
-        server.PublishStarted += stream => _ = Task.Run(async () =>
+        server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
         {
             var packets = new List<EggEncoder.Media.MediaPacket>();
             await foreach (var packet in stream.ReadPacketsAsync())

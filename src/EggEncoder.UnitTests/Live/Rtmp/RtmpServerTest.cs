@@ -14,10 +14,23 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 {
     public class RtmpServerTest
     {
-        private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(15);
+        // Generous: a loaded CI runner has been seen taking 30 s to get a loopback handshake through.
+        private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(90);
 
-        internal static RtmpServerOptions AcceptAll(RtmpServerOptions? options = null) => new()
+        // On the real clock the server's own timeouts are stretched to the same margin, so only the
+        // tests about timeouts (on a FakeTimeProvider, with the real defaults) ever hit one.
+        private static readonly TimeSpan RealClockTimeout = TimeSpan.FromMinutes(2);
+
+        internal static RtmpServerOptions AcceptAll(RtmpServerOptions? options = null) => options?.TimeProvider is FakeTimeProvider
+            ? Configure(options, options.HandshakeTimeout, options.PublishTimeout, options.IdleTimeout, options.ConsumerStallTimeout)
+            : Configure(options, RealClockTimeout, RealClockTimeout, RealClockTimeout, RealClockTimeout);
+
+        private static RtmpServerOptions Configure(RtmpServerOptions? options, TimeSpan handshake, TimeSpan publish, TimeSpan idle, TimeSpan stall) => new()
         {
+            HandshakeTimeout = handshake,
+            PublishTimeout = publish,
+            IdleTimeout = idle,
+            ConsumerStallTimeout = stall,
             EndPoint = options?.EndPoint ?? new IPEndPoint(IPAddress.Loopback, 0),
             AuthorizePublishAsync = options?.AuthorizePublishAsync ?? ((_, _) => ValueTask.FromResult(true)),
             Certificate = options?.Certificate,
@@ -45,7 +58,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
             public Consumer(RtmpServer server, bool read = true)
             {
-                server.PublishStarted += stream =>
+                server.PublishStarted += (_, stream) =>
                 {
                     if (read)
                     {
@@ -54,7 +67,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
                     _started.TrySetResult(stream);
                 };
-                server.PublishEnded += stream => _ended.TrySetResult(stream);
+                server.PublishEnded += (_, stream) => _ended.TrySetResult(stream);
             }
 
             public Task<RtmpIngestStream> Started => _started.Task.WaitAsync(TestTimeout);
@@ -119,6 +132,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 await publisher.SendFlvAsync(flv);
                 await publisher.UnpublishAsync("abc123");
 
+                (await publisher.WaitForCloseAsync()).Should().BeTrue("an ingest connection closes once its publish ends");
                 var packets = await consumer.PacketsAsync();
                 AssertSamePackets(packets, expected.Packets);
                 stream.Tracks!.Tracks.Should().HaveCount(2);
@@ -136,7 +150,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             await using var server = await StartAsync(AcceptAll());
             var recorded = new MemoryStream();
             var recording = new TaskCompletionSource();
-            server.PublishStarted += stream => _ = Task.Run(async () =>
+            server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
             {
                 await using var writer = new FlvWriter(recorded, leaveOpen: true);
                 MediaTrackSet? tracks = null;
@@ -604,7 +618,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         }
 
         [Fact]
-        public async Task IngestStream_Disposed_Should_Disconnect_The_Publisher()
+        public async Task IngestStream_Disconnect_Should_Disconnect_The_Publisher()
         {
             await using var server = await StartAsync(AcceptAll());
             var consumer = new Consumer(server);
@@ -613,11 +627,12 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             {
                 var stream = await consumer.Started;
 
-                await stream.DisposeAsync();
+                stream.Disconnect();
 
                 (await publisher.WaitForCloseAsync()).Should().BeTrue();
                 await stream.Completion.WaitAsync(TestTimeout);
                 (await consumer.PacketsAsync()).Should().BeEmpty();
+                stream.Disconnect(); // after the end: nothing to do
             }
         }
 
@@ -646,12 +661,12 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         {
             await using var server = await StartAsync(AcceptAll());
             var started = new TaskCompletionSource<RtmpIngestStream>();
-            server.PublishStarted += stream =>
+            server.PublishStarted += (_, stream) =>
             {
                 started.TrySetResult(stream);
                 throw new InvalidOperationException("handler bug");
             };
-            server.PublishEnded += _ => throw new InvalidOperationException("ended handler bug, swallowed");
+            server.PublishEnded += (_, _) => throw new InvalidOperationException("ended handler bug, swallowed");
 
             await using var publisher = await RtmpTestPublisher.OpenAsync(server.LocalEndPoint!);
             await publisher.HandshakeAsync();
@@ -891,8 +906,11 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             await using var server = await StartAsync(AcceptAll(new RtmpServerOptions { TimeProvider = time }));
             await using var publisher = await RtmpTestPublisher.OpenAsync(server.LocalEndPoint!);
             await publisher.SendRawAsync([RtmpHandshake.Version, 1, 2, 3]);
+            await WaitForConnectionsAsync(server, 1);
 
-            (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(10))).Should().BeTrue();
+            time.Advance(TimeSpan.FromSeconds(9));
+            (await publisher.WaitForCloseAsync(TimeSpan.FromMilliseconds(200))).Should().BeFalse("the handshake timeout is 10 s");
+            (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(1))).Should().BeTrue();
         }
 
         [Fact]
@@ -904,7 +922,35 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             await publisher.HandshakeAsync();
             await publisher.ConnectAsync("live");
 
+            time.Advance(TimeSpan.FromSeconds(9));
+            (await publisher.WaitForCloseAsync(TimeSpan.FromMilliseconds(200))).Should().BeFalse("the publish timeout is 10 s");
+            (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(1))).Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task Authorization_ThatIgnoresItsToken_Should_Still_Be_Cut_Off_By_PublishTimeout()
+        {
+            var time = new FakeTimeProvider();
+            var called = new TaskCompletionSource();
+            var never = new TaskCompletionSource<bool>();
+            await using var server = await StartAsync(AcceptAll(new RtmpServerOptions
+            {
+                TimeProvider = time,
+                AuthorizePublishAsync = (_, _) =>
+                {
+                    called.TrySetResult();
+                    return new ValueTask<bool>(never.Task);
+                }
+            }));
+            await using var publisher = await RtmpTestPublisher.OpenAsync(server.LocalEndPoint!);
+            await publisher.HandshakeAsync();
+            await publisher.ConnectAsync("live");
+            var streamId = await publisher.CreateStreamAsync();
+            await publisher.SendCommandAsync(RtmpCommand.Publish("streamkey"), streamId, chunkStreamId: 8);
+            await called.Task.WaitAsync(TestTimeout);
+
             (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(10))).Should().BeTrue();
+            await server.StopAsync().WaitAsync(TestTimeout);
         }
 
         [Fact]
@@ -948,7 +994,9 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 time.Advance(TimeSpan.FromSeconds(20));
                 (await publisher.WaitForCloseAsync(TimeSpan.FromMilliseconds(200))).Should().BeFalse();
 
-                (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(30))).Should().BeTrue();
+                // Pings are answered but don't count as activity: only media keeps a publish alive.
+                await publisher.SendAsync(RtmpUserControl.PingRequest(1).ToMessage(), RtmpProtocolControl.ChunkStreamId);
+                (await AdvanceUntilClosedAsync(time, publisher, TimeSpan.FromSeconds(5))).Should().BeTrue();
                 await (await consumer.Started).Completion.WaitAsync(TestTimeout);
             }
         }
@@ -1031,6 +1079,15 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             (await publisher.WaitForCloseAsync()).Should().BeTrue();
         }
 
+        private static async Task WaitForConnectionsAsync(RtmpServer server, int count)
+        {
+            using var timeout = new CancellationTokenSource(TestTimeout);
+            while (server.ConnectionCount != count)
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+
         // Advances the fake clock in steps until the server closes the connection, so the test
         // doesn't depend on exactly when the server armed its timer.
         private static async Task<bool> AdvanceUntilClosedAsync(FakeTimeProvider time, RtmpTestPublisher publisher, TimeSpan step)
@@ -1044,7 +1101,8 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 }
             }
 
-            return false;
+            // Every timer is long past due; a slow machine may still be getting round to it.
+            return await publisher.WaitForCloseAsync(TestTimeout);
         }
 
         internal static X509Certificate2 CreateTestCertificate()

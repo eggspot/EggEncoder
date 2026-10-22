@@ -95,8 +95,9 @@ namespace EggEncoder.Live.Rtmp
         }
 
         /// <summary>
-        /// The longest application name or stream key accepted, in characters (default 256). Longer
-        /// names, empty names and names with control characters are refused before any callback sees them.
+        /// The longest application name or stream key accepted, in UTF-16 characters (default 256).
+        /// Longer names, empty names and names with control characters are refused before any callback
+        /// sees them. Names are not made path-safe: see <see cref="RtmpPublishRequest"/>.
         /// </summary>
         public int MaxNameLength
         {

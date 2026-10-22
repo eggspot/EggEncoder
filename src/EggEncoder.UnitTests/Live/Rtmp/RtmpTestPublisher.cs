@@ -15,7 +15,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
     /// </summary>
     internal sealed class RtmpTestPublisher : IAsyncDisposable
     {
-        private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(90);
 
         private readonly TcpClient _client;
         private readonly RtmpChunkWriter _writer = new();

@@ -237,7 +237,7 @@ reader.Feed(bytesFromSocket); // any piece size, after RtmpHandshake completes
 
 ### RTMP server (ingest)
 
-`RtmpServer` accepts publishes from OBS, Streamlabs, vMix, ffmpeg or a hardware encoder at `rtmp://host:port/app/streamKey` (RTMPS with a certificate) and hands you each one as an `RtmpIngestStream` of packets: H.264/H.265 and AAC exactly as sent, ready to remux without decoding. Closed by default: it listens on `127.0.0.1` only and refuses every publish until `AuthorizePublishAsync` says yes; one publisher per stream key; chunk/message/AMF0/name bounds; timeouts on the handshake, on reaching `publish`, on an idle publisher and on a consumer that stops reading; a bounded packet queue with TCP backpressure (nothing dropped). Verified against a real ffmpeg publish, live and as a replayed wire capture.
+`RtmpServer` accepts publishes from OBS, Streamlabs, vMix, ffmpeg or a hardware encoder at `rtmp://host:port/app/streamKey` (RTMPS with a certificate) and hands you each one as an `RtmpIngestStream` of packets: H.264/H.265 and AAC exactly as sent, ready to remux without decoding. Closed by default: it listens on `127.0.0.1` only and refuses every publish until `AuthorizePublishAsync` says yes; one publisher per stream key; chunk/message/AMF0/name bounds; timeouts on the handshake, on reaching `publish`, on an idle publisher and on a consumer that stops reading; a bounded packet queue with TCP backpressure (nothing dropped). `stream.Disconnect()` kicks a publisher. Verified against a real ffmpeg publish, live and as a replayed wire capture.
 
 ```csharp
 using System.Net;
@@ -248,12 +248,13 @@ using EggEncoder.Media;
 await using var server = new RtmpServer(new RtmpServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 1935), // opt in to every interface
-    AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.StreamKey == secretKey)
+    AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.AppName == "live" && request.StreamKey == secretKey)
 });
-server.PublishStarted += stream => _ = Task.Run(async () =>
+server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
 {
-    // Record the publish to FLV; stream.Tracks describes the packet just read.
-    await using var recording = new FlvWriter(File.Create($"{stream.AppName}.flv"));
+    // Record the publish to FLV; stream.Tracks describes the packet just read. App names and stream
+    // keys come from the publisher and aren't path-safe, so don't build file paths from them.
+    await using var recording = new FlvWriter(File.Create($"recording-{DateTime.UtcNow:yyyyMMdd-HHmmss}.flv"));
     MediaTrackSet? tracks = null;
     await foreach (var packet in stream.ReadPacketsAsync())
     {

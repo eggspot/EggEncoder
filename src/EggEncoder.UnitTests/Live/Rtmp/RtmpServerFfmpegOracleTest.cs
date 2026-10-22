@@ -27,8 +27,9 @@ namespace EggEncoder.UnitTests.Live.Rtmp
                 UseShellExecute = false
             };
             using var process = Process.Start(startInfo)!;
-            var errors = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var errors = await process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
 
             process.ExitCode.Should().Be(0, errors);
             var stream = await consumer.Started;

@@ -45,6 +45,7 @@ namespace EggEncoder.Live.Rtmp
         private RtmpIngestStream? _ingest;
         private uint _publishStreamId;
         private bool _publishEnded;
+        private volatile bool _finished;
 
         public RtmpServerConnection(RtmpServer server, Socket socket)
         {
@@ -60,14 +61,20 @@ namespace EggEncoder.Live.Rtmp
         /// <summary>Ends the connection from outside (the ingest stream was disposed, or the server is stopping).</summary>
         public void Disconnect()
         {
+            if (_finished)
+            {
+                return;
+            }
+
             try
             {
                 _timeout.Cancel();
                 _stall.Cancel();
             }
-            catch (ObjectDisposedException)
+            catch (Exception e) when (e is ObjectDisposedException or AggregateException)
             {
-                // Already finished.
+                // Finishing at the same moment, or a callback registered on the token (by an
+                // authorization callback) threw; either way the connection is going down.
             }
         }
 
@@ -133,6 +140,7 @@ namespace EggEncoder.Live.Rtmp
                     _socket.Dispose();
                 }
 
+                _finished = true;
                 _timeout.Dispose();
                 _stall.Dispose();
             }
@@ -160,11 +168,8 @@ namespace EggEncoder.Live.Rtmp
             var buffer = new byte[ReadBufferLength];
             while (!_closeRequested)
             {
-                if (_ingest is not null)
-                {
-                    _timeout.CancelAfter(_options.IdleTimeout);
-                }
-
+                // Until publish, the publish deadline runs; after it, the idle deadline, which only
+                // media pushes back (pings and acknowledgements don't keep a publish alive).
                 var read = await stream.ReadAsync(buffer, _timeout.Token).ConfigureAwait(false);
                 if (read == 0)
                 {
@@ -249,12 +254,12 @@ namespace EggEncoder.Live.Rtmp
                     break;
                 case "FCUnpublish":
                     ReplyIfExpected(command);
-                    EndPublish(null);
+                    CloseAfterPublish();
                     break;
                 case "deleteStream":
                     if (_ingest is not null && command.GetNumberArgument(0) == _publishStreamId)
                     {
-                        EndPublish(null);
+                        CloseAfterPublish();
                     }
 
                     break;
@@ -321,9 +326,10 @@ namespace EggEncoder.Live.Rtmp
             bool authorized;
             try
             {
-                // The publish timeout keeps running through the callback.
+                // The publish timeout keeps running through the callback, and holds even for a
+                // callback that ignores its token.
                 authorized = _options.AuthorizePublishAsync is { } authorize
-                    && await authorize(request, _timeout.Token).ConfigureAwait(false);
+                    && await authorize(request, _timeout.Token).AsTask().WaitAsync(_timeout.Token).ConfigureAwait(false);
             }
             catch
             {
@@ -339,6 +345,7 @@ namespace EggEncoder.Live.Rtmp
             }
 
             _publishStreamId = streamId;
+            _timeout.CancelAfter(_options.IdleTimeout);
             _ingest = new RtmpIngestStream(request, _options.PacketQueueCapacity, _options.PacketQueueMaxBytes, Disconnect);
             _server.RaisePublishStarted(_ingest);
             _writer.Write(_output, RtmpProtocolControl.ChunkStreamId, RtmpUserControl.StreamBegin(streamId).ToMessage());
@@ -363,6 +370,7 @@ namespace EggEncoder.Live.Rtmp
                     DecideTracks(metadata.Find("audiocodecid") is not null, metadata.Find("videocodecid") is not null);
                 }
 
+                _timeout.CancelAfter(_options.IdleTimeout);
                 return;
             }
 
@@ -374,6 +382,7 @@ namespace EggEncoder.Live.Rtmp
             _tags.ProcessTag((int)message.Type, filtered: false, message.Timestamp, message.Payload.Span);
             if (_produced.Count == 0)
             {
+                _timeout.CancelAfter(_options.IdleTimeout);
                 return;
             }
 
@@ -396,6 +405,16 @@ namespace EggEncoder.Live.Rtmp
         {
             _tracksDecided = true;
             _tags.ExpectTracks(audio || !video, video || !audio);
+        }
+
+        // An ingest connection has nothing left to do once its one publish is over.
+        private void CloseAfterPublish()
+        {
+            if (_ingest is not null)
+            {
+                EndPublish(null);
+                _closeRequested = true;
+            }
         }
 
         private void EndPublish(Exception? error)

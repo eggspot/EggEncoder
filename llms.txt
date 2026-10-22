@@ -399,7 +399,10 @@ included), `IdleTimeout` 30 s, `ConsumerStallTimeout` 10 s. `RtmpPublishRequest`
 (describes the packet last yielded; replaced by reference on a track/config change), `Metadata`
 (latest `onMetaData`), `Completion`, `ReadPacketsAsync(ct)` (once; packets exactly as `FlvDemuxer`
 gives for the same tags: video track 0, audio track 1, timescale 1000, AVCC/raw AAC payloads),
-`DisposeAsync()` disconnects the publisher. Tracks expected: those `onMetaData`'s
+`Disconnect()` kicks the publisher. Events are `EventHandler<RtmpIngestStream>`.
+Names are checked for comparison, not made path-safe (`/`, `..` pass): never build paths from them.
+Idle timeout is pushed back only by media (not pings); a connection closes once its publish ends;
+an authorization callback that ignores its token is abandoned at `PublishTimeout`. Tracks expected: those `onMetaData`'s
 `videocodecid`/`audiocodecid` name when it precedes the first media message, else both. Bounded
 queue with TCP backpressure; a consumer stalled past `ConsumerStallTimeout` gets the publisher
 dropped, nothing is lost. Unpublish/disconnect/timeout/server stop end the enumeration normally;

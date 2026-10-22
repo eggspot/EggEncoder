@@ -47,10 +47,10 @@ namespace EggEncoder.Live.Rtmp
         }
 
         /// <summary>Raised when a publish has been authorized, before its media arrives.</summary>
-        public event Action<RtmpIngestStream>? PublishStarted;
+        public event EventHandler<RtmpIngestStream>? PublishStarted;
 
         /// <summary>Raised once a publish has ended (see <see cref="RtmpIngestStream"/>) and its packet stream is complete.</summary>
-        public event Action<RtmpIngestStream>? PublishEnded;
+        public event EventHandler<RtmpIngestStream>? PublishEnded;
 
         /// <summary>The configuration this server runs with.</summary>
         public RtmpServerOptions Options { get; }
@@ -108,19 +108,19 @@ namespace EggEncoder.Live.Rtmp
         public async Task StopAsync()
         {
             Task? acceptLoop;
+            bool stopNow;
             lock (_gate)
             {
-                if (_stopped)
-                {
-                    acceptLoop = _acceptLoop;
-                }
-                else
-                {
-                    _stopped = true;
-                    acceptLoop = _acceptLoop;
-                    _stopping?.Cancel();
-                    _listener?.Dispose();
-                }
+                stopNow = !_stopped;
+                _stopped = true;
+                acceptLoop = _acceptLoop;
+            }
+
+            if (stopNow)
+            {
+                // Outside the lock: cancelling runs every connection's Disconnect.
+                _listener?.Dispose();
+                _stopping?.Cancel();
             }
 
             if (acceptLoop is not null)
@@ -154,14 +154,14 @@ namespace EggEncoder.Live.Rtmp
             }
         }
 
-        internal void RaisePublishStarted(RtmpIngestStream stream) => PublishStarted?.Invoke(stream);
+        internal void RaisePublishStarted(RtmpIngestStream stream) => PublishStarted?.Invoke(this, stream);
 
         // An ended publish must not take the connection task down with it, whatever a handler does.
         internal void RaisePublishEnded(RtmpIngestStream stream)
         {
             try
             {
-                PublishEnded?.Invoke(stream);
+                PublishEnded?.Invoke(this, stream);
             }
             catch (Exception)
             {
