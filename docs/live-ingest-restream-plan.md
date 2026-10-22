@@ -48,7 +48,9 @@ created this file. Here is everything you need:
      and `src/EggEncoder/Containers/MpegTs/` for file-level containers, `src/EggEncoder/Live/Rtmp/`,
      `src/EggEncoder/Live/Sources/`, `src/EggEncoder/Live/Restream/`, `src/EggEncoder/Live/Srt/` for
      network and live-orchestration code. The existing `Streaming/` folder stays the HLS/fMP4/TS
-     *output* side; items here extend its muxers in place (item 5) rather than forking them.
+     *output* side (so the new TS demuxer in `Containers/MpegTs/` deliberately lives apart from the
+     existing `Streaming/MpegTs/MpegTsMuxer`: file-level containers vs live packaging; the demuxer
+     reuses `MpegTsCrc32` rather than copying it); items here extend its muxers in place (item 5) rather than forking them.
    - **Reuse, don't duplicate.** `MovAtomReader`/`Mp4SampleTable`/`MovVideoDemuxer` (MP4 demux),
      `Mp4BoxBuilder` (box writing), `Mp4EsdsParser.BuildAudioSpecificConfig` (AAC config),
      `AdtsFrameWriter` (ADTS framing), `MpegTsMuxer`/`MpegTsCrc32`, `FmpInitSegmentWriter`/
@@ -209,9 +211,10 @@ overrule it). Three layers, each with its own idiom:
 **Why this is an explicit exception to `docs/streaming-plan.md`'s "synchronous callbacks" rule:**
 that rule was justified by CPU-bound encode loops; sockets, TLS and reconnects are I/O-bound, and a
 synchronous callback driven from inside a socket read loop would let one slow destination stall the
-ingest, which defeats failure isolation. Both `docs/streaming-plan.md` ("Decode direction is out of
-scope") and `docs/feature-roadmap.md` item 1 already deferred real async I/O to a later item; this
-plan is that item. Everything below the network boundary keeps the synchronous idiom.
+ingest, which defeats failure isolation. `docs/streaming-plan.md`'s own synchronous-callback
+bullet ties that choice to its encode loops, its "Decode direction is out of scope" bullet defers
+ingest to a plan of its own, and `docs/feature-roadmap.md` item 1 called real async I/O out of scope
+for its `Stream` overloads; this plan is the ingest plan those deferred to. Everything below the network boundary keeps the synchronous idiom.
 `System.Threading.Channels`, `IAsyncEnumerable`, `Socket` and `SslStream` are all in-box on every
 target framework (`net8.0`/`net9.0`/`net10.0`) and AOT-safe.
 
@@ -222,6 +225,8 @@ namespace EggEncoder.Media;
 
 public enum MediaKind { Audio, Video, Data }
 public enum MediaCodec { Aac, Mp3, Opus, H264, H265, Av1, Vp9 }
+// MediaKind.Data is reserved: timed-metadata tracks (onMetaData updates, ID3 passthrough) are
+// deferred; until a data codec is added, sources surface metadata out of band, not as packets.
 
 public sealed record MediaTrackInfo(
     int TrackId, MediaKind Kind, MediaCodec Codec,
@@ -276,7 +281,7 @@ Rules, each one decided for a concrete reason:
 | 2 | [FLV demux + mux (file level, Enhanced FLV)](#2-flv-demux--mux-file-level-enhanced-flv) | 1 |
 | 3 | [RTMP core: AMF0, handshake, chunk stream, control and command messages](#3-rtmp-core-amf0-handshake-chunk-stream-control-and-command-messages) | none (protocol layer); 2 for media message bodies |
 | 4 | [RTMP server / ingest](#4-rtmp-server--ingest) | 1, 2, 3 |
-| 5 | [Video tracks in the fMP4 and MPEG-TS muxers; packet-driven HLS](#5-video-tracks-in-the-fmp4-and-mpeg-ts-muxers-packet-driven-hls) | 1 |
+| 5 | [Video tracks in the fMP4 and MPEG-TS muxers; packet-driven HLS](#5-video-tracks-in-the-fmp4-and-mpeg-ts-muxers-packet-driven-hls) | 1, 2 (FLV fixture as the test packet source) |
 | 6 | [RTMP client: publish (rtmp/rtmps) and play](#6-rtmp-client-publish-rtmprtmps-and-play) | 3, 4 (loopback tests) |
 | 7 | [Restream fan-out](#7-restream-fan-out) | 1, 5, 6 |
 | 8 | [Live sources: files, URLs, HLS pull, RTMP pull; pacing, looping, rebasing](#8-live-sources-files-urls-hls-pull-rtmp-pull-pacing-looping-rebasing) | 1, 2, 5, 6, 7 |
@@ -284,8 +289,8 @@ Rules, each one decided for a concrete reason:
 | 10 | [Future / out of scope: WHIP/WebRTC, RTSP, LL-HLS, DASH](#10-future--out-of-scope-whipwebrtc-rtsp-ll-hls-dash) | — |
 
 The packet model comes first because it is the output type of every demuxer, including FLV's.
-Items 1 and 3 have no dependency on each other and can be done in either order; 5 only needs 1 and
-can be built alongside 2-4, giving OBS → HLS end to end as soon as 4 lands. 4 needs 2 because an
+Items 1 and 3 have no dependency on each other and can be done in either order; 5 needs 1 and 2 and
+can be built alongside 3-4 once 2 is in, giving OBS → HLS end to end as soon as 4 lands. 4 needs 2 because an
 RTMP audio/video message body *is* an FLV tag body. 6's tests are loopback runs against item 4's
 server. 8 comes after the fan-out so that file/URL sources are tested against the real hub, and it
 creates the MPEG-TS demuxer that SRT (9) needs.
@@ -323,9 +328,11 @@ PTS/DTS from a demuxer to a muxer.
   a checked-in ffmpeg-produced H.264 MP4 fixture read through `MovVideoDemuxer` (a tiny 64x64,
   few-frame clip, as `docs/video-support-backlog.md` prescribes for fixtures).
 - `H264SpsParser` reports the width/height/profile/level `ffprobe` reported for that fixture
-  (baked into the test as literals), including a cropped size (e.g. 1920x1080 coded as 1088 rows).
-- `Rescale` is exact at the boundaries (`long.MaxValue`-scale values do not overflow; 1024 samples at
-  44,100 Hz to 90 kHz rounds the way the spec'd rounding says).
+  (baked into the test as literals); cropping (1920x1080 coded as 1088 rows) is tested with a
+  hand-built or captured SPS literal, since the tiny fixture can't exercise it.
+- `Rescale` never overflows internally (the intermediate product is 128-bit); a result that does
+  not fit in a `long` throws `OverflowException` rather than wrapping; 1024 samples at 44,100 Hz to
+  90 kHz rounds half-to-even as specified.
 - Malformed `avcC`/`hvcC`/SPS input (truncated, zero NAL count, length past end) throws
   `InvalidDataException`, never `IndexOutOfRangeException`.
 
@@ -368,7 +375,8 @@ body) and the format ffmpeg's `-f flv` writes. It is the shortest path to ingest
   `MediaCodec.H265` and the right `hvcC`.
 - Env-gated: `ffprobe` on our written FLV reports the expected streams (skips if absent).
 - Malformed input: truncated header, a tag `DataSize` past EOF, a `PreviousTagSize` mismatch,
-  a negative composition time, a sequence header with no NAL units — all rejected cleanly.
+  a truncated `avcC`, a sequence header with no NAL units — all rejected cleanly. A negative
+  `CompositionTime` is legal (the field is signed) and must round-trip, with its own test.
 
 **Status**: not started.
 
@@ -380,7 +388,8 @@ the server (item 4) and the client (item 6).
 **Design** (`src/EggEncoder/Live/Rtmp/`), all pure and synchronous over spans/buffers:
 
 - `Amf0Reader`/`Amf0Writer`: Number, Boolean, String, Long String, Object, Null, Undefined,
-  ECMA Array, Strict Array, Date, Object End; references and AMF3 switch (marker 0x11) rejected
+  ECMA Array, Strict Array, Date, Object End, XML Document (read as a string); Reference (0x07),
+  Typed Object (0x10), MovieClip/RecordSet (reserved) and the AMF3 switch (marker 0x11) rejected
   with a typed error. Values as a small `Amf0Value` discriminated type, no reflection. Every bound
   from "Security posture".
 - `RtmpHandshake`: the simple C0/C1/C2 ↔ S0/S1/S2 exchange from the spec, as a state machine over
@@ -481,7 +490,8 @@ without decoding.
 
 - `MovAtomReader` self-parses the multi-track init segment; the existing test-only `moof`/`trun`
   reader verifies per-sample flags and composition offsets.
-- MP4 fixture (H.264 + AAC) → packets → HLS (fMP4 and TS): every segment starts with a keyframe,
+- Item 2's FLV fixture (H.264 + AAC) → packets → HLS (fMP4 and TS) (the MP4 source path arrives in
+  item 8): every segment starts with a keyframe,
   segment durations within one GOP of target, playlist grammar checked by the existing test-only
   checker.
 - TS: PAT/PMT/PES/PCR fields checked by a test-only TS reader (or item 8's demuxer once merged);
