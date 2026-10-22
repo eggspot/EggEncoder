@@ -957,6 +957,91 @@ var reader = new RtmpChunkReader(message =&gt;
     }
 });
 reader.Feed(receivedBytes); // then send output.WrittenSpan</code></pre>
+
+      <h2 id="rtmp-server">RTMP Server (Ingest)</h2>
+      <p>Namespace: <code>EggEncoder.Live.Rtmp</code>. An ingest server OBS, Streamlabs, vMix, ffmpeg or a hardware encoder can publish into at <code>rtmp://host:port/app/streamKey</code> (or <code>rtmps://</code> with a certificate), built on the <a href="#rtmp-core">protocol core</a>. Each authorized publish arrives as an <code>RtmpIngestStream</code> of <a href="#media-packet-model">packets</a>: H.264/H.265/AV1/VP9 stay length-prefixed and AAC a raw access unit, exactly as the publisher sent them, so they can be remuxed (FLV recording, and HLS and restreaming as later plan items land) without decoding. This is item 4 of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>. Ingest only: <code>play</code> is refused.</p>
+      <pre><code class="language-csharp">public sealed class RtmpServer : IAsyncDisposable
+{
+    public RtmpServer(RtmpServerOptions? options = null);
+    public event EventHandler&lt;RtmpIngestStream&gt;? PublishStarted; // authorized, before any media
+    public event EventHandler&lt;RtmpIngestStream&gt;? PublishEnded;   // ended, packet stream complete
+    public RtmpServerOptions Options { get; }
+    public IPEndPoint? LocalEndPoint { get; }              // the real port when EndPoint asked for 0
+    public int ConnectionCount { get; }
+    public Task StartAsync(CancellationToken cancellationToken = default);
+    public Task StopAsync();                               // disconnects everyone, ends their publishes normally
+}
+
+public sealed class RtmpServerOptions
+{
+    public IPEndPoint EndPoint { get; init; }              // default 127.0.0.1:1935
+    public X509Certificate2? Certificate { get; init; }    // set: RTMPS
+    public Func&lt;RtmpPublishRequest, CancellationToken, ValueTask&lt;bool&gt;&gt;? AuthorizePublishAsync { get; init; } // null: reject every publish
+    public RtmpChunkReaderOptions ChunkReader { get; init; }
+    public TimeProvider TimeProvider { get; init; }
+    public int MaxConnections { get; init; }               // default 64;     hard limit 10,000
+    public int MaxNameLength { get; init; }                // default 256;    hard limit 4,096 (app and stream key)
+    public int OutboundChunkSize { get; init; }            // default 4,096
+    public uint AcknowledgementWindowSize { get; init; }   // default 2,500,000
+    public int PacketQueueCapacity { get; init; }          // default 1,024 packets per publish
+    public int PacketQueueMaxBytes { get; init; }          // default 64 MiB per publish
+    public TimeSpan HandshakeTimeout { get; init; }        // default 10 s (TLS + RTMP handshake)
+    public TimeSpan PublishTimeout { get; init; }          // default 10 s (handshake done to publish accepted)
+    public TimeSpan IdleTimeout { get; init; }             // default 30 s (a publisher sending nothing)
+    public TimeSpan ConsumerStallTimeout { get; init; }    // default 10 s (a full queue nobody reads)
+}
+
+public sealed class RtmpPublishRequest
+{
+    public string AppName { get; }
+    public string StreamKey { get; }                       // a secret: ToString leaves it out
+    public string PublishingType { get; }                  // live, record, append
+    public EndPoint? RemoteEndPoint { get; }
+    public IReadOnlyList&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; ConnectProperties { get; }
+    public string? FlashVersion { get; }
+    public string? TcUrl { get; }
+}
+
+public sealed class RtmpIngestStream
+{
+    public string AppName { get; }
+    public string StreamKey { get; }
+    public EndPoint? RemoteEndPoint { get; }
+    public IReadOnlyList&lt;KeyValuePair&lt;string, Amf0Value&gt;&gt; ConnectProperties { get; }
+    public RtmpPublishRequest Request { get; }
+    public MediaTrackSet? Tracks { get; }                  // describes the packet last yielded
+    public FlvMetadata? Metadata { get; }                  // the publisher's latest onMetaData
+    public Task Completion { get; }                        // faults only on a protocol error
+    public IAsyncEnumerable&lt;MediaPacket&gt; ReadPacketsAsync(CancellationToken cancellationToken = default);
+    public void Disconnect();                              // kick the publisher, ending the publish
+}</code></pre>
+      <p><strong>Security defaults.</strong> The server listens on <code>127.0.0.1</code> only until <code>EndPoint</code> says otherwise, and with no <code>AuthorizePublishAsync</code> every publish gets <code>NetStream.Publish.BadName</code>. Application names and stream keys are checked (non-empty, at most <code>MaxNameLength</code> characters, no control characters) before the callback sees them; a key already being published under the same application is refused until that publish ends (compared as an exact string, <code>?query</code> included). Those checks make a name safe to compare, not to use as a path: <code>/</code>, <code>\</code> and <code>..</code> pass them, so never build a file name from one unmapped. Every chunk-level bound is <code>ChunkReader</code>'s, the AMF0 bounds are <code>Amf0Reader</code>'s, and each connection is timed out through every phase: the TLS and RTMP handshakes, getting to an accepted <code>publish</code> (the authorization callback's token is cancelled when that runs out, and a callback that ignores it is abandoned), a publisher that sends no media (pings don't count), and a consumer that leaves the packet queue full. A connection closes once its publish ends. A connection over <code>MaxConnections</code> is closed as soon as it is accepted, and a connection that breaks a bound is closed while every other connection carries on.</p>
+      <p><strong>Packets and tracks.</strong> The server turns each RTMP audio, video and <code>@setDataFrame</code>/<code>onMetaData</code> message into packets with the same code <a href="#flv"><code>FlvDemuxer</code></a> uses for FLV tags, so the two give identical packets for the same tags (track ids 0 for video and 1 for audio, timescale 1000). It waits for the tracks the publisher's <code>onMetaData</code> names (<code>videocodecid</code>/<code>audiocodecid</code>), when that arrives before the first media message as it does from OBS and ffmpeg, and for both otherwise. <code>Tracks</code> changes, just before the first packet that uses it, when a track appears or a new sequence header changes its configuration (compare by reference to notice).</p>
+      <p><strong>Backpressure and the end of a publish.</strong> Packets wait for the consumer in a bounded queue (<code>PacketQueueCapacity</code>, <code>PacketQueueMaxBytes</code>). When it is full the server stops reading from the publisher, which slows it down through TCP, and if the consumer stays away longer than <code>ConsumerStallTimeout</code> the publisher is disconnected; nothing is dropped. A publish ends when the publisher unpublishes or disconnects, on a timeout, when the server stops, or when the consumer calls <code>Disconnect()</code>: the enumeration then finishes normally after the last queued packet. Only a protocol violation or a malformed sequence header ends it with an <code>RtmpProtocolException</code> (an exception from a <code>PublishStarted</code> handler also ends it, faulted with that exception). Handlers run on the connection's task, so hand the stream off rather than blocking.</p>
+      <pre><code class="language-csharp">await using var server = new RtmpServer(new RtmpServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 1935), // opt in to every interface
+    AuthorizePublishAsync = (request, _) =&gt; ValueTask.FromResult(request.AppName == "live" &amp;&amp; request.StreamKey == secretKey)
+});
+server.PublishStarted += (_, stream) =&gt; _ = Task.Run(async () =&gt;
+{
+    await using var recording = new FlvWriter(File.Create("recording.flv"));
+    MediaTrackSet? tracks = null;
+    await foreach (var packet in stream.ReadPacketsAsync())
+    {
+        if (!ReferenceEquals(tracks, stream.Tracks))
+        {
+            if (tracks is null) await recording.OpenAsync(stream.Tracks!);
+            else recording.UpdateTracks(stream.Tracks!); // a new sequence header mid-stream
+            tracks = stream.Tracks;
+        }
+
+        await recording.WriteAsync(packet);
+    }
+
+    if (tracks is not null) await recording.CompleteAsync();
+});
+await server.StartAsync(); // OBS: Server rtmp://this-host/live, Stream Key secretKey</code></pre>
     </div>
   </main>
 </div>

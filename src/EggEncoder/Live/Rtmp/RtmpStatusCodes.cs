@@ -27,6 +27,12 @@ namespace EggEncoder.Live.Rtmp
         /// <summary>A publish ended.</summary>
         public const string UnpublishSuccess = "NetStream.Unpublish.Success";
 
+        /// <summary>A call the server doesn't support (the <c>_error</c> of an unknown command).</summary>
+        public const string CallFailed = "NetConnection.Call.Failed";
+
+        /// <summary><c>play</c> failed (an ingest-only server refuses every <c>play</c>).</summary>
+        public const string PlayFailed = "NetStream.Play.Failed";
+
         /// <summary><c>play</c> started.</summary>
         public const string PlayStart = "NetStream.Play.Start";
 

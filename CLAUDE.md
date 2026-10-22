@@ -159,6 +159,37 @@ The AMF0 bounds stay `Amf0Reader` constants (they equal the plan's defaults). Fi
 `RtmpFfmpegOracleTest` re-runs the live publish when `EGGENCODER_FFMPEG_ORACLE=1`, and writes a new
 capture when `EGGENCODER_RTMP_CAPTURE_PATH` is also set.
 
+### RTMP server / ingest (`src/EggEncoder/Live/Rtmp/RtmpServer*.cs`)
+
+`docs/live-ingest-restream-plan.md` item 4, the first async, socket-facing layer on the item 3 core.
+`RtmpServer` (`StartAsync`/`StopAsync`, `LocalEndPoint`, `ConnectionCount`, `PublishStarted`/
+`PublishEnded` events, decided by research in PR #141 over an accept-style API) accepts on a raw
+`Socket` (dual mode for `IPv6Any`) and runs each connection on its own task in the internal
+`RtmpServerConnection`: optional TLS (`SslStream`, RTMPS), the handshake, the command flow
+(`connect` → Window Ack Size/Set Peer Bandwidth/Set Chunk Size/`_result`; `releaseStream`/
+`FCPublish`/`getStreamLength` → `_result`; unknown calls → `_error` `NetConnection.Call.Failed`;
+`createStream`; one `publish` per connection; `play` refused; `FCUnpublish`/`deleteStream` end the
+publish and close the connection), pings and acknowledgements (neither pushes back the idle timeout:
+only media does). Events are `EventHandler<RtmpIngestStream>`; `RtmpIngestStream.Disconnect()` kicks a
+publisher; the authorization callback is awaited with `WaitAsync` on the publish deadline, so one that
+ignores its token can't hold a connection open. `RtmpServerOptions` holds every security-posture default with
+hard ceilings (loopback bind, `AuthorizePublishAsync` null = reject all, `MaxConnections`,
+`MaxNameLength` checked before the callback, chunk bounds via `RtmpChunkReaderOptions`, the four
+timeouts on one `TimeProvider`-backed `CancellationTokenSource` per connection rearmed with
+`CancelAfter`, plus a separate consumer-stall one). Media messages go through `FlvTagDemuxer`, the
+tag-level half extracted out of `FlvDemuxer` (which now only frames the file and delegates), so
+RTMP ingest and FLV files give identical packets; tracks expected are decided from `onMetaData`'s
+`videocodecid`/`audiocodecid` when it precedes the first media message, else both.
+`RtmpIngestStream` queues (tracks, packet) entries in an unbounded `Channel` guarded by its own
+count/byte bounds (`PacketQueueCapacity`/`PacketQueueMaxBytes`, the producer waits = TCP
+backpressure; the idle timer pauses and `ConsumerStallTimeout` runs while it waits), advances
+`Tracks` on the reader's side the way `FlvFileSource` does, ends normally on unpublish/disconnect/
+timeout/stop and faults only on a protocol error. Tests: `RtmpServerTest` (loopback publish via
+the test-only `RtmpTestPublisher`, the replayed `ffmpeg_publish.bin`, RTMPS with an in-process
+self-signed certificate, auth, duplicates, bounds, malformed input, fake-clock timeouts via the
+test-only `Microsoft.Extensions.TimeProvider.Testing` package), `RtmpServerOptionsTest`, and the
+`EGGENCODER_FFMPEG_ORACLE=1`-gated `RtmpServerFfmpegOracleTest` (a live `ffmpeg -re` publish).
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
@@ -168,7 +199,7 @@ known total length required anywhere in this surface). See `docs/streaming-plan.
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
-demux/mux and the RTMP protocol core above are done; still open: RTMP server/client incl. RTMPS, video tracks in the
+demux/mux, the RTMP protocol core and the RTMP ingest server above are done; still open: RTMP client incl. RTMPS push, video tracks in the
 fMP4/MPEG-TS muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
