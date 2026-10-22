@@ -217,6 +217,18 @@ await foreach (var packet in source.ReadPacketsAsync())
 await writer.CompleteAsync();
 ```
 
+### Fragmented MP4 (fMP4/CMAF) with video
+
+`FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)` and `new FmpMediaSegmentWriter(MediaTrackSet).BuildMediaSegment(packets, nextDecodeTimes)` write fMP4 init and media segments from packets: H.264 (`avc1`) and H.265 (`hvc1`) video passed through without decoding, next to AAC (mono or stereo). Per-sample durations come from the DTS deltas, video samples carry sync flags and signed composition offsets for B-frames, and each `tfdt` is the track's real first DTS. Pass the next DTS of a track in `nextDecodeTimes` when you know it (a segmenter cutting at the next keyframe does) to make that track's last duration exact. Timestamps must be non-negative and strictly increasing per track; nothing is rebased. Checked with `ffprobe` and an `ffmpeg` decode of a real H.264 + AAC stream. The HLS segmenter still packages audio only; packet-driven HLS with video is the next step of [the live plan](docs/live-ingest-restream-plan.md) (item 5).
+
+```csharp
+using EggEncoder.Streaming.Mp4;
+
+var init = FmpInitSegmentWriter.BuildInitSegment(tracks);    // tracks: e.g. FlvFileSource.Tracks or an RtmpIngestStream's
+var writer = new FmpMediaSegmentWriter(tracks);
+var segment = writer.BuildMediaSegment(gopPackets, new Dictionary<int, long> { [videoTrackId] = nextKeyframe.Dts });
+```
+
 ### RTMP protocol core
 
 `EggEncoder.Live.Rtmp` implements RTMP below the "publish a stream" level (Adobe RTMP specification 1.0), pure and synchronous over bytes so the coming server and client share it: `RtmpHandshake` (the simple version-3 handshake as a byte-level state machine for either side; RTMPE is rejected), `RtmpChunkReader` (incremental `Feed`, reassembles messages across interleaved chunk streams, every header type, extended timestamps, applies Set Chunk Size/Abort/Window Acknowledgement Size, says when an Acknowledgement is due, and `Complete()` on connection close reports a chunk or message cut short), `RtmpChunkWriter` (splits messages with the most compact header), `RtmpProtocolControl`/`RtmpUserControl` (control messages and events), `RtmpCommand` (`connect`, `createStream`, `releaseStream`, `FCPublish`, `publish`, `play`, `deleteStream`, `_result`/`_error`, `onStatus`) and `RtmpDataMessage` (`@setDataFrame`/`onMetaData` to `FlvMetadata`). Every bound from the plan's security posture is enforced before allocating (`RtmpChunkReaderOptions`: chunk size, message length, chunk stream count, buffered bytes, each with a hard ceiling), and every malformed input (truncation included, once `Complete()` is called) ends in a typed `RtmpProtocolException`. Verified against a real ffmpeg publish captured as wire bytes.
@@ -273,7 +285,7 @@ server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
 await server.StartAsync(); // OBS: Server rtmp://this-host/live, Stream Key secretKey
 ```
 
-**Planned:** the rest of live ingest and restream — RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+**Planned:** the rest of live ingest and restream — RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into MPEG-TS and HLS (fMP4 segments with video are done, above), and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 

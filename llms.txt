@@ -199,6 +199,15 @@ single mono AAC-LC track. `FmpMediaSegmentWriter` carries `sequence_number`/`bas
 state across calls -- build a fresh instance per rendition. `Mp4EncodedFrame(byte[] Payload, int
 SampleCount)` is the durable shape a caller collects `EncodedAudioFrame`'s own ref-struct payload
 into (via `frame.Payload.ToArray()`) before batching frames into one segment.
+For the packet model (live ingest/remux, `EggEncoder.Media`), `FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)`
+and `new FmpMediaSegmentWriter(MediaTrackSet)` + `BuildMediaSegment(IReadOnlyList<MediaPacket> packets,
+IReadOnlyDictionary<int, long>? nextDecodeTimes = null)` write H.264 (`avc1`), H.265 (`hvc1`) and AAC
+(mono or stereo) tracks together, video passed through without decoding: per-sample durations from
+the DTS deltas, sync/non-sync flags, signed composition offsets for B-frames, `tfdt` = each track's
+first DTS (timestamps must be non-negative and strictly increasing per track; no rebasing). Pass
+`nextDecodeTimes` (track id -> that track's next DTS after the segment) when known so the last
+sample's duration is exact; otherwise it repeats the previous one. MP4 track ids are the track's
+position in the set + 1. MP3/Opus/AV1/VP9 tracks throw `NotSupportedException`.
 
 `EggEncoder.Streaming.IStreamingSink` is an I/O-agnostic HLS output destination (init segment,
 media segments, a playlist rewritten on every change, segment deletion for a live sliding window)

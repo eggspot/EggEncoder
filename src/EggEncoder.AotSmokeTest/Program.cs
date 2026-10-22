@@ -79,6 +79,35 @@ try
         }
     });
 
+    await RunCheck("fMP4: multi-track H.264 + AAC init segment and a packet media segment", () =>
+    {
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var tracks = new EggEncoder.Media.MediaTrackSet(
+        [
+            new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, avcC, 0),
+            new EggEncoder.Media.MediaTrackInfo(1, EggEncoder.Media.MediaKind.Audio, EggEncoder.Media.MediaCodec.Aac, 1000, new byte[] { 0x12, 0x08 }, 0)
+        ]);
+        var init = EggEncoder.Streaming.Mp4.FmpInitSegmentWriter.BuildInitSegment(tracks);
+        var writer = new EggEncoder.Streaming.Mp4.FmpMediaSegmentWriter(tracks);
+        var segment = writer.BuildMediaSegment(
+        [
+            new EggEncoder.Media.MediaPacket(0, 80, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 }),
+            new EggEncoder.Media.MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 }),
+            new EggEncoder.Media.MediaPacket(0, 120, 40, false, 0, new byte[] { 0, 0, 0, 1, 0x41 })
+        ]);
+        // The 64x64 dimensions come from the SPS (the track says 0); the segment's mdat holds the
+        // video payloads, then the audio one.
+        var initHex = Convert.ToHexString(init);
+        if (!initHex.Contains(Convert.ToHexString("avcC"u8))
+            || !initHex.Contains("0040000000400000") // tkhd width/height: 64 << 16
+            || !Convert.ToHexString(segment).EndsWith("0000000165" + "0000000141" + "21"))
+        {
+            throw new InvalidOperationException("fMP4 packet mode produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     await RunCheck("RTMP core: handshake, then connect/createStream/publish and media through the chunk writer/reader", () =>
     {
         var client = EggEncoder.Live.Rtmp.RtmpHandshake.CreateClient();

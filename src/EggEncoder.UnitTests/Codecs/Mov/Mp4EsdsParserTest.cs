@@ -89,5 +89,29 @@ namespace EggEncoder.UnitTests.Codecs.Mov
 
             act.Should().ThrowExactly<InvalidDataException>();
         }
+
+        [Theory]
+        [InlineData(0, new byte[] { 0x00 })]
+        [InlineData(127, new byte[] { 0x7F })]
+        [InlineData(128, new byte[] { 0x81, 0x00 })]
+        [InlineData(16_383, new byte[] { 0xFF, 0x7F })]
+        [InlineData(16_384, new byte[] { 0x81, 0x80, 0x00 })]
+        [InlineData((1 << 28) - 1, new byte[] { 0xFF, 0xFF, 0xFF, 0x7F })]
+        public void WriteDescriptorLength_Should_Use_The_Shortest_Expandable_Form(int length, byte[] expected)
+        {
+            var bytes = new Mp4BoxBuilder().WriteDescriptorLength(length).ToArray();
+
+            bytes.Should().Equal(expected);
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(1 << 28)]
+        public void WriteDescriptorLength_OutOfRange_Should_Throw(int length)
+        {
+            var act = () => new Mp4BoxBuilder().WriteDescriptorLength(length);
+
+            act.Should().ThrowExactly<ArgumentOutOfRangeException>();
+        }
     }
 }

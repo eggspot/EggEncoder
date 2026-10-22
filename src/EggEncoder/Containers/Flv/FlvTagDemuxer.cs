@@ -1,4 +1,3 @@
-using EggEncoder.Codecs.Aac;
 using EggEncoder.Live.Rtmp.Amf0;
 using EggEncoder.Media;
 
@@ -268,7 +267,7 @@ namespace EggEncoder.Containers.Flv
                     return new MediaTrackInfo(FlvDemuxer.VideoTrackId, MediaKind.Video, parsed.Codec.Value, FlvDemuxer.Timescale, configuration, 0);
 
                 default:
-                    var (sampleRate, channels) = ReadAudioSpecificConfig(configuration);
+                    var (sampleRate, channels) = AudioSpecificConfigReader.Read(configuration);
                     return new MediaTrackInfo(FlvDemuxer.AudioTrackId, MediaKind.Audio, MediaCodec.Aac, FlvDemuxer.Timescale, configuration, 0, sampleRate, channels);
             }
         }
@@ -284,44 +283,6 @@ namespace EggEncoder.Containers.Flv
             catch (Exception e) when (e is InvalidDataException or NotSupportedException)
             {
                 return (0, 0);
-            }
-        }
-
-        // AudioSpecificConfig (ISO/IEC 14496-3 1.6.2.1): audioObjectType (5 bits, 31 escapes to 6
-        // more), samplingFrequencyIndex (4 bits, 15 escapes to an explicit 24-bit rate),
-        // channelConfiguration (4 bits).
-        internal static (int SampleRate, int Channels) ReadAudioSpecificConfig(ReadOnlySpan<byte> config)
-        {
-            var reader = new Transform.BitReader(config.ToArray());
-            try
-            {
-                var objectType = (int)reader.ReadBits(5);
-                if (objectType == 31)
-                {
-                    reader.ReadBits(6);
-                }
-
-                var frequencyIndex = (int)reader.ReadBits(4);
-                int sampleRate;
-                if (frequencyIndex == 15)
-                {
-                    sampleRate = (int)reader.ReadBits(24);
-                }
-                else if (frequencyIndex < AacTables.SampleRates.Length)
-                {
-                    sampleRate = AacTables.SampleRates[frequencyIndex];
-                }
-                else
-                {
-                    throw new InvalidDataException($"FLV: AudioSpecificConfig has reserved samplingFrequencyIndex {frequencyIndex}");
-                }
-
-                var channels = (int)reader.ReadBits(4);
-                return (sampleRate, channels);
-            }
-            catch (EndOfStreamException e)
-            {
-                throw new InvalidDataException("FLV: truncated AAC AudioSpecificConfig", e);
             }
         }
 

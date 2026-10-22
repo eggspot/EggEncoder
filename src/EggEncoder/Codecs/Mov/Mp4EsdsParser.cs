@@ -173,9 +173,11 @@ namespace EggEncoder.Codecs.Mov
         // used by Streaming.Mp4.FmpInitSegmentWriter to build an 'esds' box for a fragmented MP4/CMAF
         // init segment. Confirmed against a real ffmpeg-produced fMP4 fixture's own esds bytes (same
         // field values: objectTypeIndication 0x40, streamType/upStream/reserved 0x15, an SLConfigDescriptor
-        // with predefined=2) -- this writer uses the minimal single-byte descriptor-length encoding
-        // throughout rather than ffmpeg's own always-4-byte-padded one, since TryReadDescriptorHeader
-        // above already reads either form correctly and the minimal form is simpler to write.
+        // with predefined=2) -- this writer uses the minimal expandable descriptor-length encoding
+        // (one byte below 128, as every ASC this project builds needs) rather than ffmpeg's own
+        // always-4-byte-padded one, since TryReadDescriptorHeader above already reads either form
+        // correctly. A longer AudioSpecificConfig (one copied from a packet source, say) gets the
+        // multi-byte form, so its lengths stay correct.
         public static byte[] BuildAudioSpecificConfig(int channels, int sampleRate)
         {
             var sampleRateIndex = Array.IndexOf(AacTables.SampleRates, sampleRate);
@@ -206,7 +208,7 @@ namespace EggEncoder.Codecs.Mov
                 .WriteUInt32(0) // maxBitrate -- unknown/unspecified
                 .WriteUInt32(0) // avgBitrate -- unknown/unspecified
                 .WriteUInt8(DecoderSpecificInfoTag)
-                .WriteUInt8((byte)audioSpecificConfig.Length)
+                .WriteDescriptorLength(audioSpecificConfig.Length)
                 .WriteBytes(audioSpecificConfig)
                 .ToArray();
 
@@ -214,7 +216,7 @@ namespace EggEncoder.Codecs.Mov
                 .WriteUInt16(0) // ES_ID
                 .WriteUInt8(0) // flags: no dependsOn/URL/OCR
                 .WriteUInt8(DecoderConfigDescriptorTag)
-                .WriteUInt8((byte)decoderConfigDescriptor.Length)
+                .WriteDescriptorLength(decoderConfigDescriptor.Length)
                 .WriteBytes(decoderConfigDescriptor)
                 .WriteUInt8(slConfigDescriptorTag)
                 .WriteUInt8(1)
@@ -224,9 +226,35 @@ namespace EggEncoder.Codecs.Mov
             return new Mp4BoxBuilder()
                 .WriteUInt32(0) // version(1) + flags(3)
                 .WriteUInt8(EsDescriptorTag)
-                .WriteUInt8((byte)esDescriptorContent.Length)
+                .WriteDescriptorLength(esDescriptorContent.Length)
                 .WriteBytes(esDescriptorContent)
                 .ToArray();
+        }
+    }
+
+    internal static class Mp4DescriptorLengthExtensions
+    {
+        // ISO/IEC 14496-1 8.3.3 expandable size: 7 bits per byte, most significant group first,
+        // the top bit set on every byte but the last. TryReadDescriptorHeader reads at most 4 bytes.
+        public static Mp4BoxBuilder WriteDescriptorLength(this Mp4BoxBuilder builder, int length)
+        {
+            if (length is < 0 or >= 1 << 28)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length), length, "A descriptor length must fit 28 bits.");
+            }
+
+            var shift = 21;
+            while (shift > 0 && length >> shift == 0)
+            {
+                shift -= 7;
+            }
+
+            for (; shift > 0; shift -= 7)
+            {
+                builder.WriteUInt8((byte)(0x80 | ((length >> shift) & 0x7F)));
+            }
+
+            return builder.WriteUInt8((byte)(length & 0x7F));
         }
     }
 
