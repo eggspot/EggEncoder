@@ -33,6 +33,7 @@ starting sketch, not a locked design; revise it once real implementation experie
 | 5 | [`CancellationToken` support across `Probe`/`ConvertFile`/`CutFile`](#5-cancellationtoken-support) — done | Medium | Low | #1 (same call sites) |
 | 6 | [Multi-channel (&gt;2) support for the lossy codecs](#6-multi-channel-2-support) | Low–Medium | High | none |
 | 7 | [Cue points / chapter markers](#7-cue-points--chapter-markers) | Low | Medium | none |
+| 8 | [FLV in `IMediaEncoder` (Probe + audio-track ConvertFile/CutFile)](#8-flv-in-imediaencoder) | Low–Medium | Medium | stereo AAC decode in `AacFrameDecoder` to be broadly useful |
 
 Ranking rationale: #1 and #2 are the two most-requested-shape gaps for a library already this
 complete (every real-world audio pipeline eventually needs "don't require a local file path" and
@@ -330,3 +331,15 @@ tags) is explicitly out of scope today (`WavReader.TryParseListInfoTags`'s own d
 this out directly). Real demand for this is low for the stated use case (chapter markers matter
 far more for audiobooks/podcasts than for music distribution), so this stays last in the ranking
 unless the owner's own use case changes.
+
+## 8. FLV in `IMediaEncoder`
+
+`docs/live-ingest-restream-plan.md` item 2 shipped FLV demux/mux at the packet level
+(`Containers/Flv/`) for live remux, deliberately without an `IMediaEncoder` hookup
+(`docs/video-support-backlog.md` rule 7: container-only work doesn't force one). Wire `.flv` into
+`NativeEncoder`'s extension dispatch and `AudioCutter` (and an `AudioFormat.Flv` for the `Stream`
+overloads), mirroring MOV/MP4: `Probe` reports container/video metadata plus the audio track's
+waveform; `ConvertFile`/`CutFile` decode the FLV audio track (AAC via `AacFrameDecoder`, MP3 via
+`Mp3Decoder`) to PCM, which gets every `AudioCutter.Pipeline.cs` transform for free. Real FLVs are
+mostly stereo AAC, so this is far more useful once `AacFrameDecoder` handles a channel_pair_element
+(stereo); until then it has the same mono-only limit `MovDecoder` has.
