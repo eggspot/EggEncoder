@@ -48,6 +48,13 @@ namespace EggEncoder.Codecs.Au
         // AiffWriter already have), but a real-world AU file using it must still be read correctly.
         private const uint UnknownDataSize = 0xFFFFFFFF;
 
+        // AU's channel field is a full uint32 with no limit of its own, so a corrupted header can
+        // declare hundreds of millions of channels -- enough for every per-channel allocation
+        // downstream (the decode buffer, WaveformCalculator's per-channel loudness filters) to
+        // exhaust memory or overflow an int size computation instead of failing cleanly. 512 is
+        // ffmpeg's own FF_SANE_NB_CHANNELS cap, far beyond any real AU file.
+        internal const int MaxChannels = 512;
+
         private readonly Stream _stream;
         private readonly bool _leaveOpen;
         private readonly long _sampleDataLength;
@@ -142,9 +149,25 @@ namespace EggEncoder.Codecs.Au
                 var sampleRate = (int)BinaryPrimitives.ReverseEndianness(reader.ReadUInt32());
                 var channels = (int)BinaryPrimitives.ReverseEndianness(reader.ReadUInt32());
 
-                if (channels <= 0)
+                if (channels <= 0 || channels > MaxChannels)
                 {
-                    throw new InvalidDataException($"'{filePath}' declares {channels} channels in its header");
+                    throw new InvalidDataException($"'{filePath}' declares {(uint)channels} channels in its header (must be 1-{MaxChannels})");
+                }
+
+                // The raw field is a uint32; anything past int.MaxValue wraps negative in the cast
+                // above, and 0 would later divide every duration computation by zero.
+                if (sampleRate <= 0)
+                {
+                    throw new InvalidDataException($"'{filePath}' declares a sample rate of {(uint)sampleRate} Hz in its header");
+                }
+
+                // Checked before the constructor seeks to it: a header size past EOF would otherwise
+                // either throw a raw ArgumentOutOfRangeException from the seek (MemoryStream rejects
+                // offsets past int.MaxValue) or, for an unknown-data-size file, compute a negative
+                // sample data length.
+                if (headerSize > stream.Length)
+                {
+                    throw new InvalidDataException($"'{filePath}' declares a header size of {headerSize} bytes, past the end of its {stream.Length}-byte stream");
                 }
 
                 var (encoding, reportedBitsPerSample, bytesPerDiskSample) = DetermineEncoding(filePath, encodingValue);
