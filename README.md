@@ -235,7 +235,44 @@ var reader = new RtmpChunkReader(message =>
 reader.Feed(bytesFromSocket); // any piece size, after RtmpHandshake completes
 ```
 
-**Planned:** the rest of live ingest and restream — an RTMP server (on the protocol core above) that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+### RTMP server (ingest)
+
+`RtmpServer` accepts publishes from OBS, Streamlabs, vMix, ffmpeg or a hardware encoder at `rtmp://host:port/app/streamKey` (RTMPS with a certificate) and hands you each one as an `RtmpIngestStream` of packets: H.264/H.265 and AAC exactly as sent, ready to remux without decoding. Closed by default: it listens on `127.0.0.1` only and refuses every publish until `AuthorizePublishAsync` says yes; one publisher per stream key; chunk/message/AMF0/name bounds; timeouts on the handshake, on reaching `publish`, on an idle publisher and on a consumer that stops reading; a bounded packet queue with TCP backpressure (nothing dropped). Verified against a real ffmpeg publish, live and as a replayed wire capture.
+
+```csharp
+using System.Net;
+using EggEncoder.Containers.Flv;
+using EggEncoder.Live.Rtmp;
+using EggEncoder.Media;
+
+await using var server = new RtmpServer(new RtmpServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 1935), // opt in to every interface
+    AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.StreamKey == secretKey)
+});
+server.PublishStarted += stream => _ = Task.Run(async () =>
+{
+    // Record the publish to FLV; stream.Tracks describes the packet just read.
+    await using var recording = new FlvWriter(File.Create($"{stream.AppName}.flv"));
+    MediaTrackSet? tracks = null;
+    await foreach (var packet in stream.ReadPacketsAsync())
+    {
+        if (!ReferenceEquals(tracks, stream.Tracks))
+        {
+            if (tracks is null) await recording.OpenAsync(stream.Tracks!);
+            else recording.UpdateTracks(stream.Tracks!);
+            tracks = stream.Tracks;
+        }
+
+        await recording.WriteAsync(packet);
+    }
+
+    if (tracks is not null) await recording.CompleteAsync();
+});
+await server.StartAsync(); // OBS: Server rtmp://this-host/live, Stream Key secretKey
+```
+
+**Planned:** the rest of live ingest and restream — RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 

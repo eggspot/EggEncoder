@@ -376,6 +376,38 @@ timestamp)`, `StatusCode`, `GetStringArgument`/`GetNumberArgument`, factories `C
 bodies are FLV tag bodies (`FlvTagBodyParser`). Verified against a checked-in ffmpeg 9 publish
 capture (`src/EggEncoder.UnitTests/Live/Rtmp/ffmpeg_publish.bin`).
 
+## RTMP server (ingest)
+
+`EggEncoder.Live.Rtmp.RtmpServer` (docs/live-ingest-restream-plan.md item 4): OBS/vMix/ffmpeg/a
+hardware encoder publishes to `rtmp://host:port/app/streamKey` (RTMPS when
+`RtmpServerOptions.Certificate` is set) and each authorized publish arrives as an
+`RtmpIngestStream` through the `PublishStarted` event (`PublishEnded` when it is over).
+`new RtmpServer(options)`, `StartAsync()`, `LocalEndPoint` (real port for port 0),
+`ConnectionCount`, `StopAsync()`/`DisposeAsync()`. `RtmpServerOptions` (init-only, each bound has a
+hard limit, out of range throws `ArgumentOutOfRangeException`): `EndPoint` (default
+`127.0.0.1:1935`), `Certificate`, `AuthorizePublishAsync`
+(`Func<RtmpPublishRequest, CancellationToken, ValueTask<bool>>`; null rejects every publish with
+`NetStream.Publish.BadName`; an exception closes that connection), `ChunkReader`
+(`RtmpChunkReaderOptions`), `TimeProvider`, `MaxConnections` 64, `MaxNameLength` 256 (app and key:
+non-empty, no control characters, checked before the callback), `OutboundChunkSize` 4096,
+`AcknowledgementWindowSize` 2,500,000, `PacketQueueCapacity` 1024, `PacketQueueMaxBytes` 64 MiB,
+`HandshakeTimeout` 10 s, `PublishTimeout` 10 s (handshake done to publish accepted, callback
+included), `IdleTimeout` 30 s, `ConsumerStallTimeout` 10 s. `RtmpPublishRequest`: `AppName`,
+`StreamKey` (secret; `ToString` omits it), `PublishingType`, `RemoteEndPoint`, `ConnectProperties`,
+`FlashVersion`, `TcUrl`. One publisher per app/key; one publish per connection; `play` refused
+(`NetStream.Play.Failed`). `RtmpIngestStream`: same identity properties plus `Request`, `Tracks`
+(describes the packet last yielded; replaced by reference on a track/config change), `Metadata`
+(latest `onMetaData`), `Completion`, `ReadPacketsAsync(ct)` (once; packets exactly as `FlvDemuxer`
+gives for the same tags: video track 0, audio track 1, timescale 1000, AVCC/raw AAC payloads),
+`DisposeAsync()` disconnects the publisher. Tracks expected: those `onMetaData`'s
+`videocodecid`/`audiocodecid` name when it precedes the first media message, else both. Bounded
+queue with TCP backpressure; a consumer stalled past `ConsumerStallTimeout` gets the publisher
+dropped, nothing is lost. Unpublish/disconnect/timeout/server stop end the enumeration normally;
+a protocol violation or malformed sequence header ends it with `RtmpProtocolException`. Events run
+on the connection's task: hand off, don't block. Verified by an in-process loopback publish, a
+replayed ffmpeg 9 wire capture, and an `EGGENCODER_FFMPEG_ORACLE=1`-gated live `ffmpeg -re ... -f flv
+rtmp://` publish.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

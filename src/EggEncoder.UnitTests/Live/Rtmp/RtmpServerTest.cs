@@ -130,6 +130,62 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             }
         }
 
+        [Fact]
+        public async Task Publish_RecordedToFlv_AsTheDocsShow_Should_Demux_To_The_Same_Packets_Across_A_Config_Change()
+        {
+            await using var server = await StartAsync(AcceptAll());
+            var recorded = new MemoryStream();
+            var recording = new TaskCompletionSource();
+            server.PublishStarted += stream => _ = Task.Run(async () =>
+            {
+                await using var writer = new FlvWriter(recorded, leaveOpen: true);
+                MediaTrackSet? tracks = null;
+                await foreach (var packet in stream.ReadPacketsAsync())
+                {
+                    if (!ReferenceEquals(tracks, stream.Tracks))
+                    {
+                        if (tracks is null)
+                        {
+                            await writer.OpenAsync(stream.Tracks!);
+                        }
+                        else
+                        {
+                            writer.UpdateTracks(stream.Tracks!);
+                        }
+
+                        tracks = stream.Tracks;
+                    }
+
+                    await writer.WriteAsync(packet);
+                }
+
+                await writer.CompleteAsync();
+                recording.SetResult();
+            });
+
+            // The fixture, then a second AAC sequence header with a different config and one more frame.
+            var flv = new FlvTestBuilder()
+                .AvcSequenceHeader()
+                .AacSequenceHeader()
+                .AvcFrame(0, keyframe: true, compositionTime: 40, 0, 0, 0, 1, 0x65)
+                .AacFrame(10, 1, 2)
+                .AacSequenceHeader(20, [0x11, 0x90])
+                .AacFrame(30, 3, 4)
+                .ToArray();
+            var expected = FlvDemuxerTest.Demux(flv);
+            var (publisher, _) = await RtmpTestPublisher.PublishAsync(server.LocalEndPoint!);
+            await using (publisher)
+            {
+                await publisher.SendFlvAsync(flv);
+                await publisher.UnpublishAsync();
+                await recording.Task.WaitAsync(TestTimeout);
+            }
+
+            var replayed = FlvDemuxerTest.Demux(recorded.ToArray());
+            AssertSamePackets(replayed.Packets, expected.Packets);
+            replayed.Packets.Last().ConfigVersion.Should().Be(1);
+        }
+
         [Theory]
         [InlineData(1)]
         [InlineData(1500)]
