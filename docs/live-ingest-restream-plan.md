@@ -336,7 +336,7 @@ PTS/DTS from a demuxer to a muxer.
 - Malformed `avcC`/`hvcC`/SPS input (truncated, zero NAL count, length past end) throws
   `InvalidDataException`, never `IndexOutOfRangeException`.
 
-**Status**: not started.
+**Status**: done ([PR #138](https://github.com/eggspot/EggEncoder/pull/138)). `MediaPacketSinkAdapter` is deliberately not here: its HLS body lands in item 5, and only the `IMediaPacketSink` contract it implements ships now. Fixtures: the real H.264 access units come from the existing 640x360 `Codecs/Mov/test.mp4` (not a new 64x64 clip); 1080p cropping and every HEVC case use real x264/x265 avcC/hvcC records baked in as hex (`src/EggEncoder.UnitTests/Media/MediaFixtures.cs`).
 
 ## 2. FLV demux + mux (file level, Enhanced FLV)
 

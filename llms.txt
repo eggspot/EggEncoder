@@ -267,6 +267,32 @@ pending. Genuinely **not** independently decodable (unlike the other three): its
 defers sample-rate/bits-per-sample to STREAMINFO, a whole-stream container concept this raw
 encoder leaves out of scope -- a caller needing a real FLAC stream must build one itself.
 
+
+## Media packet model (live ingest foundation)
+
+`EggEncoder.Media` (docs/live-ingest-restream-plan.md item 1) is the packet-level model every live
+source and output shares, so H.264/H.265 is remuxed, never decoded. `MediaTrackInfo(trackId, kind,
+codec, timescale, codecConfiguration, configVersion, sampleRate, channels, width, height)` (a
+validating record: non-negative ids/sizes, positive timescale) describes a track; codec
+configuration (avcC / hvcC / AudioSpecificConfig) is track-level, and a mid-stream change is a new
+`MediaTrackInfo` with a higher `ConfigVersion`. `MediaTrackSet` holds unique track ids
+(`FindTrack(id)`). `MediaPacket(TrackId, Pts, Dts, IsKeyframe, ConfigVersion, Payload)` is a
+`readonly record struct`; timestamps are `long` ticks in the track's own timescale,
+`CompositionOffset` is `Pts - Dts`; H.264/H.265 payloads are length-prefixed (AVCC/HVCC), AAC is a
+raw access unit with no ADTS. `IMediaPacketSink : IAsyncDisposable` (`OpenAsync(MediaTrackSet)`,
+`WriteAsync(MediaPacket)`, `CompleteAsync()`, all `ValueTask` + `CancellationToken`) is the output
+contract; implementations arrive with later plan items. `MediaTimestamp.Rescale(value, from, to)`
+converts timescales with a 128-bit intermediate, round half to even, throwing `OverflowException`
+rather than wrapping. `AnnexBConverter.ToAnnexB`/`ToLengthPrefixed(span, nalLengthSize = 4)`
+convert one access unit between AVCC and Annex B (3- and 4-byte start codes, trailing zeros
+dropped). `AvcDecoderConfigurationRecord`/`HevcDecoderConfigurationRecord` `.Parse(span)`/
+`.ToArray()` are exact inverses (ISO/IEC 14496-15). `H264SpsParser.Parse`/`H265SpsParser.Parse`
+read profile, level, chroma format, bit depth and cropped width/height from an SPS NAL unit
+(emulation-prevention bytes removed first; nothing past those fields is read) and expose
+`CodecsString` (`avc1.64001E`, `hvc1.1.6.L120.90`). `MediaPacketFactory.FromEncodedAudioFrame(frame,
+trackId, pts, configVersion)` copies an `IStreamingEncoder` frame into an owned packet. Every parser
+throws `InvalidDataException` on malformed input (truncation, zero counts, lengths past the end,
+out-of-range fields).
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own
