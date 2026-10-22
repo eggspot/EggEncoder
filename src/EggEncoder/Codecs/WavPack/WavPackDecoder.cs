@@ -100,11 +100,21 @@ namespace EggEncoder.Codecs.WavPack
                         throw new InvalidDataException($"'{filePath}' has a WavPack block whose sample count doesn't match the other blocks in its own per-frame sequence -- the file is corrupt.");
                     }
 
-                    var blockEnd = offset + 8 + (int)header.CkSize;
-                    if (blockEnd > data.Length)
+                    // ckSize counts everything after itself, so it can't be smaller than the rest of
+                    // the header. Summed in long: a corrupted ckSize past int.MaxValue used to wrap
+                    // negative and pass the truncation check below.
+                    if (header.CkSize < WavPackBlockHeader.ByteLength - 8)
+                    {
+                        throw new InvalidDataException($"'{filePath}' has a WavPack block whose size ({header.CkSize} bytes) is smaller than its own header -- the file is corrupt.");
+                    }
+
+                    var blockEndLong = offset + 8L + header.CkSize;
+                    if (blockEndLong > data.Length)
                     {
                         throw new InvalidDataException($"'{filePath}' ended in the middle of a WavPack block -- the file is likely truncated.");
                     }
+
+                    var blockEnd = (int)blockEndLong;
 
                     if (firstHeader is null)
                     {

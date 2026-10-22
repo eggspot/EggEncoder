@@ -339,6 +339,24 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
             act.Should().ThrowExactly<InvalidDataException>().WithMessage("*2147483652 samples*");
         }
 
+        [Theory]
+        [InlineData(0xFFFFFFF0u, "*truncated*")]       // wrapped negative as an int, passing the truncation check
+        [InlineData((uint)int.MaxValue, "*truncated*")] // overflowed offset + 8 + ckSize for any block past offset 0
+        [InlineData(0u, "*smaller than its own header*")]
+        [InlineData(23u, "*smaller than its own header*")]
+        public void Decode_Stream_WithCorruptedSecondBlockCkSize_Should_ThrowInvalidDataException(uint ckSize, string expectedMessage)
+        {
+            var corruptBytes = File.ReadAllBytes(_fullScaleFixturePath);
+            var secondBlockOffset = 8 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(corruptBytes.AsSpan(4));
+            corruptBytes.AsSpan(secondBlockOffset, 4).ToArray().Should().Equal("wvpk"u8.ToArray(), "the fixture must have a second block");
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(corruptBytes.AsSpan(secondBlockOffset + 4), ckSize);
+            using var stream = new MemoryStream(corruptBytes);
+
+            var act = () => WavPackDecoder.Decode(stream, (_, _, _, _, _) => { });
+
+            act.Should().ThrowExactly<InvalidDataException>().WithMessage(expectedMessage);
+        }
+
         [Fact]
         public void Decode_WithTruncatedSampleRateMetadata_Should_Throw()
         {

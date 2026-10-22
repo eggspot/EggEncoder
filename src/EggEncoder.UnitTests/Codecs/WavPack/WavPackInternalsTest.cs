@@ -102,7 +102,7 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         [InlineData((uint)WavPackBlockHeader.MaxBlockSamples)]
         public void BlockHeaderParse_WithBlockSamplesWithinLimit_Should_Parse(uint blockSamples)
         {
-            var header = WavPackBlockHeader.Parse(BuildHeaderBytes(ckSize: 24, blockSamples), 0);
+            var header = WavPackBlockHeader.Parse(BuildHeaderBytes(blockSamples), 0);
 
             header.BlockSamples.Should().Be(blockSamples);
         }
@@ -113,34 +113,16 @@ namespace EggEncoder.UnitTests.Codecs.WavPack
         [InlineData(uint.MaxValue)]
         public void BlockHeaderParse_WithTooManyBlockSamples_Should_ThrowInvalidDataException(uint blockSamples)
         {
-            var act = () => WavPackBlockHeader.Parse(BuildHeaderBytes(ckSize: 24, blockSamples), 0);
+            var act = () => WavPackBlockHeader.Parse(BuildHeaderBytes(blockSamples), 0);
 
             act.Should().ThrowExactly<InvalidDataException>().WithMessage($"*{blockSamples} samples*");
         }
 
-        [Theory]
-        [InlineData(int.MaxValue - WavPackBlockHeader.ByteLength + 1u)]
-        [InlineData(0xFFFFFFF0u)] // (int) cast goes negative, so the block-end bounds check passed
-        public void BlockHeaderParse_WithImpossibleCkSize_Should_ThrowInvalidDataException(uint ckSize)
-        {
-            var act = () => WavPackBlockHeader.Parse(BuildHeaderBytes(ckSize, blockSamples: 4), 0);
-
-            act.Should().ThrowExactly<InvalidDataException>().WithMessage("*impossible size*");
-        }
-
-        [Fact]
-        public void BlockHeaderParse_WithLargestAllowedCkSize_Should_Parse()
-        {
-            var header = WavPackBlockHeader.Parse(BuildHeaderBytes(int.MaxValue - WavPackBlockHeader.ByteLength, blockSamples: 4), 0);
-
-            header.CkSize.Should().Be(int.MaxValue - WavPackBlockHeader.ByteLength);
-        }
-
-        private static byte[] BuildHeaderBytes(uint ckSize, uint blockSamples)
+        private static byte[] BuildHeaderBytes(uint blockSamples)
         {
             var bytes = new byte[WavPackBlockHeader.ByteLength];
             "wvpk"u8.CopyTo(bytes);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), ckSize);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), 24);
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(20), blockSamples);
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24), 0x1805); // mono | initial | final | 16-bit
             return bytes;

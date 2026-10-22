@@ -83,11 +83,6 @@ namespace EggEncoder.Codecs.WavPack
                 throw new InvalidDataException($"A WavPack block claims {blockSamples} samples, more than the {MaxBlockSamples} allowed -- the file is corrupt.");
             }
 
-            if (ckSize > int.MaxValue - ByteLength)
-            {
-                throw new InvalidDataException($"A WavPack block claims an impossible size ({ckSize} bytes) -- the file is corrupt.");
-            }
-
             // total_samples' lower 32 bits all set is the spec's own "unknown total length"
             // sentinel -- never combined with the high byte in that case.
             var totalSamples = totalSamplesLow == 0xFFFFFFFF
