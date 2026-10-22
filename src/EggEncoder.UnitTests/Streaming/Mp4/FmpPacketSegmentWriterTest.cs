@@ -105,6 +105,30 @@ namespace EggEncoder.UnitTests.Streaming.Mp4
         }
 
         [Fact]
+        public void BuildInitSegment_VideoTrackWithOnlyOneDimension_Should_Take_Both_From_The_Sps()
+        {
+            var track = new MediaTrackInfo(0, MediaKind.Video, MediaCodec.H264, 1000, MediaFixtures.Avc1080pRecord, 0, width: 640);
+
+            var video = ReadSingleTrak(FmpInitSegmentWriter.BuildInitSegment(new MediaTrackSet([track])));
+
+            video.TkhdWidth.Should().Be(1920u << 16);
+            video.TkhdHeight.Should().Be(1080u << 16);
+        }
+
+        [Fact]
+        public void BuildInitSegment_AacTrackWithOnlyChannelsUnknown_Should_Keep_Its_Sample_Rate()
+        {
+            // The config says 44100 Hz mono; the track's own sample rate wins, the channels come from the config.
+            var track = new MediaTrackInfo(0, MediaKind.Audio, MediaCodec.Aac, 1000, FlvTestBuilder.AacConfig, 0, sampleRate: 22050);
+
+            using var stream = new MemoryStream(FmpInitSegmentWriter.BuildInitSegment(new MediaTrackSet([track])));
+            var audio = ReadSingleTrak(stream);
+
+            ReadUInt16(stream, audio.SampleEntryContentStart + 16).Should().Be(1);
+            ReadUInt32(stream, audio.SampleEntryContentStart + 24).Should().Be(22050u << 16);
+        }
+
+        [Fact]
         public void BuildInitSegment_VideoTrackWithUnreadableSps_Should_Leave_Dimensions_Zero()
         {
             // A structurally valid avcC whose single SPS is just a NAL header byte.
@@ -143,6 +167,30 @@ namespace EggEncoder.UnitTests.Streaming.Mp4
 
             ReadUInt32(stream, audio.SampleEntryContentStart + 24).Should().Be(0, "96000 doesn't fit the 16.16 field");
             audio.Timescale.Should().Be(96000);
+        }
+
+        [Theory]
+        [InlineData(2)]
+        [InlineData(127)]
+        [InlineData(200)]
+        [InlineData(20_000)]
+        public void BuildInitSegment_LongAudioSpecificConfig_Should_Get_Multibyte_Descriptor_Lengths(int length)
+        {
+            // AAC-LC 44100 mono, then padding standing in for a long program config element.
+            var config = new byte[length];
+            config[0] = 0x12;
+            config[1] = 0x08;
+            config.AsSpan(2).Fill(0x5A);
+            var track = new MediaTrackInfo(0, MediaKind.Audio, MediaCodec.Aac, 44100, config, 0, 44100, 1);
+
+            using var stream = new MemoryStream(FmpInitSegmentWriter.BuildInitSegment(new MediaTrackSet([track])));
+            var audio = ReadSingleTrak(stream);
+            var esds = ReadChildBox(stream, audio.SampleEntryContentStart + 28, audio.SampleEntryContentEnd, "esds");
+
+            Mp4EsdsParser.ParseAudioSpecificConfig(esds).SampleRate.Should().Be(44100, "the descriptor walk finds the ASC through every length");
+            esds.AsSpan(esds.Length - 3 - length, length).ToArray().Should().Equal(config, "the ASC precedes the 3-byte SLConfigDescriptor");
+            // esds: version/flags (4 bytes), ES_Descriptor tag, then its length's first byte.
+            (esds[5] >= 0x80).Should().Be(length >= 105, "lengths below 128 keep the single-byte form, longer ones expand");
         }
 
         [Fact]
@@ -342,7 +390,7 @@ namespace EggEncoder.UnitTests.Streaming.Mp4
         }
 
         [Fact]
-        public void BuildMediaSegment_Packets_Should_Advance_Only_The_Sequence_Number_Shared_By_Both_Tracks()
+        public void BuildMediaSegment_PacketMode_Should_Advance_The_Sequence_Number()
         {
             var writer = new FmpMediaSegmentWriter(new MediaTrackSet([AudioTrack()]));
 
@@ -373,7 +421,7 @@ namespace EggEncoder.UnitTests.Streaming.Mp4
 
             var act = () => writer.BuildMediaSegment(packets, hints);
 
-            act.Should().ThrowExactly<ArgumentException>(reason);
+            act.Should().ThrowExactly<ArgumentException>(reason).Which.ParamName.Should().Be(reason.StartsWith("hint") ? "nextDecodeTimes" : "packets");
             var next = Parse(writer.BuildMediaSegment([Video(0, key: true)]));
             next.SequenceNumber.Should().Be(1, "a failed call writes nothing");
         }

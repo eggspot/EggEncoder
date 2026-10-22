@@ -55,7 +55,7 @@ namespace EggEncoder.Streaming.Mp4
         /// Pair it with <see cref="FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)"/> for the
         /// same set: both number the MP4 tracks by position in the set, plus one.
         /// </summary>
-        /// <exception cref="ArgumentException"><paramref name="tracks"/> is empty, or a track's codec configuration is missing or invalid.</exception>
+        /// <exception cref="ArgumentException"><paramref name="tracks"/> is empty, or a track is rejected the way <see cref="FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)"/> rejects it.</exception>
         /// <exception cref="NotSupportedException">A track's codec is not H.264, H.265 or AAC.</exception>
         public FmpMediaSegmentWriter(MediaTrackSet tracks)
         {
@@ -224,7 +224,7 @@ namespace EggEncoder.Streaming.Mp4
                 uint duration;
                 if (i + 1 < packets.Count)
                 {
-                    duration = ToDuration(track, packets[i + 1].Dts - packet.Dts);
+                    duration = ToDuration(track, packets[i + 1].Dts - packet.Dts, "packets");
                 }
                 else if (nextDts is not null)
                 {
@@ -233,7 +233,7 @@ namespace EggEncoder.Streaming.Mp4
                         throw new ArgumentException($"Next decode time {nextDts} for track {track.Info.TrackId} isn't greater than its last DTS {packet.Dts}.", "nextDecodeTimes");
                     }
 
-                    duration = ToDuration(track, nextDts.Value - packet.Dts);
+                    duration = ToDuration(track, nextDts.Value - packet.Dts, "nextDecodeTimes");
                 }
                 else if (i > 0)
                 {
@@ -251,10 +251,10 @@ namespace EggEncoder.Streaming.Mp4
             return samples;
         }
 
-        private static uint ToDuration(PacketTrack track, long delta) =>
+        private static uint ToDuration(PacketTrack track, long delta, string parameterName) =>
             delta <= uint.MaxValue
                 ? (uint)delta
-                : throw new ArgumentException($"Track {track.Info.TrackId} has a sample duration ({delta}) past 32 bits.", "packets");
+                : throw new ArgumentException($"Track {track.Info.TrackId} has a sample duration ({delta}) past 32 bits.", parameterName);
 
         private static uint DefaultSampleDuration(FmpInitSegmentWriter.InitTrack track)
         {

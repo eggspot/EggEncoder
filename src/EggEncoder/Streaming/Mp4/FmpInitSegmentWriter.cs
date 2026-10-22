@@ -43,7 +43,12 @@ namespace EggEncoder.Streaming.Mp4
         /// position in the set plus one, the numbering <see cref="FmpMediaSegmentWriter"/>'s
         /// packet constructor uses for the same set.
         /// </summary>
-        /// <exception cref="ArgumentException"><paramref name="tracks"/> is empty, or a track's codec configuration is missing or isn't a valid avcC/hvcC record.</exception>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="tracks"/> is empty; or a track's codec configuration is missing, isn't a
+        /// valid avcC/hvcC record, or (AAC, when the track doesn't give them) its AudioSpecificConfig
+        /// can't be read or gives no sample rate; or a video dimension or channel count doesn't fit
+        /// the 16-bit sample entry field.
+        /// </exception>
         /// <exception cref="NotSupportedException">A track's codec is not H.264, H.265 or AAC.</exception>
         public static byte[] BuildInitSegment(MediaTrackSet tracks)
         {
