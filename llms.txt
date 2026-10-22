@@ -293,6 +293,48 @@ read profile, level, chroma format, bit depth and cropped width/height from an S
 trackId, pts, configVersion)` copies an `IStreamingEncoder` frame into an owned packet. Every parser
 throws `InvalidDataException` on malformed input (truncation, zero counts, lengths past the end,
 out-of-range fields).
+
+## FLV demux and mux
+
+`EggEncoder.Containers.Flv` (docs/live-ingest-restream-plan.md item 2) reads and writes FLV (Adobe
+FLV spec v10.1 Annex E plus Enhanced FLV) as packets, never decoding video. `FlvTagBodyParser.
+ParseVideo`/`ParseAudio(span)` classify one tag body (also an RTMP audio/video message body) as a
+`FlvTagBody` ref struct: `PacketType` (SequenceHeader / CodedFrame / SequenceEnd / Ignored /
+Unsupported), `Kind`, `Codec`, `IsKeyframe`, signed 24-bit `CompositionTime`, `Payload`, and the
+legacy audio `SoundRate`/`SoundChannels` hints. Legacy AVC (CodecID 7, plus the non-standard HEVC
+CodecID 12 on read), AAC (SoundFormat 10) and MP3 (2 and 14); Enhanced-FLV `avc1`/`hvc1`/`av01`/
+`vp09` with SequenceStart, CodedFrames (composition time for AVC/HEVC only), CodedFramesX and
+SequenceEnd; Metadata packets and command frames are `Ignored`; Multitrack/ModEx and other codecs
+are `Unsupported` with a reason. `FlvDemuxer(onTracks, onPacket)` is incremental (`Feed(span)` any
+chunk size, `Complete()`): video is track `VideoTrackId` (0), audio `AudioTrackId` (1), timescale
+1000; the track set is announced once every track the FLV header declares has its configuration
+(holding up to `MaxPendingPackets` = 1024 packets until then) and re-announced whenever a track
+appears or a differing sequence header bumps its `ConfigVersion`. avcC/hvcC are validated via
+`AvcDecoderConfigurationRecord`/`HevcDecoderConfigurationRecord` and width/height read from the
+SPS; AAC rate/channels from the AudioSpecificConfig; MP3 rate/channels from the first frame's MPEG
+header. 32-bit tag timestamps are unwrapped to a continuous `long`; PTS = DTS + composition time.
+`Metadata` (an `FlvMetadata`: `Properties` plus `Duration`/`Width`/`Height`/`FrameRate`/
+`VideoDataRate`/`AudioDataRate`/`AudioSampleRate`/`Encoder`) comes from `onMetaData`, also inside an
+`@setDataFrame` wrapper. Bad signature/version/DataOffset, a `PreviousTagSize` mismatch, a malformed
+sequence header and input ending mid-tag throw `InvalidDataException`; unsupported codecs, frames
+before their sequence header, encrypted tags, unknown tag types and unreadable script tags are
+skipped and counted in `SkippedTagCount`. `FlvFileSource(stream, leaveOpen)` exposes
+`ReadPacketsAsync(CancellationToken)` (`IAsyncEnumerable<MediaPacket>`, no `CanSeek` needed),
+`Tracks`, `Metadata`. `FlvWriter(stream, leaveOpen, metadata)` implements `IMediaPacketSink` over a
+synchronous `Open(tracks)`/`UpdateTracks(tracks)`/`Write(packet)`/`Complete()` core: at most one
+audio and one video track (H.264/H.265/AV1/VP9, AAC/MP3; Opus throws `NotSupportedException`),
+`onMetaData` from `FlvMetadata.FromTracks` unless given, a sequence header before each track's first
+frame and whenever its `ConfigVersion` changes (a packet whose `ConfigVersion` isn't the track's
+current one throws), timestamps rescaled to ms (negative DTS or a composition offset outside signed
+24 bits throws), wrapping past 2^32 ms. Forward-only writes; the `onMetaData` duration stays 0.
+
+AMF0 (`EggEncoder.Live.Rtmp.Amf0`, shared with the coming RTMP items): `Amf0Value` (Number,
+Boolean, String, LongString, XmlDocument, Date, Null, Undefined, Object, EcmaArray, StrictArray;
+static `From*` factories, `GetProperty(name)`), `Amf0Reader` (a ref struct over a span,
+`ReadValue()`, `Position`, `AtEnd`) and `Amf0Writer.Encode(params values)`/`Write(IBufferWriter,
+value)`. The reader bounds nesting at 32, strings at 64 KiB and properties/items at 1,024, checks
+every count against the bytes left, and rejects Reference/Typed Object/AMF3 markers, all with
+`InvalidDataException`.
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own

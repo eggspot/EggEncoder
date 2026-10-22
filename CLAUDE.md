@@ -105,6 +105,29 @@ Tests use `Codecs/Mov/test.mp4` (real H.264 access units via `MovVideoDemuxer`) 
 ffmpeg/x264/x265-produced avcC/hvcC records baked in as hex (`Media/MediaFixtures.cs`) and a synthetic
 `TestUtilities/RbspBuilder` for SPS branches no fixture reaches.
 
+### FLV container (`src/EggEncoder/Containers/Flv/`) and AMF0 (`src/EggEncoder/Live/Rtmp/Amf0/`)
+
+`docs/live-ingest-restream-plan.md` item 2. `FlvTagBodyParser` classifies one audio/video tag body
+(shared with the coming RTMP server, whose message bodies have the same layout) into a `FlvTagBody`
+ref struct: legacy AVC/AAC/MP3 (plus the non-standard HEVC CodecID 12 on read) and Enhanced-FLV
+`avc1`/`hvc1`/`av01`/`vp09`; unknown codecs and Multitrack/ModEx are a typed `Unsupported` result,
+never an exception, while a body too short for its own header is `InvalidDataException`.
+`FlvDemuxer` is incremental (`Feed`/`Complete`, callbacks for track sets and packets; video track
+0, audio track 1, timescale 1000), validates avcC/hvcC through `Media/`'s records, reads SPS
+dimensions (unreadable SPS leaves them 0, not fatal), unwraps 32-bit timestamps, bumps
+`ConfigVersion` on a differing sequence header, holds at most 1,024 packets until every
+header-declared track is configured, and is strict about the container (signature, DataOffset,
+`PreviousTagSize`, truncation) but skips-and-counts unusable tags. `FlvFileSource` is the async
+`IAsyncEnumerable<MediaPacket>` wrapper over any `Stream`. `FlvWriter` implements `IMediaPacketSink`
+over a synchronous core, forward-only (no `CanSeek`; `onMetaData` duration stays 0), legacy tags for
+H.264/AAC/MP3 and Enhanced FourCC tags for HEVC/AV1/VP9, CodedFramesX for HEVC frames with no
+composition offset as ffmpeg does. `FlvMetadata` wraps `onMetaData`. The AMF0 codec
+(`Amf0Reader`/`Amf0Writer`/`Amf0Value`) lives where RTMP item 3 will reuse it; the reader's bounds
+(depth 32, strings 64 KiB, 1,024 properties, counts checked against bytes left) are fixed constants
+for now. Fixtures: ffmpeg 9-produced `h264_aac.flv` (x264 with B-frames + AAC), `hevc.flv`
+(Enhanced FLV) and `mp3.flv`, with ffprobe ground truth in `FlvDemuxerTest`; an
+`EGGENCODER_FFMPEG_ORACLE=1`-gated test runs the real `ffprobe` on `FlvWriter` output.
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
@@ -113,9 +136,9 @@ every per-codec `XxxEncoder`/`XxxEncoderSession` whole-file type (no destination
 known total length required anywhere in this surface). See `docs/streaming-plan.md` for the full
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
-**Planned, not yet implemented**: live ingest and restream (RTMP server/client incl. RTMPS, FLV
-demux/mux, a packet-level media model for video passthrough, video tracks in the fMP4/MPEG-TS
-muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+**Planned, not yet implemented**: the rest of live ingest and restream (the packet model and FLV
+demux/mux above are done; still open: RTMP server/client incl. RTMPS, video tracks in the
+fMP4/MPEG-TS muxers, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.

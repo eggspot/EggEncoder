@@ -199,7 +199,25 @@ byte[] annexB = AnnexBConverter.ToAnnexB(packet.Payload.Span, avcC.NalLengthSize
 long pts90k = MediaTimestamp.Rescale(packet.Pts, fromTimescale: 1000, toTimescale: 90000);
 ```
 
-**Planned:** live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, FLV, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. None of this is shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+### FLV demux and mux
+
+`EggEncoder.Containers.Flv` reads and writes FLV files (Adobe FLV spec v10.1 plus Enhanced FLV) at the packet level, so H.264/HEVC/AV1/VP9 video and AAC/MP3 audio are remuxed, never decoded. `FlvDemuxer` is incremental (`Feed` bytes in any chunk size, from a file, an HTTP body or a socket) and reports a `MediaTrackSet` once each track's sequence header arrives, then `MediaPacket`s with unwrapped 64-bit millisecond timestamps and the signed composition offset; a new sequence header bumps the track's `ConfigVersion`. `FlvFileSource` wraps it as `IAsyncEnumerable<MediaPacket> ReadPacketsAsync(CancellationToken)` over any readable `Stream` (no seeking needed). `FlvWriter` (an `IMediaPacketSink`, plus a synchronous `Open`/`Write`/`Complete` core) writes the header, `onMetaData`, a sequence header before each track's first frame and after each configuration change, legacy tags for H.264/AAC/MP3 and Enhanced-FLV FourCC tags (`hvc1`/`av01`/`vp09`) for the rest. `FlvMetadata` exposes `onMetaData` (duration, width, height, framerate, data rates, encoder). Unsupported codecs and stray tags are skipped and counted rather than failing the stream; a bad header, a `PreviousTagSize` mismatch, a malformed sequence header or a truncated tag throws `InvalidDataException`. The AMF0 codec behind `onMetaData` (`EggEncoder.Live.Rtmp.Amf0`: `Amf0Reader`, `Amf0Writer`, `Amf0Value`) is public too, with bounded nesting depth, string length and property counts.
+
+```csharp
+using EggEncoder.Containers.Flv;
+
+await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+await using var writer = new FlvWriter(File.Create("out.flv"));
+var opened = false;
+await foreach (var packet in source.ReadPacketsAsync())
+{
+    if (!opened) { await writer.OpenAsync(source.Tracks!); opened = true; }
+    await writer.WriteAsync(packet); // remux: no decode, no re-encode
+}
+await writer.CompleteAsync();
+```
+
+**Planned:** the rest of live ingest and restream — an RTMP server that OBS/vMix/ffmpeg can publish into, RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 
