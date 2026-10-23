@@ -16,7 +16,7 @@ namespace EggEncoder.UnitTests.Codecs.Flac
         [InlineData(20, 9000)]
         [InlineData(24, 12289)]
         [InlineData(32, 8193)]
-        public void Append_Should_MatchTheMd5OfTheRfcPacking_AcrossChunkBoundaries(int bitsPerSample, int sampleCount)
+        public void Append_AcrossChunkBoundaries_Should_MatchTheMd5OfTheRfcPacking(int bitsPerSample, int sampleCount)
         {
             var samples = RandomSamples(sampleCount, bitsPerSample);
             using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
@@ -27,7 +27,7 @@ namespace EggEncoder.UnitTests.Codecs.Flac
         }
 
         [Fact]
-        public void Append_CalledPerBlock_Should_EqualOneCallOverTheWholeStream()
+        public void Append_CalledPerBlock_Should_MatchOneCallOverTheWholeStream()
         {
             var samples = RandomSamples(10_000, 16);
             using var whole = IncrementalHash.CreateHash(HashAlgorithmName.MD5);

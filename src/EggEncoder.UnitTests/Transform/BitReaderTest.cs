@@ -352,6 +352,32 @@ namespace EggEncoder.UnitTests.Transform
             act.Should().ThrowExactly<IndexOutOfRangeException>();
         }
 
+        [Theory]
+        [InlineData(new byte[] { 0x80 }, 2, 0u, 1)]
+        [InlineData(new byte[] { 0x00, 0x01 }, 5, 15u, 16)]
+        [InlineData(new byte[] { 0x33, 0xB5, 0x00, 0xC4, 0xC7 }, 14, 2u, 3)]
+        [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08 }, 12, 76u, 77)]
+        public void ReadUnary_WithByteLengthPastTheBuffer_And_AOneBitInTheBuffer_Should_FindIt(byte[] data, int byteLength, uint expectedZeros, int expectedPosition)
+        {
+            var reader = new BitReader(data, byteOffset: 0, byteLength: byteLength);
+
+            var zeros = reader.ReadUnary();
+
+            zeros.Should().Be(expectedZeros);
+            reader.BitPosition.Should().Be(expectedPosition);
+        }
+
+        [Fact]
+        public void ReadBits_FromANegativeBitPosition_Should_ThrowIndexOutOfRange()
+        {
+            var reader = new BitReader([0xFF, 0xFF]);
+            reader.SkipBits(-3);
+
+            var act = () => reader.ReadBits(4);
+
+            act.Should().ThrowExactly<IndexOutOfRangeException>();
+        }
+
         [Fact]
         public void ReadBits_FromAByteOffsetReader_Should_NotSeeTheBytesBeforeIt()
         {

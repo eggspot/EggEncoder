@@ -77,8 +77,12 @@ namespace EggEncoder.Transform
 
                 // Scan up to one 64-bit window at a time. Bits past _bitLength may still be in the
                 // buffer (a byteLength-limited reader), so they're masked off rather than counted.
+                // The window also stops at the buffer's own end, so a reader whose byteLength runs
+                // past its buffer still finds a one bit in the bytes it does have, and only fails
+                // (IndexOutOfRangeException, as it always did) on reaching a missing byte.
                 var bitOffset = _bitPosition & 7;
-                var validBits = Math.Min(64 - bitOffset, remainingBits);
+                var bufferBits = (_buffer.Length * 8L) - _bitPosition;
+                var validBits = (int)Math.Min(Math.Min(64 - bitOffset, remainingBits), Math.Max(bufferBits, 1));
                 var window = LoadWindow(_bitPosition >> 3, (bitOffset + validBits + 7) >> 3) << bitOffset;
                 window &= ulong.MaxValue << (64 - validBits);
 
