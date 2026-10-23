@@ -802,7 +802,7 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 await writer.CompleteAsync(cancellationToken);</code></pre>
 
       <h2 id="fmp4-packet-mode">Fragmented MP4 (fMP4/CMAF) from Packets</h2>
-      <p>Namespace: <code>EggEncoder.Streaming.Mp4</code>. Writes fragmented MP4 init and media segments, the format HLS and DASH serve, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5a of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the same two types also keep their original single mono AAC track mode (<code>BuildInitSegment(channels, sampleRate)</code> and <code>BuildMediaSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter uses today.</p>
+      <p>Namespace: <code>EggEncoder.Streaming.Mp4</code>. Writes fragmented MP4 init and media segments, the format HLS and DASH serve, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5a of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the same two types also keep their original single mono AAC track mode (<code>BuildInitSegment(channels, sampleRate)</code> and <code>BuildMediaSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter's audio-frame mode uses.</p>
       <pre><code class="language-csharp">public static class FmpInitSegmentWriter
 {
     public static byte[] BuildInitSegment(MediaTrackSet tracks); // ftyp + moov: avc1/avcC, hvc1/hvcC, mp4a/esds
@@ -844,7 +844,7 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 if (gop.Count &gt; 0) output.Write(writer!.BuildMediaSegment(gop));</code></pre>
 
       <h2 id="mpegts-packet-mode">MPEG-TS from Packets</h2>
-      <p>Namespace: <code>EggEncoder.Streaming.MpegTs</code>. Writes MPEG-TS segments (ISO/IEC 13818-1), the other segment format HLS serves, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5b of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the type also keeps its original single mono AAC track mode (<code>new MpegTsMuxer(channels, sampleRate)</code> and <code>BuildSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter uses today.</p>
+      <p>Namespace: <code>EggEncoder.Streaming.MpegTs</code>. Writes MPEG-TS segments (ISO/IEC 13818-1), the other segment format HLS serves, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5b of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the type also keeps its original single mono AAC track mode (<code>new MpegTsMuxer(channels, sampleRate)</code> and <code>BuildSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter's audio-frame mode uses.</p>
       <pre><code class="language-csharp">public sealed class MpegTsMuxer // stateful: one instance per rendition
 {
     public MpegTsMuxer(MediaTrackSet tracks);          // packet mode
@@ -873,6 +873,49 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 }
 
 if (gop.Count &gt; 0) File.WriteAllBytes($"segment{index}.ts", muxer!.BuildSegment(gop));</code></pre>
+
+      <h2 id="hls-packet-mode">HLS from Packets</h2>
+      <p>Namespace: <code>EggEncoder.Streaming.Hls</code>. Packages a <a href="#media-packet-model">packet</a> stream (an RTMP ingest, an FLV file) as HLS with video, without decoding: <code>HlsSegmenter</code> cuts segments at video keyframes and writes them through the <a href="#fmp4-packet-mode">fMP4</a> or <a href="#mpegts-packet-mode">MPEG-TS</a> packet writers, and <code>HlsMediaPacketSink</code> wraps it as an <code>IMediaPacketSink</code>. This is item 5c of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>. The original audio-frame constructors and <code>AddFrame</code> are unchanged.</p>
+      <pre><code class="language-csharp">public sealed partial class HlsSegmenter
+{
+    public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4);                     // VOD
+    public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4); // live
+    public long DroppedLeadingPacketCount { get; }
+    public void AddPacket(MediaPacket packet);
+    public void Complete();
+}
+
+public sealed class HlsMediaPacketSink : IMediaPacketSink
+{
+    public HlsMediaPacketSink(IStreamingSink sink, int targetDurationSeconds, SegmentFormat segmentFormat = SegmentFormat.Fmp4, int? liveWindowSize = null);
+    public HlsSegmenter? Segmenter { get; } // built by OpenAsync
+}
+
+public static class M3u8MasterPlaylistWriter
+{
+    public static string BuildCodecsString(MediaTrackSet tracks); // e.g. "avc1.64001F,mp4a.40.2"
+}</code></pre>
+      <p><strong>Cutting.</strong> Cut points are the keyframes of the first video track, or every packet of the first track when there is no video (an audio-only rendition). A cut point whose PTS is at least <code>targetDurationSeconds</code> past the pending segment's first cut point ends that segment and starts the next one, so every segment starts with a keyframe and lasts at least the target and at most one GOP more. Packets go into segments in the order they are added, as ffmpeg's HLS muxer does. Packets before the first cut point can't be decoded (with video, that is everything before its first keyframe, audio included) and are dropped and counted in <code>DroppedLeadingPacketCount</code>. The fMP4 writer gets the next keyframe's DTS as the video track's next decode time, so the last frame of each segment has its exact duration.</p>
+      <p><strong>Playlist.</strong> Each <code>EXTINF</code> is the PTS difference between the segment's cut point and the next one, measured on the cut track. The final segment, written by <code>Complete</code>, runs to the latest PTS in it plus one frame (the cut track's last DTS step, or 1/30 s or 1024 AAC samples when there is none). <code>EXT-X-TARGETDURATION</code> is the ceiling of the longest segment so far, never below the target. fMP4 writes the init segment when the segmenter is built and references it with <code>EXT-X-MAP</code>; MPEG-TS needs neither. VOD and live sliding window work as for the audio segmenter.</p>
+      <p><strong>Validation.</strong> The constructors reject what the chosen container rejects (an empty set, MP3/Opus/AV1/VP9, AAC that ADTS can't describe for MPEG-TS). <code>AddPacket</code> throws <code>ArgumentException</code>, adding nothing, for a packet of a track not in the set, a <code>ConfigVersion</code> other than its track's (mid-stream configuration changes are item 5d), a negative DTS, a PTS before its DTS, or a DTS not greater than its track's previous one. When the container still rejects a pending packet at a cut (a malformed payload, a timestamp it can't hold), that segment is discarded, the exception is thrown from the <code>AddPacket</code> (or <code>Complete</code>) call that cut it, and the next segment starts at that cut point; <code>Complete</code> ends the playlist before rethrowing. <code>AddFrame</code> on a packet segmenter, and <code>AddPacket</code> on a frame segmenter, throw <code>InvalidOperationException</code>.</p>
+      <p><strong>HlsMediaPacketSink.</strong> <code>OpenAsync</code> builds the segmenter for the tracks it receives (writing the fMP4 init segment), <code>WriteAsync</code> adds a packet and <code>CompleteAsync</code> completes it, synchronously, each returning a completed <code>ValueTask</code>; the <code>IStreamingSink</code> does the I/O. A canceled token throws before anything happens; writing before <code>OpenAsync</code>, or opening twice, throws <code>InvalidOperationException</code>; disposing doesn't complete the playlist.</p>
+      <p><strong>CODECS.</strong> <code>BuildCodecsString</code> gives a rendition's <code>CODECS</code> value for <code>HlsRenditionDescriptor</code>: video first, then audio, each distinct string once. H.264 is <code>avc1.PPCCLL</code> from the avcC record's first SPS, H.265 <code>hvc1.…</code> from the hvcC record's SPS, and AAC <code>mp4a.40.N</code> with N the AudioSpecificConfig's audio object type (2 for AAC-LC, 5 or 29 for HE-AAC signalled explicitly). Other codecs throw <code>NotSupportedException</code>; an unreadable configuration throws <code>ArgumentException</code>.</p>
+      <pre><code class="language-csharp">// An FLV file (or an RTMP ingest) to an fMP4 HLS playlist with video, in 4-second segments.
+var sink = new FileSystemStreamingSink("out");
+await using var hls = new HlsMediaPacketSink(sink, targetDurationSeconds: 4);
+await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
+{
+    if (hls.Segmenter is null)
+    {
+        await hls.OpenAsync(source.Tracks!, cancellationToken);
+    }
+
+    await hls.WriteAsync(packet, cancellationToken);
+}
+
+await hls.CompleteAsync(cancellationToken);
+var codecs = M3u8MasterPlaylistWriter.BuildCodecsString(source.Tracks!);</code></pre>
 
       <h2 id="amf0">AMF0</h2>
       <p>Namespace: <code>EggEncoder.Live.Rtmp.Amf0</code>. The Action Message Format 0 codec FLV <code>onMetaData</code> and RTMP command messages use, hand-written with no reflection (AOT-safe).</p>

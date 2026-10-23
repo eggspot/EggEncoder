@@ -198,8 +198,9 @@ overrule it). Three layers, each with its own idiom:
      `ValueTask WriteAsync(MediaPacket packet, CancellationToken)` and
      `ValueTask CompleteAsync(CancellationToken)`. `ValueTask` gives a single output natural
      backpressure.
-   - `MediaPacketSinkAdapter` bridges the existing synchronous `HlsSegmenter`/`IStreamingSink`
-     into an `IMediaPacketSink`, so the HLS side needs no async rewrite.
+   - `HlsMediaPacketSink` (named `MediaPacketSinkAdapter` until PR #149) bridges the existing
+     synchronous `HlsSegmenter`/`IStreamingSink` into an `IMediaPacketSink`, so the HLS side needs
+     no async rewrite.
 3. **Fan-out isolation** (item 7): `RestreamHub` gives every output its own
    `System.Threading.Channels` bounded queue, its own pump task and its own `ReconnectPolicy`, so
    one slow or dead destination can never block ingest or any other output. The built-in
@@ -484,7 +485,7 @@ without decoding.
   change starts a new init segment with `EXT-X-DISCONTINUITY`. Master-playlist `CODECS` strings
   come from item 1's SPS parser.
 - The existing audio-only constructors keep working unchanged (no breaking change);
-  `MediaPacketSinkAdapter` wraps the packet-driven path as an `IMediaPacketSink`.
+  `HlsMediaPacketSink` wraps the packet-driven path as an `IMediaPacketSink`.
 
 **Acceptance criteria**:
 
@@ -501,12 +502,18 @@ without decoding.
 - Existing audio-only streaming tests pass unchanged.
 
 **Split** (recorded per "How to use this plan" rule 4; decided by research in PR #143, following
-`docs/streaming-plan.md` item 8's sub-item precedent): item 5 ships as three PRs, in order. **5a**:
+`docs/streaming-plan.md` item 8's sub-item precedent): item 5 ships as four PRs, in order. **5a**:
 multi-track packet mode for `FmpInitSegmentWriter`/`FmpMediaSegmentWriter`. **5b**: video, PCR and
-Annex B conversion in `MpegTsMuxer`. **5c**: packet-driven `HlsSegmenter` (keyframe-aligned cuts,
-`ConfigVersion` → new init segment + `EXT-X-DISCONTINUITY`, an `UpdateTracks` on the fMP4 writer
-that keeps its sequence number and per-track state), master-playlist `CODECS` from the SPS, and
-`MediaPacketSinkAdapter`. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
+Annex B conversion in `MpegTsMuxer`. **5c**: packet-driven `HlsSegmenter` (keyframe-aligned cuts),
+master-playlist `CODECS` from the SPS, and `HlsMediaPacketSink`. **5d** (split out of 5c by
+research in PR #149): mid-stream configuration changes: `ConfigVersion` → new init segment +
+`EXT-X-DISCONTINUITY` (and `EXT-X-DISCONTINUITY-SEQUENCE` once a discontinuity leaves the live
+window, RFC 8216 §4.3.3.3), an `UpdateTracks` on the fMP4 writer that keeps its sequence number and
+per-track state and on the TS muxer, `UpdateTracks` on `HlsSegmenter`/`HlsMediaPacketSink`, and an
+`IStreamingSink` extension (default interface methods) for versioned init segment URIs and deleting
+an init segment that ages out of the live window: today's `WriteInitSegment(bytes)` has no name, so
+`FileSystemStreamingSink` would overwrite `init.mp4` under segments that still reference the old
+one. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
 
 **Status**: in progress. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):
 `BuildInitSegment(MediaTrackSet)` and `FmpMediaSegmentWriter(MediaTrackSet)` +
@@ -536,7 +543,27 @@ random_access_indicator on keyframes and every AAC frame; AAC must fit ADTS (obj
 indexed rate, channel configuration 1-7), so explicit HE-AAC that fMP4 accepts is rejected here
 (Apple players take HEVC only in fMP4, so 5c should default HEVC renditions to fMP4). Frame mode was left
 byte-for-byte unchanged here; its 0xFF payload padding after each PES, which ISO/IEC 13818-1
-2.4.3.3 doesn't allow, was fixed separately in PR #148. 5c not started.
+2.4.3.3 doesn't allow, was fixed separately in PR #148. 5c done
+([PR #149](https://github.com/eggspot/EggEncoder/pull/149)): `new HlsSegmenter(MediaTrackSet, ...)` +
+`AddPacket` (VOD and live, fMP4 and TS), `HlsMediaPacketSink`, and
+`M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)`; the new 5-second fixture
+`src/EggEncoder.UnitTests/Streaming/Hls/h264_aac_5s.flv` (ffmpeg 9.0.2: 64x64 x264, 1 s GOPs, 2
+B-frames, mono AAC) gives three keyframe-aligned segments at a 2 s target, checked through the
+test-only moof/trun and TS readers, and the `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` (both
+streams, 5.0 s) + `ffmpeg -f null` run on both playlists passes locally. Decided by research
+(PR #149): config changes split out as 5d (above); cut points are the first video track's
+keyframes, or every packet of the first track without video; packets before the first video
+keyframe, audio included, are dropped and counted (`DroppedLeadingPacketCount`), so the first
+segment starts at the keyframe (ffmpeg drops leading non-keyframes too, via `-copyinkf` off, but
+keeps leading audio); packets go into segments in arrival order, as ffmpeg's hlsenc does; EXTINF
+is measured on the cut track's PTS, the final segment adding one frame (the cut track's last DTS
+step, else 1/30 s or 1024 AAC samples) to its latest PTS, which ffmpeg leaves out; the wrapper is
+named `HlsMediaPacketSink` (the destination + interface naming of `FileSystemStreamingSink`), a
+separate class rather than `HlsSegmenter` implementing `IMediaPacketSink`, so the segmenter stays
+synchronous; `CODECS` lists video first, distinct values, `mp4a.40.<audio object type>`.
+Implementation choices: the common timestamp checks run before a packet is added; a container
+rejection at a cut discards that segment and rethrows, and `Complete` ends the playlist before
+rethrowing. Not done here: `EXT-X-INDEPENDENT-SEGMENTS`. 5d not started.
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 

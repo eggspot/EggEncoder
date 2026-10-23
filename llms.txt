@@ -243,6 +243,24 @@ that continue across segments. AAC must fit ADTS (object type 1-4, indexed sampl
 configuration 1-7) or the constructor throws `NotSupportedException`; MP3/Opus/AV1/VP9 too. A call
 that throws `ArgumentException` leaves the muxer unchanged.
 
+For the packet model, `new HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds,
+IStreamingSink sink[, int liveWindowSize][, SegmentFormat segmentFormat])` + `AddPacket(MediaPacket)`
++ `Complete()` package H.264/H.265 + AAC packets as HLS (fMP4 or MPEG-TS, VOD or live window)
+without decoding. Cut points are the first video track's keyframes (every packet of the first
+track when there is no video); a cut point whose PTS is >= target past the segment's first cut
+point starts the next segment, so every segment starts with a keyframe. Packets go into segments
+in arrival order; packets before the first cut point are dropped and counted
+(`DroppedLeadingPacketCount`). EXTINF = cut-point PTS difference; the final segment runs to its
+latest PTS + one frame. The fMP4 writer gets the next keyframe's DTS as the video track's
+`nextDecodeTimes`. `AddPacket` throws `ArgumentException` (adding nothing) for an unknown track, a
+`ConfigVersion` other than the track's (mid-stream config changes are live plan item 5d), a negative
+DTS, PTS < DTS, or a non-increasing DTS; a packet the container rejects at a cut discards that
+segment and throws from the call that cut it. `HlsMediaPacketSink(IStreamingSink sink, int
+targetDurationSeconds, SegmentFormat segmentFormat = Fmp4, int? liveWindowSize = null)` is the
+`IMediaPacketSink` wrapper (`OpenAsync` builds the segmenter, exposed as `Segmenter`).
+`M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)` returns the `CODECS` value: video first,
+then audio, distinct, `avc1.PPCCLL` / `hvc1.…` from the SPS, `mp4a.40.<audio object type>`.
+
 `EggEncoder.Streaming.Hls.M3u8MasterPlaylistWriter.BuildMasterPlaylist(IReadOnlyList<
 HlsRenditionDescriptor> renditions)` formats a top-level master playlist listing multiple
 audio-bitrate renditions, each a complete independent audio rendition (not an alternate track

@@ -219,7 +219,7 @@ await writer.CompleteAsync();
 
 ### Fragmented MP4 (fMP4/CMAF) with video
 
-`FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)` and `new FmpMediaSegmentWriter(MediaTrackSet).BuildMediaSegment(packets, nextDecodeTimes)` write fMP4 init and media segments from packets: H.264 (`avc1`) and H.265 (`hvc1`) video passed through without decoding, next to AAC (mono or stereo). Per-sample durations come from the DTS deltas, video samples carry sync flags and signed composition offsets for B-frames, and each `tfdt` is the track's real first DTS. Pass the next DTS of a track in `nextDecodeTimes` when you know it (a segmenter cutting at the next keyframe does) to make that track's last duration exact. Timestamps must be non-negative and strictly increasing per track; nothing is rebased. Checked with `ffprobe` and an `ffmpeg` decode of a real H.264 + AAC stream. The HLS segmenter still packages audio only; packet-driven HLS with video is the next step of [the live plan](docs/live-ingest-restream-plan.md) (item 5).
+`FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)` and `new FmpMediaSegmentWriter(MediaTrackSet).BuildMediaSegment(packets, nextDecodeTimes)` write fMP4 init and media segments from packets: H.264 (`avc1`) and H.265 (`hvc1`) video passed through without decoding, next to AAC (mono or stereo). Per-sample durations come from the DTS deltas, video samples carry sync flags and signed composition offsets for B-frames, and each `tfdt` is the track's real first DTS. Pass the next DTS of a track in `nextDecodeTimes` when you know it (a segmenter cutting at the next keyframe does) to make that track's last duration exact. Timestamps must be non-negative and strictly increasing per track; nothing is rebased. Checked with `ffprobe` and an `ffmpeg` decode of a real H.264 + AAC stream. `HlsSegmenter` uses it for HLS with video (below).
 
 ```csharp
 using EggEncoder.Streaming.Mp4;
@@ -238,6 +238,23 @@ using EggEncoder.Streaming.MpegTs;
 
 var muxer = new MpegTsMuxer(tracks);       // tracks: e.g. FlvFileSource.Tracks or an RtmpIngestStream's
 File.WriteAllBytes("segment0.ts", muxer.BuildSegment(gopPackets));
+```
+
+
+### HLS with video
+
+`new HlsSegmenter(MediaTrackSet tracks, targetDurationSeconds, sink[, liveWindowSize][, SegmentFormat])` + `AddPacket(packet)` + `Complete()` packages a packet stream (an RTMP ingest, an FLV file) as HLS with H.264/H.265 video and AAC audio, without decoding, in fMP4 or MPEG-TS segments, VOD or live sliding window. Segments are cut at video keyframes once the target duration is reached (on every packet for audio-only streams), so each one starts decodable and runs at most one GOP past the target; `EXTINF` comes from the keyframes' PTS. Packets before the first keyframe are dropped and counted (`DroppedLeadingPacketCount`). `HlsMediaPacketSink` wraps it as an `IMediaPacketSink` (it builds the segmenter in `OpenAsync`), and `M3u8MasterPlaylistWriter.BuildCodecsString(tracks)` gives the master playlist's `CODECS` value from the SPS and AudioSpecificConfig (`"avc1.64001F,mp4a.40.2"`). A track's configuration can't change mid-stream yet ([live plan](docs/live-ingest-restream-plan.md) item 5d). Checked with `ffprobe` and an `ffmpeg` decode of the playlists made from a real H.264 + AAC stream.
+
+```csharp
+using EggEncoder.Streaming.Hls;
+
+await using var hls = new HlsMediaPacketSink(new FileSystemStreamingSink("out"), targetDurationSeconds: 4);
+await foreach (var packet in source.ReadPacketsAsync())   // source: e.g. an FlvFileSource or an RtmpIngestStream
+{
+    if (hls.Segmenter is null) await hls.OpenAsync(source.Tracks!);
+    await hls.WriteAsync(packet);
+}
+await hls.CompleteAsync();
 ```
 
 ### RTMP protocol core
