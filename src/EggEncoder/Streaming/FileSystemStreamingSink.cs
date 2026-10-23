@@ -1,9 +1,13 @@
 namespace EggEncoder.Streaming
 {
     /// <summary>
-    /// Writes an HLS output to a directory on disk: <c>{prefix}init.mp4</c>, <c>{prefix}segment_
-    /// {n}.m4s</c> per media segment, and <c>{prefix}playlist.m3u8</c>, overwritten each time
-    /// <see cref="WritePlaylist"/> is called. The directory must already exist.
+    /// Writes an HLS output to a directory on disk: <c>{prefix}playlist.m3u8</c>, overwritten each
+    /// time <see cref="WritePlaylist"/> is called, next to the init and media segments under the
+    /// names <see cref="Hls.HlsSegmenter"/> chooses, prefixed (<c>{prefix}init.mp4</c>,
+    /// <c>{prefix}segment_{n}.m4s</c> or <c>{prefix}segment_{n}.ts</c>). The URIs it returns for the
+    /// playlist are those prefixed names, relative to the playlist, so several renditions can share
+    /// one directory. The unnamed overloads write <c>{prefix}init.mp4</c> and
+    /// <c>{prefix}segment_{n}.m4s</c>. The directory must already exist.
     /// </summary>
     public sealed class FileSystemStreamingSink : IStreamingSink
     {
@@ -33,9 +37,25 @@ namespace EggEncoder.Streaming
         public void WritePlaylist(ReadOnlySpan<byte> utf8Bytes) =>
             File.WriteAllBytes(Path.Combine(_directory, $"{_filePrefix}playlist.m3u8"), utf8Bytes.ToArray());
 
-        public void DeleteMediaSegment(long sequenceNumber)
+        public void DeleteMediaSegment(long sequenceNumber) => DeleteFile(SegmentFileName(sequenceNumber));
+
+        public string WriteInitSegment(string fileName, ReadOnlySpan<byte> bytes) => WriteFile(fileName, bytes);
+
+        public string WriteMediaSegment(long sequenceNumber, string fileName, ReadOnlySpan<byte> bytes) => WriteFile(fileName, bytes);
+
+        public void DeleteMediaSegment(long sequenceNumber, string uri) => DeleteFile(uri);
+
+        private string WriteFile(string fileName, ReadOnlySpan<byte> bytes)
         {
-            var path = Path.Combine(_directory, SegmentFileName(sequenceNumber));
+            ArgumentException.ThrowIfNullOrEmpty(fileName);
+            var uri = _filePrefix + fileName;
+            File.WriteAllBytes(Path.Combine(_directory, uri), bytes.ToArray());
+            return uri;
+        }
+
+        private void DeleteFile(string relativePath)
+        {
+            var path = Path.Combine(_directory, relativePath);
             if (File.Exists(path))
             {
                 File.Delete(path);

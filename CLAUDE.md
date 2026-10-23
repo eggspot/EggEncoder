@@ -266,7 +266,15 @@ defaults every network-facing item must meet.
   optional file-name prefix for multi-rendition use), `InMemoryStreamingSink` (no filesystem at all
   -- the primary vehicle for this surface's own tests), and `DelegateStreamingSink` (four
   constructor-supplied delegates, one per interface member -- the concrete answer to "a user
-  callback for HTTP/S3 upload" without writing a full class).
+  callback for HTTP/S3 upload" without writing a full class). The segmenter names each file
+  (`init.mp4`, `segment_{n}.m4s` or `segment_{n}.ts`, by segment format) and calls the
+  default-interface-method overloads `WriteInitSegment(fileName, bytes)`/`WriteMediaSegment(n,
+  fileName, bytes)`, which return the URI the playlist lists, and `DeleteMediaSegment(n, uri)`; the
+  defaults call the original members and return the name unchanged. `FileSystemStreamingSink`
+  overrides them to write `{prefix}{fileName}` and return that, so `.ts` segments and prefixed
+  renditions in one directory get playlists whose URIs exist (it used to write `.m4s` for every
+  format and list unprefixed URIs; fixed in its own PR after #149). Live plan item 5d's versioned
+  init segments build on these overloads.
 - `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`).
   `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into
   its own accumulating list internally), so a caller wires `AacStreamingEncoder.Create(..., frame =>

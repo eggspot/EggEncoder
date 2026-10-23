@@ -567,6 +567,14 @@ discipline it should have followed the first time. A genuine process lesson, not
 correction: a self-review "fix" is not automatically more correct than what it replaces -- it needs
 the same verification bar as the original code.
 
+**Found later, fixed in its own PR (after live plan PR #149)**: `FileSystemStreamingSink` named
+every media segment `{prefix}segment_{n}.m4s` while `HlsSegmenter` listed `segment_{n}.ts` for
+MPEG-TS, and its multi-rendition `filePrefix` reached the file names but never the playlist URIs,
+so both cases wrote playlists pointing at files that didn't exist. The segmenter now passes each
+file name to the sink through new default-interface-method overloads that return the URI the
+playlist lists (decided by research: one owner per fact, the segmenter for the name, the sink for
+the storage location).
+
 ## 3b. HLS live sliding window
 
 **Problem**: item 3a only ever grows its segment list and writes a single, final `#EXT-X-ENDLIST`

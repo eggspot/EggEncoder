@@ -510,10 +510,11 @@ research in PR #149): mid-stream configuration changes: `ConfigVersion` → new 
 `EXT-X-DISCONTINUITY` (and `EXT-X-DISCONTINUITY-SEQUENCE` once a discontinuity leaves the live
 window, RFC 8216 §4.3.3.3), an `UpdateTracks` on the fMP4 writer that keeps its sequence number and
 per-track state and on the TS muxer, `UpdateTracks` on `HlsSegmenter`/`HlsMediaPacketSink`, and an
-`IStreamingSink` extension (default interface methods) for versioned init segment URIs and deleting
-an init segment that ages out of the live window: today's `WriteInitSegment(bytes)` has no name, so
-`FileSystemStreamingSink` would overwrite `init.mp4` under segments that still reference the old
-one. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
+`IStreamingSink` extension for deleting an init segment that ages out of the live window. Versioned
+init names (`init_2.mp4`, ...) go through `WriteInitSegment(fileName, bytes)`, the named overload
+added (with `WriteMediaSegment(n, fileName, bytes)` and `DeleteMediaSegment(n, uri)`) by the
+`FileSystemStreamingSink` naming fix after PR #149; before it, the unnamed `WriteInitSegment(bytes)`
+would have overwritten `init.mp4` under segments that still reference the old one. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
 
 **Status**: in progress. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):
 `BuildInitSegment(MediaTrackSet)` and `FmpMediaSegmentWriter(MediaTrackSet)` +

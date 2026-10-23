@@ -73,7 +73,7 @@ namespace EggEncoder.Streaming.Hls
 
             if (initSegment is not null)
             {
-                sink.WriteInitSegment(initSegment);
+                _initSegmentUri = sink.WriteInitSegment(InitSegmentUri, initSegment);
             }
         }
 

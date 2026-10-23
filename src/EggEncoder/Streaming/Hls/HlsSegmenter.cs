@@ -31,6 +31,7 @@ namespace EggEncoder.Streaming.Hls
         private readonly List<HlsSegmentDescriptor> _segments = [];
 
         private readonly int? _liveWindowSize;
+        private readonly string? _initSegmentUri;
 
         private long _accumulatedSampleCount;
         private long _nextSequenceNumber = 1;
@@ -48,7 +49,7 @@ namespace EggEncoder.Streaming.Hls
         /// <summary>
         /// Live mode: once more than <paramref name="liveWindowSize"/> segments have been produced,
         /// the oldest is dropped from the playlist (<c>EXT-X-MEDIA-SEQUENCE</c> advances to match)
-        /// and <see cref="IStreamingSink.DeleteMediaSegment"/> is called for it. No <c>EXT-X-ENDLIST</c>
+        /// and <see cref="IStreamingSink.DeleteMediaSegment(long, string)"/> is called for it. No <c>EXT-X-ENDLIST</c>
         /// is written until <see cref="Complete"/> signals the live stream itself has ended.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
@@ -66,7 +67,7 @@ namespace EggEncoder.Streaming.Hls
             if (segmentFormat == SegmentFormat.Fmp4)
             {
                 _fmp4Writer = new FmpMediaSegmentWriter();
-                sink.WriteInitSegment(FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
+                _initSegmentUri = sink.WriteInitSegment(InitSegmentUri, FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
             }
             else
             {
@@ -93,6 +94,7 @@ namespace EggEncoder.Streaming.Hls
             _segmentFormat = segmentFormat;
         }
 
+        /// <summary>The file name the init segment is written under; the playlist lists whatever URI the <see cref="IStreamingSink"/> returns for it.</summary>
         public const string InitSegmentUri = "init.mp4";
 
         /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for packets (a <see cref="MediaTrackSet"/> constructor).</exception>
@@ -164,17 +166,17 @@ namespace EggEncoder.Streaming.Hls
         private void WriteSegment(byte[] segmentBytes, double durationSeconds)
         {
             var sequenceNumber = _nextSequenceNumber;
-            _sink.WriteMediaSegment(sequenceNumber, segmentBytes);
+            var uri = _sink.WriteMediaSegment(sequenceNumber, SegmentFileName(sequenceNumber), segmentBytes);
             _nextSequenceNumber++;
             _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
 
-            _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, SegmentUri(sequenceNumber)));
+            _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, uri));
 
             while (_liveWindowSize is { } windowSize && _segments.Count > windowSize)
             {
                 var oldest = _segments[0];
                 _segments.RemoveAt(0);
-                _sink.DeleteMediaSegment(oldest.SequenceNumber);
+                _sink.DeleteMediaSegment(oldest.SequenceNumber, oldest.Uri);
             }
         }
 
@@ -182,12 +184,10 @@ namespace EggEncoder.Streaming.Hls
         {
             var mediaSequence = _segments.Count > 0 ? _segments[0].SequenceNumber : 1;
             var targetDurationTagValue = (int)Math.Ceiling(Math.Max(_targetDurationSeconds, _maxObservedSegmentDurationSeconds));
-            var initSegmentUri = _segmentFormat == SegmentFormat.Fmp4 ? InitSegmentUri : null;
-
-            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, initSegmentUri, endList);
+            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, _initSegmentUri, endList);
             _sink.WritePlaylist(Encoding.UTF8.GetBytes(playlistText));
         }
 
-        private string SegmentUri(long sequenceNumber) => _segmentFormat == SegmentFormat.Fmp4 ? $"segment_{sequenceNumber}.m4s" : $"segment_{sequenceNumber}.ts";
+        private string SegmentFileName(long sequenceNumber) => _segmentFormat == SegmentFormat.Fmp4 ? $"segment_{sequenceNumber}.m4s" : $"segment_{sequenceNumber}.ts";
     }
 }
