@@ -487,6 +487,59 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             MpegTsTestReader.ReadPes(MpegTsTestReader.ReadPackets(sink.MediaSegments[1]), VideoPid).Single().DecodeTime.Should().Be(1000 * 90);
         }
 
+        [Theory]
+        [InlineData(SegmentFormat.Fmp4)]
+        [InlineData(SegmentFormat.MpegTs)]
+        public void AddPacket_SinkFailingOnASegmentWrite_Should_Throw_And_RestartAtTheCutKeyframe(SegmentFormat format)
+        {
+            var capture = FiveSecondCapture();
+            var inner = new InMemoryStreamingSink();
+            var sink = new FailingSink(inner, failMediaSegmentWrites: 1, failPlaylistWrites: 0);
+            var segmenter = new HlsSegmenter(capture.Demuxer.Tracks!, 2, sink, format);
+            var failures = 0;
+
+            foreach (var packet in capture.Packets)
+            {
+                try
+                {
+                    segmenter.AddPacket(packet);
+                }
+                catch (IOException)
+                {
+                    failures++;
+                }
+            }
+
+            segmenter.Complete();
+
+            failures.Should().Be(1);
+            inner.MediaSegments.Keys.Should().BeEquivalentTo([1L, 2L]);
+            PlaylistDurations(inner).Should().Equal(2.0, 1.0);
+            PlaylistText(inner).Should().Contain("#EXT-X-MEDIA-SEQUENCE:1\n").And.Contain("segment_1.").And.Contain("segment_2.");
+            FirstVideoDecodeTime(inner.MediaSegments[1], format).Should().Be(2000);
+            FirstVideoDecodeTime(inner.MediaSegments[2], format).Should().Be(4000);
+        }
+
+        [Fact]
+        public void AddPacket_SinkFailingOnAPlaylistWrite_Should_KeepTheWrittenSegment_And_RestartAtTheCutPoint()
+        {
+            var inner = new InMemoryStreamingSink();
+            var sink = new FailingSink(inner, failMediaSegmentWrites: 0, failPlaylistWrites: 1);
+            var audioOnly = new MediaTrackInfo(AudioTrackId, MediaKind.Audio, MediaCodec.Aac, 1000, FlvTestBuilder.AacConfig, 0, 44100, 1);
+            var segmenter = new HlsSegmenter(new MediaTrackSet([audioOnly]), 1, sink);
+            segmenter.AddPacket(Audio(0));
+
+            var act = () => segmenter.AddPacket(Audio(1000));
+
+            act.Should().ThrowExactly<IOException>();
+            segmenter.AddPacket(Audio(2000));
+            segmenter.Complete();
+
+            inner.MediaSegments.Keys.Should().Equal(1L, 2L, 3L);
+            PlaylistDurations(inner).Should().Equal(1.0, 1.0, 1.0);
+            ParseFmp4(inner.MediaSegments[2]).Trafs[0].BaseMediaDecodeTime.Should().Be(1000);
+        }
+
         [Fact]
         public void Complete_FinalSegmentTheMuxerRejects_Should_StillEndThePlaylist_And_Throw()
         {
@@ -640,6 +693,41 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         internal sealed record ParsedSegment(uint SequenceNumber, List<ParsedTraf> Trafs);
 
         internal sealed record ParsedTraf(uint Mp4TrackId, long BaseMediaDecodeTime, int SampleCount, uint? FirstSampleFlags, List<uint> Durations);
+
+        private static long FirstVideoDecodeTime(byte[] segment, SegmentFormat format) =>
+            format == SegmentFormat.Fmp4
+                ? ParseFmp4(segment).Trafs[0].BaseMediaDecodeTime
+                : MpegTsTestReader.ReadPes(MpegTsTestReader.ReadPackets(segment), VideoPid)[0].DecodeTime / 90;
+
+        private sealed class FailingSink(InMemoryStreamingSink inner, int failMediaSegmentWrites, int failPlaylistWrites) : IStreamingSink
+        {
+            private int _mediaSegmentFailuresLeft = failMediaSegmentWrites;
+            private int _playlistFailuresLeft = failPlaylistWrites;
+
+            public void WriteInitSegment(ReadOnlySpan<byte> bytes) => inner.WriteInitSegment(bytes);
+
+            public void WriteMediaSegment(long sequenceNumber, ReadOnlySpan<byte> bytes)
+            {
+                if (_mediaSegmentFailuresLeft-- > 0)
+                {
+                    throw new IOException("Upload failed");
+                }
+
+                inner.WriteMediaSegment(sequenceNumber, bytes);
+            }
+
+            public void WritePlaylist(ReadOnlySpan<byte> utf8Bytes)
+            {
+                if (_playlistFailuresLeft-- > 0)
+                {
+                    throw new IOException("Upload failed");
+                }
+
+                inner.WritePlaylist(utf8Bytes);
+            }
+
+            public void DeleteMediaSegment(long sequenceNumber) => inner.DeleteMediaSegment(sequenceNumber);
+        }
 
         private sealed class RecordingSink : IStreamingSink
         {

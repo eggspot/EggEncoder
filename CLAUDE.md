@@ -341,8 +341,9 @@ defaults every network-facing item must meet.
   difference; the final segment runs to its latest PTS plus the cut track's last DTS step (default
   1/30 s or 1024 AAC samples), also passed to the fMP4 writer as `nextDecodeTimes`. Common checks
   (track, `ConfigVersion`, DTS >= 0, PTS >= DTS, DTS increasing) throw before a packet is added;
-  a container rejection at a cut discards that segment, rethrows from that call, and the next segment
-  starts at the cut point; `Complete` writes `EXT-X-ENDLIST` before rethrowing. Mid-stream
+  a container rejection or a sink exception at a cut discards that segment (a failed sink write uses
+  no sequence number), rethrows from that call, and the next segment still starts at the cut point
+  (found by the independent review in PR #149); `Complete` writes `EXT-X-ENDLIST` before rethrowing. Mid-stream
   configuration changes (new init segment + `EXT-X-DISCONTINUITY`, which needs an `IStreamingSink`
   extension for versioned init segments) are item 5d. `HlsMediaPacketSink` is the
   `IMediaPacketSink` wrapper (builds the segmenter in `OpenAsync`; synchronous inside), and

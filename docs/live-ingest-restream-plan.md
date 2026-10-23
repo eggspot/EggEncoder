@@ -562,8 +562,10 @@ named `HlsMediaPacketSink` (the destination + interface naming of `FileSystemStr
 separate class rather than `HlsSegmenter` implementing `IMediaPacketSink`, so the segmenter stays
 synchronous; `CODECS` lists video first, distinct values, `mp4a.40.<audio object type>`.
 Implementation choices: the common timestamp checks run before a packet is added; a container
-rejection at a cut discards that segment and rethrows, and `Complete` ends the playlist before
-rethrowing. Not done here: `EXT-X-INDEPENDENT-SEGMENTS`. 5d not started.
+rejection or a sink exception at a cut discards that segment and rethrows, the next segment still
+starting at the cut point (a failed sink write uses no sequence number; the independent review in
+PR #149 found the sink case leaving the segmenter on a stale start), and `Complete` ends the
+playlist before rethrowing. Not done here: `EXT-X-INDEPENDENT-SEGMENTS`. 5d not started.
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 

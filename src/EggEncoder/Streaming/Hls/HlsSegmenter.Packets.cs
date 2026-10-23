@@ -80,7 +80,8 @@ namespace EggEncoder.Streaming.Hls
         /// <summary>
         /// Packets dropped because they arrived before the first cut point: with a video track,
         /// everything before its first keyframe (audio included), so the first segment starts
-        /// decodable. Zero for an audio-only stream.
+        /// decodable; without one, packets of other tracks that arrive before the first track's
+        /// first packet.
         /// </summary>
         public long DroppedLeadingPacketCount { get; private set; }
 
@@ -92,8 +93,11 @@ namespace EggEncoder.Streaming.Hls
         /// are added, so every segment starts at a cut point and its duration is the cut-point PTS
         /// difference, at least the target and at most one GOP (or audio frame) past it. Packets
         /// before the first cut point are dropped (see <see cref="DroppedLeadingPacketCount"/>).
-        /// A track's configuration can't change mid-stream yet: a packet must carry its track's
-        /// <see cref="MediaTrackInfo.ConfigVersion"/>.
+        /// Only the first video track decides cut points, so a second video track's segments start
+        /// wherever its packets fall. In live mode, keep the target at least as long as the
+        /// stream's GOP: a longer segment raises <c>EXT-X-TARGETDURATION</c>, which RFC 8216
+        /// §6.2.1 doesn't allow a live playlist to change. A track's configuration can't change
+        /// mid-stream yet: a packet must carry its track's <see cref="MediaTrackInfo.ConfigVersion"/>.
         /// </summary>
         /// <exception cref="ArgumentException">
         /// The packet names a track not in the set, has a <see cref="MediaPacket.ConfigVersion"/>
@@ -101,7 +105,13 @@ namespace EggEncoder.Streaming.Hls
         /// its track's previous one; nothing is added. Or the container rejects a pending packet
         /// when this packet's cut point ends the segment (a malformed payload, a timestamp it can't
         /// hold): that segment is discarded, no segment is written for it, and this packet still
-        /// starts the next one.
+        /// starts the next one. The timeline then has a gap the playlist doesn't mark.
+        /// </exception>
+        /// <exception cref="Exception">
+        /// Whatever <see cref="IStreamingSink"/> throws while this packet's cut point writes the
+        /// segment or the playlist (an <see cref="IOException"/>, say), after the same recovery:
+        /// this packet starts the next segment, and a segment the sink failed to write is dropped
+        /// without using up a sequence number.
         /// </exception>
         /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for audio frames.</exception>
         public void AddPacket(MediaPacket packet)
@@ -123,7 +133,7 @@ namespace EggEncoder.Streaming.Hls
 
             var isCutTrack = track.TrackId == _cutTrack.TrackId;
             var isCutPoint = isCutTrack && (packet.IsKeyframe || !IsVideo(track));
-            ArgumentException? cutFailure = null;
+            Exception? cutFailure = null;
             if (_segmentStartPts is not { } segmentStartPts)
             {
                 if (!isCutPoint)
@@ -136,12 +146,7 @@ namespace EggEncoder.Streaming.Hls
             }
             else if (isCutPoint && packet.Pts - segmentStartPts >= _targetDurationTicks)
             {
-                cutFailure = CutPacketSegment(packet.Pts, packet.Dts);
-                if (cutFailure is null)
-                {
-                    WritePlaylist(endList: false);
-                }
-
+                cutFailure = CutPacketSegment(packet.Pts, packet.Dts, writePlaylist: true);
                 StartPacketSegment(packet);
             }
 
@@ -205,14 +210,14 @@ namespace EggEncoder.Streaming.Hls
 
             var lastFrameDuration = _lastCutTrackFrameDuration ?? _defaultCutTrackFrameDuration;
             var lastCutTrackDts = _lastDtsByTrack[_cutTrack!.TrackId];
-            var failure = CutPacketSegment(_pendingMaxCutTrackPts + lastFrameDuration, lastCutTrackDts + lastFrameDuration);
+            var failure = CutPacketSegment(_pendingMaxCutTrackPts + lastFrameDuration, lastCutTrackDts + lastFrameDuration, writePlaylist: false);
             if (failure is not null)
             {
                 ExceptionDispatchInfo.Throw(failure);
             }
         }
 
-        private ArgumentException? CutPacketSegment(long endPts, long nextCutTrackDts)
+        private Exception? CutPacketSegment(long endPts, long nextCutTrackDts, bool writePlaylist)
         {
             var durationSeconds = (endPts - _segmentStartPts!.Value) / (double)_cutTrack!.Timescale;
             try
@@ -221,9 +226,14 @@ namespace EggEncoder.Streaming.Hls
                     ? _fmp4Writer!.BuildMediaSegment(_pendingPackets, new Dictionary<int, long> { [_cutTrack.TrackId] = nextCutTrackDts })
                     : _mpegTsMuxer!.BuildSegment(_pendingPackets);
                 WriteSegment(segmentBytes, durationSeconds);
+                if (writePlaylist)
+                {
+                    WritePlaylist(endList: false);
+                }
+
                 return null;
             }
-            catch (ArgumentException e)
+            catch (Exception e)
             {
                 return e;
             }

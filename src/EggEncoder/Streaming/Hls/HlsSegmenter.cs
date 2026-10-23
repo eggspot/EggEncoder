@@ -163,9 +163,10 @@ namespace EggEncoder.Streaming.Hls
 
         private void WriteSegment(byte[] segmentBytes, double durationSeconds)
         {
-            var sequenceNumber = _nextSequenceNumber++;
-            _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
+            var sequenceNumber = _nextSequenceNumber;
             _sink.WriteMediaSegment(sequenceNumber, segmentBytes);
+            _nextSequenceNumber++;
+            _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
 
             _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, SegmentUri(sequenceNumber)));
 

@@ -53,7 +53,7 @@ namespace EggEncoder.Streaming.Hls
             }
 
             var codecs = tracks.Tracks
-                .OrderBy(track => track.Kind == MediaKind.Video ? 0 : 1)
+                .OrderBy(track => track.Codec is MediaCodec.H264 or MediaCodec.H265 ? 0 : 1)
                 .Select(CodecsStringOf)
                 .Distinct();
             return string.Join(',', codecs);

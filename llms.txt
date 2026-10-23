@@ -254,8 +254,9 @@ in arrival order; packets before the first cut point are dropped and counted
 latest PTS + one frame. The fMP4 writer gets the next keyframe's DTS as the video track's
 `nextDecodeTimes`. `AddPacket` throws `ArgumentException` (adding nothing) for an unknown track, a
 `ConfigVersion` other than the track's (mid-stream config changes are live plan item 5d), a negative
-DTS, PTS < DTS, or a non-increasing DTS; a packet the container rejects at a cut discards that
-segment and throws from the call that cut it. `HlsMediaPacketSink(IStreamingSink sink, int
+DTS, PTS < DTS, or a non-increasing DTS; a packet the container rejects, or a sink exception, at a
+cut discards that segment and throws from the call that cut it, and the next segment still starts at
+that cut point (a failed sink write uses no sequence number). `HlsMediaPacketSink(IStreamingSink sink, int
 targetDurationSeconds, SegmentFormat segmentFormat = Fmp4, int? liveWindowSize = null)` is the
 `IMediaPacketSink` wrapper (`OpenAsync` builds the segmenter, exposed as `Segmenter`).
 `M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)` returns the `CODECS` value: video first,

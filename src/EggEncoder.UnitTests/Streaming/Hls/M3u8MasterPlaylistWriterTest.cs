@@ -63,6 +63,14 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         }
 
         [Fact]
+        public void BuildCodecsString_VideoTrackLabeledAsAudio_Should_StillListItFirst()
+        {
+            var mislabeled = Video(1, MediaCodec.H264, MediaFixtures.Avc1080pRecord) with { Kind = MediaKind.Audio };
+
+            M3u8MasterPlaylistWriter.BuildCodecsString(new MediaTrackSet([Aac(0, FlvTestBuilder.AacConfig), mislabeled])).Should().Be("avc1.640028,mp4a.40.2");
+        }
+
+        [Fact]
         public void BuildCodecsString_H265_Should_UseTheHvc1SampleEntry()
         {
             var tracks = new MediaTrackSet([Video(0, MediaCodec.H265, MediaFixtures.Hevc1080pRecord)]);

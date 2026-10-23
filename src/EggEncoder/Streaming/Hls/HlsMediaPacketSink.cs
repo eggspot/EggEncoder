@@ -61,6 +61,7 @@ namespace EggEncoder.Streaming.Hls
 
         /// <inheritdoc />
         /// <exception cref="InvalidOperationException">The sink isn't open yet, or is already complete.</exception>
+        /// <exception cref="ArgumentException">The packet is rejected, as <see cref="HlsSegmenter.AddPacket"/> describes.</exception>
         public ValueTask WriteAsync(MediaPacket packet, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
