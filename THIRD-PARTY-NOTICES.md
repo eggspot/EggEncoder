@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-EggEncoder's MIT license (see [LICENSE](LICENSE)) covers the EggEncoder source code only.
+EggEncoder's license, MIT OR Apache-2.0 (see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE)), covers the EggEncoder source code only.
 As of the managed codec rewrite (`docs/managed-codec-rewrite-plan.md`), EggEncoder no longer
 bundles or loads any pre-built native binary of any kind — every codec is pure managed C#,
 either implemented directly in this project or via a permissively-licensed managed NuGet

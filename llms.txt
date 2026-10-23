@@ -603,4 +603,4 @@ produces no destination file; see `docs/feature-roadmap.md` item 5 (now done).
 - Full documentation: https://eggspot.github.io/EggEncoder/
 - NuGet: https://www.nuget.org/packages/EggEncoder
 - GitHub: https://github.com/eggspot/EggEncoder
-- License: MIT (no bundled native binaries; see THIRD-PARTY-NOTICES.md for the pure managed codec dependencies' own licenses)
+- License: MIT OR Apache-2.0 (no bundled native binaries; see THIRD-PARTY-NOTICES.md for the pure managed codec dependencies' own licenses)
