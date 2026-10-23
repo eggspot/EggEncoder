@@ -50,6 +50,26 @@ pre-emptively covering everything.
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
 
+### Fast MDCT (Apple M4, .NET 10.0.12, default job)
+
+`Transform.Mdct` was a direct O(N^2) sum calling `Math.Cos` in its inner loop. A power-of-two
+coefficient count of 4 or more now runs through the MDCT/DCT-IV fold and an N/2-point complex FFT
+(O(N log N), plans cached per size); MP3's 18-point transform keeps the direct sum with cached
+cosines, bit-identical to before. Every existing test passes unchanged (the full unit-test suite
+itself went from ~26 s to ~4 s on the same machine). The WMA/AAC decode "before" numbers are the
+previous entry's (that change didn't move them); the rest were re-measured on that entry's merged code.
+
+| Benchmark | Before | After | Allocated |
+|-----------|-------:|------:|----------:|
+| `WmaDecoder` 10s stereo/16-bit | 11,416 ms | 134.0 ms (85x) | unchanged (54.7 MB) |
+| `AacDecoder` 10s mono/16-bit | 2,946 ms | 117.9 ms (25x) | unchanged (42.9 MB) |
+| `AacEncoderSession` 5s mono, incremental | 1,461 ms | 6.6 ms (220x) | unchanged (11.3 MB) |
+| `AudioCutter.Convert` 10s WAV -> MP3 | 217.7 ms | 125.5 ms | unchanged (169 MB) |
+| `AudioCutter.Convert` 10s WAV -> FLAC | 202.6 ms | 198.7 ms | unchanged (149 MB; no MDCT) |
+
+WMA/AAC decode still allocate 40-55 MB per 10 s (new arrays per frame in the decoders and in
+`Mdct`'s own `double[]`-returning API); pooling those is a possible next step.
+
 ### BitReader word reads + chunked FLAC MD5 (Apple M4, .NET 10.0.12, default job)
 
 `Transform.BitReader.ReadBits`/`ReadUnary` read a 64-bit big-endian window per call instead of
