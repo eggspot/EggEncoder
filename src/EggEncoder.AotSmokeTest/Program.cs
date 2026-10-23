@@ -1,12 +1,6 @@
 using EggEncoder;
 using Microsoft.Extensions.Logging.Abstractions;
 
-// Exercises EggEncoder's riskiest-for-AOT paths now that every codec is pure managed C# (no
-// native binary, no P/Invoke, anywhere in this project) — the NLayer-backed MP3 decode
-// dependency in particular ships no AOT/trim metadata of its own, and this project's own managed
-// FLAC/MP3/WavPack encode+decode round trips need to keep working after trimming — under a real
-// `dotnet publish -p:PublishAot=true` binary for each of this project's supported RIDs, not just
-// under the JIT.
 var sourceWav = Path.Combine(AppContext.BaseDirectory, "sample.wav");
 var workingDirectory = Path.Combine(Path.GetTempPath(), $"EggEncoderAotSmoke_{Guid.NewGuid():N}");
 Directory.CreateDirectory(workingDirectory);
@@ -95,11 +89,10 @@ try
             new EggEncoder.Media.MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 }),
             new EggEncoder.Media.MediaPacket(0, 120, 40, false, 0, new byte[] { 0, 0, 0, 1, 0x41 })
         ]);
-        // The 64x64 dimensions come from the SPS (the track says 0); the segment's mdat holds the
-        // video payloads, then the audio one.
         var initHex = Convert.ToHexString(init);
+        var tkhdWidthAndHeightOf64FromTheSps = "0040000000400000";
         if (!initHex.Contains(Convert.ToHexString("avcC"u8))
-            || !initHex.Contains("0040000000400000") // tkhd width/height: 64 << 16
+            || !initHex.Contains(tkhdWidthAndHeightOf64FromTheSps)
             || !Convert.ToHexString(segment).EndsWith("0000000165" + "0000000141" + "21"))
         {
             throw new InvalidOperationException("fMP4 packet mode produced unexpected results");
@@ -122,8 +115,6 @@ try
             new EggEncoder.Media.MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 }),
             new EggEncoder.Media.MediaPacket(0, 80, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 })
         ]);
-        // PAT, PMT, a PCR-only packet on the video PID (the segment starts with audio: equal DTS
-        // keeps the given order), the audio PES (ADTS), then the video PES: AUD, SPS, PPS, IDR.
         var hex = Convert.ToHexString(segment);
         if (segment.Length != 5 * 188 || segment[(2 * 188) + 3] != 0x2F || (segment[(4 * 188) + 1] & 0x40) == 0
             || !hex.Contains("0000000109F0" + "00000001674D400A")
