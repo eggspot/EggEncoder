@@ -321,9 +321,11 @@ defaults every network-facing item must meet.
   audioObjectType - 1 from `AudioSpecificConfigReader.ReadFields`); object types other than 1-4, an
   explicit sample rate and channel configurations other than 1-7 throw `NotSupportedException`
   (fMP4 accepts them). PCR = max(0, DTS - 700 ms) on every PES of the PCR PID (the first video
-  track, else the first track), plus a PCR-only packet (adaptation field only, continuity counter
-  not advanced) on that PID before another PID's PES when the segment has none yet or the last is
-  100 ms old. random_access_indicator on every keyframe PES (every AAC one). PES packets are padded
+  track, else the first track), plus PCR-only packets (adaptation field only, continuity counter
+  not advanced) on that PID: one before another PID's PES that opens a segment, and 100 ms apart
+  to bridge any gap of more than 100 ms (at most 50 of them, so a timestamp jump past 5 s is left
+  alone rather than letting one DTS decide the segment's size). A DTS must also strictly increase
+  in 90 kHz ticks, so a finer timescale can't put two equal DTS on one PID. random_access_indicator on every keyframe PES (every AAC one). PES packets are padded
   with adaptation-field stuffing (13818-1 2.4.3.3); frame mode still pads with 0xFF payload bytes
   and is byte-for-byte unchanged. Continuity counters (PAT and PMT included) continue across
   segments in packet mode, unlike frame mode. Validation and conversion run before anything is

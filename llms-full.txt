@@ -909,7 +909,7 @@ public sealed class MpegTsMuxer
     public byte[] BuildSegment(IReadOnlyList<EggEncoder.Media.MediaPacket> packets);
     // PAT + PMT, then one PES per packet in DTS order; video as Annex B with an AUD first and the
     // avcC/hvcC parameter sets before keyframes lacking an SPS; PCR = max(0, DTS - 700 ms), PCR-only
-    // packets keep PCRs at most 100 ms apart; adaptation-field stuffing; continuity counters
+    // packets bridge gaps over 100 ms (up to 5 s); adaptation-field stuffing; continuity counters
     // continue across segments. ArgumentException (muxer unchanged) for invalid packets.
 }
 ```

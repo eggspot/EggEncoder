@@ -5,7 +5,8 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
     // A test-only MPEG-TS reader, just enough to check MpegTsMuxer's packet mode field by field:
     // TS headers, adaptation fields (stuffing must be all 0xFF), PAT/PMT and PES reassembly. Not a
     // general-purpose demuxer (that's live ingest plan item 8): it asserts this muxer's own
-    // conventions, such as every PSI section fitting one packet.
+    // conventions. ReadPat/ReadPmt read a section from one packet; a test with a PMT spanning
+    // two packets only counts them.
     internal static class MpegTsTestReader
     {
         public const int PacketSize = 188;

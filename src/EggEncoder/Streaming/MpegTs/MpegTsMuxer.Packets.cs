@@ -28,6 +28,11 @@ namespace EggEncoder.Streaming.MpegTs
         // ISO/IEC 13818-1 2.7.2: at most 100 ms between PCRs. A segment's first packet always gets one.
         private const long MaxPcrIntervalTicks = PtsClockHz / 10;
 
+        // A gap between PCRs is bridged with PCR-only packets only up to this many (5 s): a longer
+        // one is a timestamp jump, not a sparse track, and bridging it would let one packet's DTS
+        // decide how many bytes the segment takes.
+        private const int MaxPcrBridgePackets = 50;
+
         private const byte RandomAccessIndicator = 0x40;
         private const byte PcrFlag = 0x10;
         private const int PcrFieldLength = 6;
@@ -109,10 +114,13 @@ namespace EggEncoder.Streaming.MpegTs
         /// modulo 2^33. Video PES carry PTS and DTS (DTS only when it differs) and an Annex B access
         /// unit: an access unit delimiter first (the packet's own, when it starts with one), then,
         /// for a keyframe that carries no SPS of its own, the parameter sets from the track's
-        /// configuration record, then the packet's NAL units. AAC PES carry one ADTS frame. The PES of
+        /// configuration record (all of them, even if the packet carries a PPS), then the packet's NAL units. AAC PES carry one ADTS frame. The PES of
         /// every keyframe packet (every AAC packet is one) sets <c>random_access_indicator</c>. A PCR of
-        /// max(0, DTS - 700 ms) goes on every PES of the PCR PID, plus a PCR-only packet on that PID
-        /// before any other PES when the segment has none yet or the last one is 100 ms old.
+        /// max(0, DTS - 700 ms) goes on every PES of the PCR PID; a PCR-only packet on that PID goes
+        /// before another PID's PES that opens the segment, and PCR-only packets 100 ms apart bridge
+        /// any gap of more than 100 ms (up to 5 s; a longer one is left as a timestamp jump). PCR
+        /// never passes a later DTS as long as no track's DTS falls more than 700 ms behind the
+        /// latest DTS already written, in this segment or the previous one.
         /// Continuity counters continue from the previous segment. Validation and payload
         /// conversion happen before anything is written: a call that throws leaves the muxer
         /// unchanged.
@@ -122,7 +130,7 @@ namespace EggEncoder.Streaming.MpegTs
         /// <paramref name="packets"/> is empty; or a packet names a track not in the set, or has a
         /// <see cref="MediaPacket.ConfigVersion"/> other than its track's, a negative DTS, a PTS
         /// before its DTS, a DTS not strictly greater than its track's previous one (in this
-        /// segment or an earlier one), a timestamp past what a 90 kHz clock holds in 64 bits, a
+        /// segment or an earlier one, compared both as given and in 90 kHz ticks), a timestamp past what a 90 kHz clock holds in 64 bits, a
         /// malformed length-prefixed video payload, or an AAC payload too long for one ADTS frame
         /// (8,184 bytes).
         /// </exception>
@@ -142,31 +150,41 @@ namespace EggEncoder.Streaming.MpegTs
 
             var units = PreparePesUnits(packets);
 
-            // Work out the PCR plan first, so the output can be sized exactly.
+            // Work out the PCR plan first, so the output can be sized exactly. A PES's PCR is
+            // max(0, DTS - 700 ms), never below the last one. When that is more than 100 ms past
+            // the last PCR, PCR-only packets 100 ms apart bridge the gap first; a PES on another
+            // PID that opens the segment also gets one at its own PCR.
             var lastPcr = _lastPcr;
-            var pcrOnlyPacketCount = 0;
             var totalPacketCount = PsiPacketCount(PatPayload.Length) + PsiPacketCount(_packetModePmt.Length);
             for (var i = 0; i < units.Count; i++)
             {
                 var unit = units[i];
                 var pcr = Math.Max(lastPcr ?? 0, Math.Max(0, unit.Dts90k - PcrDelayTicks));
-                var pcrDue = i == 0 || lastPcr is null || pcr - lastPcr.Value >= MaxPcrIntervalTicks;
+                if (lastPcr is { } last && pcr - last > MaxPcrIntervalTicks)
+                {
+                    var bridgeCount = (pcr - last - 1) / MaxPcrIntervalTicks;
+                    if (bridgeCount <= MaxPcrBridgePackets)
+                    {
+                        for (var k = 1; k <= bridgeCount; k++)
+                        {
+                            unit.PcrOnlyPackets.Add(last + (k * MaxPcrIntervalTicks));
+                        }
+                    }
+                }
+
                 if (unit.Track == _pcrTrack)
                 {
                     unit.Pcr = pcr;
-                    lastPcr = pcr;
                 }
-                else if (pcrDue)
+                else if (i == 0 || lastPcr is null)
                 {
-                    unit.PrecedingPcr = pcr;
-                    lastPcr = pcr;
-                    pcrOnlyPacketCount++;
+                    unit.PcrOnlyPackets.Add(pcr);
                 }
 
-                totalPacketCount += PesPacketCount(unit.Pes.Length, AdaptationFieldLength(unit));
-            }
+                lastPcr = unit.Pcr ?? (unit.PcrOnlyPackets.Count > 0 ? unit.PcrOnlyPackets[^1] : lastPcr);
 
-            totalPacketCount += pcrOnlyPacketCount;
+                totalPacketCount += unit.PcrOnlyPackets.Count + PesPacketCount(unit.Pes.Length, AdaptationFieldLength(unit));
+            }
 
             var output = new byte[totalPacketCount * TsPacketSize];
             var position = 0;
@@ -182,11 +200,11 @@ namespace EggEncoder.Streaming.MpegTs
             position = WritePsi(output, position, PmtPid, _packetModePmt, ref pmtContinuityCounter);
             foreach (var unit in units)
             {
-                if (unit.PrecedingPcr is { } precedingPcr)
+                foreach (var pcr in unit.PcrOnlyPackets)
                 {
                     // A PCR-only packet carries no payload, so it doesn't advance the PCR PID's
                     // continuity counter (2.4.3.3): it repeats the counter of the PID's last packet.
-                    position = WritePcrOnlyPacket(output, position, _pcrTrack.Pid, precedingPcr, (continuityCounters[_pcrTrack] + 15) & 0x0F);
+                    position = WritePcrOnlyPacket(output, position, _pcrTrack.Pid, pcr, (continuityCounters[_pcrTrack] + 15) & 0x0F);
                 }
 
                 var continuityCounter = continuityCounters[unit.Track];
@@ -206,6 +224,7 @@ namespace EggEncoder.Streaming.MpegTs
             foreach (var unit in units)
             {
                 unit.Track.LastDts = unit.SourceDts;
+                unit.Track.LastDts90k = unit.Dts90k;
             }
 
             return output;
@@ -213,7 +232,7 @@ namespace EggEncoder.Streaming.MpegTs
 
         private List<PesUnit> PreparePesUnits(IReadOnlyList<MediaPacket> packets)
         {
-            var lastDts = new Dictionary<PacketTrack, long>();
+            var lastDts = new Dictionary<PacketTrack, (long Source, long Dts90k)>();
             var units = new List<PesUnit>(packets.Count);
             foreach (var packet in packets)
             {
@@ -237,13 +256,11 @@ namespace EggEncoder.Streaming.MpegTs
                     throw new ArgumentException($"Packet for track {packet.TrackId} has a PTS ({packet.Pts}) before its DTS ({packet.Dts}).", nameof(packets));
                 }
 
-                long? previousDts = lastDts.TryGetValue(track, out var previous) ? previous : track.LastDts;
+                var (previousDts, previousDts90k) = lastDts.TryGetValue(track, out var previous) ? previous : (track.LastDts, track.LastDts90k);
                 if (previousDts is not null && packet.Dts <= previousDts)
                 {
                     throw new ArgumentException($"Packet for track {packet.TrackId} has DTS {packet.Dts}, not greater than the track's previous {previousDts}.", nameof(packets));
                 }
-
-                lastDts[track] = packet.Dts;
 
                 long dts90k, pts90k;
                 try
@@ -255,6 +272,14 @@ namespace EggEncoder.Streaming.MpegTs
                 {
                     throw new ArgumentException($"Packet for track {packet.TrackId} has a timestamp too large for a 90 kHz clock.", nameof(packets), e);
                 }
+
+                // A timescale finer than 90 kHz can round two increasing DTS to the same tick.
+                if (previousDts90k is not null && dts90k <= previousDts90k)
+                {
+                    throw new ArgumentException($"Packet for track {packet.TrackId} has DTS {packet.Dts}, which rounds to the same 90 kHz DTS as the track's previous packet.", nameof(packets));
+                }
+
+                lastDts[track] = (packet.Dts, dts90k);
 
                 var pes = track.IsVideo
                     ? BuildVideoPes(track, packet, pts90k, dts90k)
@@ -623,6 +648,8 @@ namespace EggEncoder.Streaming.MpegTs
 
             public long? LastDts { get; set; }
 
+            public long? LastDts90k { get; set; }
+
             public int ContinuityCounter { get; set; }
         }
 
@@ -640,7 +667,8 @@ namespace EggEncoder.Streaming.MpegTs
 
             public long? Pcr { get; set; }
 
-            public long? PrecedingPcr { get; set; }
+            // PCRs of the PCR-only packets written just before this PES, in order.
+            public List<long> PcrOnlyPackets { get; } = [];
         }
     }
 }

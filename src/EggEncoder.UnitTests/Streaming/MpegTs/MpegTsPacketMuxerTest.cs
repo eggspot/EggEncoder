@@ -359,6 +359,74 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         }
 
         [Fact]
+        public void BuildSegment_IrregularAudioBesideSparseVideo_Should_Keep_Pcrs_At_Most_100ms_Apart()
+        {
+            // 48 kHz AAC (21.33 ms packets) beside 2 fps video: a gap only checked once it is
+            // already past 100 ms would overshoot it by up to one audio packet.
+            var audio = new MediaTrackInfo(1, MediaKind.Audio, MediaCodec.Aac, 48000, Convert.FromHexString("1190"), 0);
+            var muxer = new MpegTsMuxer(new MediaTrackSet([VideoTrack(), audio]));
+            var packets = new List<MediaPacket> { Video(0, key: true), Video(500, key: false), Video(1000, key: false), Video(1500, key: false) };
+            for (long t = 0; t < 2000 * 48; t += 1024)
+            {
+                packets.Add(new MediaPacket(1, t, t, true, 0, new byte[] { 0x21 }));
+            }
+
+            var ts = ReadPackets(muxer.BuildSegment(packets));
+
+            var pcrs = Pcrs(ts);
+            // The last audio DTS is 95232 samples (178560 ticks): the clock ends within 100 ms of its PCR.
+            pcrs.Last().Should().BeGreaterThan(178560 - PcrDelay90k - 9000);
+            pcrs.Zip(pcrs.Skip(1)).Should().OnlyContain(pair => pair.Second - pair.First <= 9000);
+            AssertPcrNeverPassesALaterDts(ts);
+        }
+
+        [Fact]
+        public void BuildSegment_VideoOnlyAt1Fps_Should_Bridge_Pcr_Gaps_With_Pcr_Only_Packets()
+        {
+            var muxer = new MpegTsMuxer(new MediaTrackSet([VideoTrack()]));
+
+            var ts = ReadPackets(muxer.BuildSegment([.. Enumerable.Range(0, 6).Select(s => Video(s * 1000, key: s == 0))]));
+
+            var pcrs = Pcrs(ts);
+            pcrs.Should().StartWith([0L, 9000L, 18000L, 27000L], "1 s at DTS 1000 is PCR 27000, reached in 100 ms steps");
+            pcrs.Last().Should().Be((5000 * 90) - PcrDelay90k);
+            pcrs.Zip(pcrs.Skip(1)).Should().OnlyContain(pair => pair.Second - pair.First == 9000);
+            ts.Count(p => p.AdaptationFieldControl == 0x2).Should().Be(pcrs.Count - 6);
+            AssertPcrNeverPassesALaterDts(ts);
+        }
+
+        [Theory]
+        [InlineData(5800, 50)]
+        [InlineData(5900, 0)]
+        public void BuildSegment_PcrGapUpTo5s_Should_Be_Bridged_And_A_Longer_Jump_Left_Alone(long secondDts, int expectedBridgePackets)
+        {
+            // PCR 0 at DTS 0, then (DTS - 700 ms): 459000 ticks needs 50 bridging packets, 468000 would need 51.
+            var muxer = new MpegTsMuxer(new MediaTrackSet([VideoTrack()]));
+
+            var ts = ReadPackets(muxer.BuildSegment([Video(0, key: true), Video(secondDts, key: false)]));
+
+            ts.Count(p => p.AdaptationFieldControl == 0x2).Should().Be(expectedBridgePackets);
+            Pcrs(ts).Last().Should().Be((secondDts * 90) - PcrDelay90k);
+        }
+
+        [Fact]
+        public void BuildSegment_DtsRoundingToTheSame90kHzTick_Should_Throw()
+        {
+            // 5 us is 0.45 ticks of 90 kHz: both DTS would be written as 0 on one PID.
+            var track = new MediaTrackInfo(1, MediaKind.Audio, MediaCodec.Aac, 1_000_000, FlvTestBuilder.AacConfig, 0);
+            var muxer = new MpegTsMuxer(new MediaTrackSet([track]));
+            muxer.BuildSegment([new MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 })]);
+
+            var acrossSegments = () => muxer.BuildSegment([new MediaPacket(1, 5, 5, true, 0, new byte[] { 0x21 })]);
+            var withinSegment = () => new MpegTsMuxer(new MediaTrackSet([track])).BuildSegment(
+                [new MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 }), new MediaPacket(1, 5, 5, true, 0, new byte[] { 0x21 })]);
+
+            acrossSegments.Should().ThrowExactly<ArgumentException>();
+            withinSegment.Should().ThrowExactly<ArgumentException>();
+            muxer.BuildSegment([new MediaPacket(1, 12, 12, true, 0, new byte[] { 0x21 })]).Should().NotBeEmpty("12 us rounds to tick 1");
+        }
+
+        [Fact]
         public void BuildSegment_SegmentStartingWithAudio_Should_Open_With_A_Pcr_Only_Packet()
         {
             var muxer = new MpegTsMuxer(new MediaTrackSet([VideoTrack(), AudioTrack()]));
@@ -678,6 +746,31 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
             var output = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
             return (process.ExitCode, output, errors.Result.Trim());
+        }
+
+        private static List<long> Pcrs(List<TsPacket> ts) => ts.Where(p => p.Pcr != null).Select(p => p.Pcr!.Value / 300).ToList();
+
+        // Walks the packets in order: every PES must start no earlier than the latest PCR (in
+        // 90 kHz ticks), and PCRs never go backwards.
+        private static void AssertPcrNeverPassesALaterDts(List<TsPacket> ts)
+        {
+            var pes = ts.Select(p => p.Pid).Distinct().Where(pid => pid is >= 0x100 and < 0x1000)
+                .SelectMany(pid => ReadPes(ts, pid))
+                .ToDictionary(p => p.First.Index);
+            long lastPcr = -1;
+            foreach (var packet in ts)
+            {
+                if (packet.Pcr is { } pcr)
+                {
+                    (pcr / 300).Should().BeGreaterThanOrEqualTo(lastPcr);
+                    lastPcr = pcr / 300;
+                }
+
+                if (pes.TryGetValue(packet.Index, out var unit))
+                {
+                    unit.DecodeTime.Should().BeGreaterThanOrEqualTo(lastPcr, "no PES arrives after its decode time");
+                }
+            }
         }
 
         private static FlvDemuxerTest.Capture H264AacCapture() =>

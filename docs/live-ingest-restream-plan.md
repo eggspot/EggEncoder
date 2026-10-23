@@ -527,9 +527,9 @@ a test-only TS reader (PAT/PMT/PES/PCR/continuity fields, PCR ≤ DTS) and the
 `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null` run on segments from `h264_aac.flv`
 and `hevc.flv`, which passes locally (ffmpeg 9.0.2). Decided by research (PR #147): timestamps are
 written as given in 90 kHz (no ffmpeg-style 1.4 s offset; rebasing is item 8); PCR = max(0, DTS -
-700 ms) (ffmpeg's default mux delay), on every PES of the PCR PID plus a PCR-only packet before
-another PID's PES when the segment has none yet or the last is 100 ms old, so it holds at 0 for
-the first 700 ms; packets are written in DTS order (stable sort) whatever order they come in; PES
+700 ms) (ffmpeg's default mux delay), on every PES of the PCR PID, plus PCR-only packets: one
+before another PID's PES that opens a segment, and 100 ms apart to bridge any longer gap (up to
+5 s, after the independent review); it holds at 0 for the first 700 ms; packets are written in DTS order (stable sort) whatever order they come in; PES
 packets are padded with adaptation-field stuffing; continuity counters (PAT/PMT included) continue
 across segments, as players read segments back to back; video PES_packet_length is always 0;
 random_access_indicator on keyframes and every AAC frame; AAC must fit ADTS (object type 1-4,
