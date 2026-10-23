@@ -492,7 +492,8 @@ ct)`: one FLV tag body per packet via the internal `FlvTagMuxer` (shared with `F
 header first per configuration; invalid packets throw ArgumentException and the publish continues.
 `UpdateTracks(tracks)`: mid-stream configuration change/late track (FlvWriter's rules).
 `CompleteAsync(ct)`: `FCUnpublish` + `deleteStream`, TLS close_notify + half-close, waits up to
-`CloseTimeout` for the server to close. Answers pings, Set Peer Bandwidth (with Window Ack Size) and
+`CloseTimeout` for the server to close (the close_notify write included); a refusal or protocol
+error the server sends before closing is thrown from `CompleteAsync`. Answers pings, Set Peer Bandwidth (with Window Ack Size) and
 acknowledgement windows. `RtmpPublishClientOptions`: `ConnectTimeout` 10 s (TCP+TLS+handshake),
 `PublishTimeout` 10 s (to publish accepted), `WriteTimeout` 30 s (per write), `CloseTimeout` 2 s,
 `OutboundChunkSize`, `ChunkReader`, `TimeProvider`, `RemoteCertificateValidation`, `Metadata`.

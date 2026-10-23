@@ -207,7 +207,8 @@ Bandwidth and acknowledgement windows and fails the client on an `onStatus` at l
 a protocol error; it shares one `SemaphoreSlim` with writes. `UpdateTracks` forwards a mid-stream
 configuration change. `CompleteAsync`: `FCUnpublish` + `deleteStream`, TLS close_notify,
 `Shutdown(Send)`, waits up to `CloseTimeout` for the server to close (avoids an RST dropping the
-tail). Failures close the socket and are typed `RtmpClientException` (`RtmpClientFailureReason`,
+tail; the close_notify write is inside that bound, since `SslStream.ShutdownAsync` takes no token),
+and throws a refusal or protocol error the server sends before it closes. Failures close the socket and are typed `RtmpClientException` (`RtmpClientFailureReason`,
 `StatusCode`), rethrown by every later call; no message carries the key or the server's description.
 No reconnect and no pacing (items 7/8). Tests: `RtmpPublishClientTest` (loopback to `RtmpServer`:
 plain, RTMPS, IPv6, HEVC, MP3, config change; `RtmpScriptedServer`, a test-only one-connection

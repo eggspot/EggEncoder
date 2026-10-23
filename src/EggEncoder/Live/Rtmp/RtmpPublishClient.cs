@@ -42,6 +42,7 @@ namespace EggEncoder.Live.Rtmp
         private const int PublishChunkStreamId = 8;
         private const int ReadBufferLength = 64 * 1024;
         private const string TlsHandshakePhase = "the TLS handshake";
+        private const double PublishTransactionId = 0;
 
         private enum State
         {
@@ -220,7 +221,7 @@ namespace EggEncoder.Live.Rtmp
         /// <see cref="RtmpPublishClientOptions.CloseTimeout"/> for the server to close the connection,
         /// and closes it.
         /// </summary>
-        /// <exception cref="RtmpClientException">The connection failed before or while the unpublish was sent.</exception>
+        /// <exception cref="RtmpClientException">The connection failed before or while the unpublish was sent, or the server refused the unpublish or broke the protocol before closing; the connection is closed either way.</exception>
         public async ValueTask CompleteAsync(CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -244,7 +245,7 @@ namespace EggEncoder.Live.Rtmp
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, closeTimeout.Token);
             try
             {
-                await ShutdownSendAsync().ConfigureAwait(false);
+                await ObserveFaultWhenAbandoned(ShutdownSendAsync()).WaitAsync(linked.Token).ConfigureAwait(false);
                 await _receiveLoop.WaitAsync(linked.Token).ConfigureAwait(false);
             }
             catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
@@ -256,8 +257,9 @@ namespace EggEncoder.Live.Rtmp
                 }
             }
 
-            _state = State.Completed;
             await CloseTransportAsync().ConfigureAwait(false);
+            ThrowIfFailed();
+            _state = State.Completed;
         }
 
         /// <summary>Closes the connection, without an unpublish if <see cref="CompleteAsync"/> wasn't called. Calling it again does nothing.</summary>
@@ -395,6 +397,11 @@ namespace EggEncoder.Live.Rtmp
 
         private bool IsPublishStart(RtmpCommand command)
         {
+            if (command.Name == "_error" && command.TransactionId == PublishTransactionId)
+            {
+                throw Rejected(command);
+            }
+
             if (command.Name != "onStatus")
             {
                 return false;
@@ -491,37 +498,21 @@ namespace EggEncoder.Live.Rtmp
 
         private async Task ReceiveLoopAsync()
         {
+            var stream = _stream!;
             try
             {
+                var read = 0;
                 while (true)
                 {
-                    var read = await _stream!.ReadAsync(_readBuffer, _closing.Token).ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        if (_state is State.Completing or State.Completed)
-                        {
-                            return;
-                        }
-
-                        throw new EndOfStreamException("The server closed the connection");
-                    }
-
                     await _writeLock.WaitAsync(_closing.Token).ConfigureAwait(false);
                     try
                     {
-                        Feed(read);
-                        while (_incoming.TryDequeue(out var message))
+                        if (read > 0)
                         {
-                            if (!HandleControl(message) && message.Type == RtmpMessageType.CommandAmf0)
-                            {
-                                var command = RtmpCommand.Decode(message.Payload.Span);
-                                if (command.Name == "onStatus" && IsErrorStatus(command))
-                                {
-                                    throw Rejected(command);
-                                }
-                            }
+                            Feed(read);
                         }
 
+                        HandleIncomingWhilePublishing();
                         if (_state == State.Publishing)
                         {
                             await SendBufferedAsync(_closing.Token).ConfigureAwait(false);
@@ -531,19 +522,48 @@ namespace EggEncoder.Live.Rtmp
                     {
                         _writeLock.Release();
                     }
+
+                    read = await stream.ReadAsync(_readBuffer, _closing.Token).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        if (_state is State.Completing or State.Completed)
+                        {
+                            return;
+                        }
+
+                        throw new EndOfStreamException("The server closed the connection");
+                    }
                 }
             }
-            catch (Exception e) when (_closing.IsCancellationRequested && e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
+            catch (Exception) when (_closing.IsCancellationRequested)
             {
             }
             catch (Exception e)
             {
-                if (_state is State.Completing or State.Completed && e is IOException or SocketException)
+                if (_state is State.Completing or State.Completed && IsConnectionClosed(e))
                 {
                     return;
                 }
 
                 await FailAsync(Classify(e, timedOut: false, connecting: false) ?? e).ConfigureAwait(false);
+            }
+        }
+
+        private static bool IsConnectionClosed(Exception e) =>
+            e is IOException or SocketException && e is not (RtmpProtocolException or RtmpClientException);
+
+        private void HandleIncomingWhilePublishing()
+        {
+            while (_incoming.TryDequeue(out var message))
+            {
+                if (!HandleControl(message) && message.Type == RtmpMessageType.CommandAmf0)
+                {
+                    var command = RtmpCommand.Decode(message.Payload.Span);
+                    if (command.Name == "onStatus" && IsErrorStatus(command))
+                    {
+                        throw Rejected(command);
+                    }
+                }
             }
         }
 
@@ -576,12 +596,18 @@ namespace EggEncoder.Live.Rtmp
                 return;
             }
 
-            await _stream!.WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
+            var stream = _stream ?? throw new ObjectDisposedException(nameof(RtmpPublishClient));
+            await stream.WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
             _output.ResetWrittenCount();
         }
 
         private async ValueTask SendBufferedAsync(CancellationToken cancellationToken)
         {
+            if (_output.WrittenCount == 0)
+            {
+                return;
+            }
+
             using var timeout = new CancellationTokenSource(_options.WriteTimeout, _options.TimeProvider);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token, _closing.Token);
             try
@@ -630,7 +656,7 @@ namespace EggEncoder.Live.Rtmp
             await CloseTransportAsync().ConfigureAwait(false);
         }
 
-        private async ValueTask ShutdownSendAsync()
+        private async Task ShutdownSendAsync()
         {
             if (_stream is SslStream ssl)
             {
@@ -638,6 +664,12 @@ namespace EggEncoder.Live.Rtmp
             }
 
             _socket!.Shutdown(SocketShutdown.Send);
+        }
+
+        private static Task ObserveFaultWhenAbandoned(Task task)
+        {
+            _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return task;
         }
 
         private async ValueTask CloseTransportAsync()

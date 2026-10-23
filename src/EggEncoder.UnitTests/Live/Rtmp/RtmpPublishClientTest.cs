@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 using EggEncoder.Containers.Flv;
@@ -546,6 +547,52 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         }
 
         [Fact]
+        public async Task Open_WhenPublishGetsErrorReply_Should_Throw_Rejected_With_The_Code()
+        {
+            await using var scripted = new RtmpScriptedServer();
+            await using var client = new RtmpPublishClient(scripted.Url(), StreamKey, Patient);
+            var open = client.OpenAsync(H264AacTracks()).AsTask();
+            await scripted.AcceptAsync();
+            var connect = await scripted.ExpectCommandAsync("connect");
+            await scripted.SendAsync(RtmpCommand.ConnectResult(connect.TransactionId).ToMessage());
+            var createStream = await scripted.ExpectCommandAsync("createStream");
+            await scripted.SendAsync(RtmpCommand.CreateStreamResult(createStream.TransactionId, 1).ToMessage());
+            var publish = await scripted.ExpectCommandAsync("publish");
+            await scripted.SendErrorAsync(publish.TransactionId, RtmpStatusCodes.PublishBadName);
+
+            var failure = await ExpectFailureAsync(() => open.WaitAsync(TestTimeout));
+
+            failure.Reason.Should().Be(RtmpClientFailureReason.Rejected);
+            failure.StatusCode.Should().Be(RtmpStatusCodes.PublishBadName);
+            failure.Message.Should().Contain("publish");
+        }
+
+        [Fact]
+        public async Task Open_WhenErrorStatusArrivesInTheSameReadAsPublishStart_Should_Fail_Without_Waiting_For_More_Data()
+        {
+            await using var scripted = new RtmpScriptedServer();
+            await using var client = new RtmpPublishClient(scripted.Url(), StreamKey, Patient);
+            var open = client.OpenAsync(H264AacTracks()).AsTask();
+            await scripted.AcceptAsync();
+            var connect = await scripted.ExpectCommandAsync("connect");
+            await scripted.SendAsync(RtmpCommand.ConnectResult(connect.TransactionId).ToMessage());
+            var createStream = await scripted.ExpectCommandAsync("createStream");
+            await scripted.SendAsync(RtmpCommand.CreateStreamResult(createStream.TransactionId, 1).ToMessage());
+            await scripted.ExpectCommandAsync("publish");
+            var statuses = new ArrayBufferWriter<byte>();
+            var writer = new RtmpChunkWriter();
+            writer.Write(statuses, 9, RtmpCommand.OnStatus(RtmpStatusCodes.LevelStatus, RtmpStatusCodes.PublishStart, "scripted").ToMessage(1));
+            writer.Write(statuses, 9, RtmpCommand.OnStatus(RtmpStatusCodes.LevelError, "NetStream.Publish.Failed", "scripted").ToMessage(1));
+            await scripted.SendRawAsync(statuses.WrittenSpan.ToArray());
+            await open.WaitAsync(TestTimeout);
+
+            var failure = await ExpectFailureAsync(() => WriteUntilFailureAsync(client, Fixture().Packets[0]));
+
+            failure.Reason.Should().Be(RtmpClientFailureReason.Rejected);
+            failure.StatusCode.Should().Be("NetStream.Publish.Failed");
+        }
+
+        [Fact]
         public async Task Open_WhenServerSendsLongStatusCode_Should_Truncate_It()
         {
             await using var scripted = new RtmpScriptedServer();
@@ -769,6 +816,22 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
             await client.CompleteAsync();
             RtmpServerTest.AssertSamePackets(await consumer.PacketsAsync(), fixture.Packets);
+        }
+
+        [Fact]
+        public async Task Complete_WhenServerBreaksTheProtocolAfterTheUnpublish_Should_Throw_ProtocolError_And_Close()
+        {
+            await using var scripted = new RtmpScriptedServer();
+            await using var client = await OpenScriptedAsync(scripted);
+
+            var complete = client.CompleteAsync().AsTask();
+            await scripted.ExpectCommandAsync("deleteStream");
+            await scripted.SendRawAsync([0x4A, 0, 0, 0, 0, 0, 4, 20, 1, 2, 3, 4]);
+            var failure = await ExpectFailureAsync(() => complete.WaitAsync(TestTimeout));
+
+            failure.Reason.Should().Be(RtmpClientFailureReason.ProtocolError);
+            (await scripted.WaitForCloseAsync()).Should().BeTrue();
+            (await client.Invoking(c => c.CompleteAsync().AsTask()).Should().ThrowAsync<RtmpClientException>()).Which.Should().BeSameAs(failure);
         }
 
         [Fact]
