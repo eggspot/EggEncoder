@@ -286,6 +286,31 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         }
 
         [Fact]
+        public void LiveMode_Should_KeepAnOldInit_WhileASegmentInTheWindowStillNeedsIt()
+        {
+            var sink = new LoggingSink();
+            var segmenter = new HlsSegmenter(Tracks(), 1, sink, liveWindowSize: 2);
+            segmenter.AddPacket(Video(0, key: true));
+            segmenter.AddPacket(Video(1000, key: true));
+            segmenter.AddPacket(Video(2000, key: true));
+
+            segmenter.UpdateTracks(UpdatedTracks());
+            segmenter.AddPacket(Video(3000, key: true, version: 1));
+            segmenter.AddPacket(Video(4000, key: true, version: 1));
+
+            sink.Log.Should().NotContain("delete-init:init.mp4");
+            PlaylistText(sink.Inner).Should().Be(
+                "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:3\n" +
+                "#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:1.000000,\nsegment_3.m4s\n" +
+                "#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"init_2.mp4\"\n#EXTINF:1.000000,\nsegment_4.m4s\n");
+
+            segmenter.AddPacket(Video(5000, key: true, version: 1));
+
+            sink.Log.Should().EndWith(["delete:segment_3.m4s", "delete-init:init.mp4", "playlist"]);
+            sink.Inner.InitSegments.Keys.Should().Equal("init_2.mp4");
+        }
+
+        [Fact]
         public void AddPacket_SinkFailingOnTheNewInit_Should_Throw_DiscardTheSegment_And_RetryTheInitAtTheNextCut()
         {
             var sink = new LoggingSink { FailingInitSegmentName = "init_2.mp4" };

@@ -11,15 +11,15 @@ namespace EggEncoder.Streaming.Hls
         private const int DefaultVideoFrameRate = 30;
         private const int DefaultAacFrameSamples = 1024;
 
-        private const string VersionedInitSegmentUriFormat = "init_{0}.mp4";
+        private const string VersionedInitSegmentFileNameFormat = "init_{0}.mp4";
 
         private readonly long _targetDurationTicks;
         private MediaTrackSet? _tracks;
         private MediaTrackInfo? _cutTrack;
         private long _defaultCutTrackFrameDuration;
         private MediaTrackSet? _pendingTracks;
-        private byte[]? _pendingInitSegment;
-        private byte[]? _unwrittenInitSegment;
+        private byte[]? _pendingTracksInitSegment;
+        private byte[]? _initSegmentToWrite;
         private readonly List<MediaPacket> _pendingPackets = [];
         private readonly Dictionary<int, long> _lastDtsByTrack = [];
 
@@ -226,7 +226,7 @@ namespace EggEncoder.Streaming.Hls
             }
 
             _pendingTracks = tracks;
-            _pendingInitSegment = initSegment;
+            _pendingTracksInitSegment = initSegment;
         }
 
         private static bool HasNewConfigVersion(MediaTrackSet current, MediaTrackSet updated)
@@ -244,14 +244,14 @@ namespace EggEncoder.Streaming.Hls
 
         private Exception? ApplyPendingTrackUpdate()
         {
-            var failure = _pendingPackets.Count > 0 ? CutPacketSegmentAtLastFrame(writePlaylist: true) : null;
+            var failure = _pendingPackets.Count > 0 ? CutPacketSegmentAfterLastFrame(writePlaylist: true) : null;
             _segmentStartPts = null;
 
             var tracks = _pendingTracks!;
             if (_segmentFormat == SegmentFormat.Fmp4)
             {
                 _fmp4Writer!.UpdateTracks(tracks);
-                _unwrittenInitSegment = _pendingInitSegment;
+                _initSegmentToWrite = _pendingTracksInitSegment;
             }
             else
             {
@@ -263,7 +263,7 @@ namespace EggEncoder.Streaming.Hls
             _defaultCutTrackFrameDuration = DefaultFrameDuration(_cutTrack);
             _nextSegmentIsDiscontinuity = _nextSequenceNumber > 1;
             _pendingTracks = null;
-            _pendingInitSegment = null;
+            _pendingTracksInitSegment = null;
             return failure;
         }
 
@@ -307,14 +307,14 @@ namespace EggEncoder.Streaming.Hls
                 return;
             }
 
-            var failure = CutPacketSegmentAtLastFrame(writePlaylist: false);
+            var failure = CutPacketSegmentAfterLastFrame(writePlaylist: false);
             if (failure is not null)
             {
                 ExceptionDispatchInfo.Throw(failure);
             }
         }
 
-        private Exception? CutPacketSegmentAtLastFrame(bool writePlaylist)
+        private Exception? CutPacketSegmentAfterLastFrame(bool writePlaylist)
         {
             var lastFrameDuration = _lastCutTrackFrameDuration ?? _defaultCutTrackFrameDuration;
             var lastCutTrackDts = _lastDtsByTrack[_cutTrack!.TrackId];
@@ -326,10 +326,10 @@ namespace EggEncoder.Streaming.Hls
             var durationSeconds = (endPts - _segmentStartPts!.Value) / (double)_cutTrack!.Timescale;
             try
             {
-                if (_unwrittenInitSegment is { } initSegment)
+                if (_initSegmentToWrite is { } initSegment)
                 {
-                    WriteInitSegment(string.Format(CultureInfo.InvariantCulture, VersionedInitSegmentUriFormat, _initSegmentCount + 1), initSegment);
-                    _unwrittenInitSegment = null;
+                    WriteInitSegment(string.Format(CultureInfo.InvariantCulture, VersionedInitSegmentFileNameFormat, _initSegmentCount + 1), initSegment);
+                    _initSegmentToWrite = null;
                 }
 
                 var segmentBytes = _segmentFormat == SegmentFormat.Fmp4
