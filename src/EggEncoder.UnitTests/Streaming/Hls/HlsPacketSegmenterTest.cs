@@ -603,9 +603,9 @@ namespace EggEncoder.UnitTests.Streaming.Hls
 
         internal static string WriteToDirectory(InMemoryStreamingSink sink, string directory, SegmentFormat format)
         {
-            if (sink.InitSegment is not null)
+            foreach (var (fileName, bytes) in sink.InitSegments)
             {
-                File.WriteAllBytes(Path.Combine(directory, HlsSegmenter.InitSegmentUri), sink.InitSegment);
+                File.WriteAllBytes(Path.Combine(directory, fileName), bytes);
             }
 
             var extension = format == SegmentFormat.Fmp4 ? "m4s" : "ts";

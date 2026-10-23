@@ -875,13 +875,14 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 if (gop.Count &gt; 0) File.WriteAllBytes($"segment{index}.ts", muxer!.BuildSegment(gop));</code></pre>
 
       <h2 id="hls-packet-mode">HLS from Packets</h2>
-      <p>Namespace: <code>EggEncoder.Streaming.Hls</code>. Packages a <a href="#media-packet-model">packet</a> stream (an RTMP ingest, an FLV file) as HLS with video, without decoding: <code>HlsSegmenter</code> cuts segments at video keyframes and writes them through the <a href="#fmp4-packet-mode">fMP4</a> or <a href="#mpegts-packet-mode">MPEG-TS</a> packet writers, and <code>HlsMediaPacketSink</code> wraps it as an <code>IMediaPacketSink</code>. This is item 5c of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>. The original audio-frame constructors and <code>AddFrame</code> are unchanged.</p>
+      <p>Namespace: <code>EggEncoder.Streaming.Hls</code>. Packages a <a href="#media-packet-model">packet</a> stream (an RTMP ingest, an FLV file) as HLS with video, without decoding: <code>HlsSegmenter</code> cuts segments at video keyframes and writes them through the <a href="#fmp4-packet-mode">fMP4</a> or <a href="#mpegts-packet-mode">MPEG-TS</a> packet writers, and <code>HlsMediaPacketSink</code> wraps it as an <code>IMediaPacketSink</code>. These are items 5c and 5d of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>. The original audio-frame constructors and <code>AddFrame</code> are unchanged.</p>
       <pre><code class="language-csharp">public sealed partial class HlsSegmenter
 {
     public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4);                     // VOD
     public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4); // live
     public long DroppedLeadingPacketCount { get; }
     public void AddPacket(MediaPacket packet);
+    public void UpdateTracks(MediaTrackSet tracks); // a mid-stream configuration change
     public void Complete();
 }
 
@@ -889,6 +890,25 @@ public sealed class HlsMediaPacketSink : IMediaPacketSink
 {
     public HlsMediaPacketSink(IStreamingSink sink, int targetDurationSeconds, SegmentFormat segmentFormat = SegmentFormat.Fmp4, int? liveWindowSize = null);
     public HlsSegmenter? Segmenter { get; } // built by OpenAsync
+    public void UpdateTracks(MediaTrackSet tracks); // forwards to the segmenter
+}
+
+public readonly record struct HlsSegmentDescriptor(long SequenceNumber, double DurationSeconds, string Uri)
+{
+    public bool Discontinuity { get; init; }     // EXT-X-DISCONTINUITY before this segment
+    public string? InitSegmentUri { get; init; } // its EXT-X-MAP
+}
+
+public static class M3u8PlaylistWriter
+{
+    public static string BuildMediaPlaylist(int targetDurationSeconds, long mediaSequence, long discontinuitySequence,
+        IReadOnlyList&lt;HlsSegmentDescriptor&gt; segments, string? initSegmentUri, bool endList);
+}
+
+public interface IStreamingSink
+{
+    // ... the members described under HLS ...
+    void DeleteInitSegment(string uri) { } // live window: an init segment no listed segment needs
 }
 
 public static class M3u8MasterPlaylistWriter
@@ -897,19 +917,27 @@ public static class M3u8MasterPlaylistWriter
 }</code></pre>
       <p><strong>Cutting.</strong> Cut points are the keyframes of the first video track, or every packet of the first track when there is no video (an audio-only rendition). A cut point whose PTS is at least <code>targetDurationSeconds</code> past the pending segment's first cut point ends that segment and starts the next one, so every segment starts with a keyframe and lasts at least the target and at most one GOP more. Packets go into segments in the order they are added, as ffmpeg's HLS muxer does. Packets before the first cut point can't be decoded (with video, that is everything before its first keyframe, audio included) and are dropped and counted in <code>DroppedLeadingPacketCount</code>. The fMP4 writer gets the next keyframe's DTS as the video track's next decode time, so the last frame of each segment has its exact duration.</p>
       <p><strong>Playlist.</strong> Each <code>EXTINF</code> is the PTS difference between the segment's cut point and the next one, measured on the cut track. The final segment, written by <code>Complete</code>, runs to the latest PTS in it plus one frame (the cut track's last DTS step, or 1/30 s or 1024 AAC samples when there is none). <code>EXT-X-TARGETDURATION</code> is the ceiling of the longest segment so far, never below the target. fMP4 writes the init segment when the segmenter is built and references it with <code>EXT-X-MAP</code>; MPEG-TS needs neither. VOD and live sliding window work as for the audio segmenter.</p>
-      <p><strong>Validation.</strong> The constructors reject what the chosen container rejects (an empty set, MP3/Opus/AV1/VP9, AAC that ADTS can't describe for MPEG-TS). <code>AddPacket</code> throws <code>ArgumentException</code>, adding nothing, for a packet of a track not in the set, a <code>ConfigVersion</code> other than its track's (mid-stream configuration changes are item 5d), a negative DTS, a PTS before its DTS, or a DTS not greater than its track's previous one. When the container still rejects a pending packet at a cut (a malformed payload, a timestamp it can't hold), that segment is discarded, the exception is thrown from the <code>AddPacket</code> (or <code>Complete</code>) call that cut it, and the next segment starts at that cut point; the timeline then has a gap the playlist doesn't mark. An exception from the <code>IStreamingSink</code> during a cut (an <code>IOException</code> from a failed upload, say) gets the same recovery: the next segment still starts at that cut point, and a segment the sink failed to write is dropped without using up a sequence number. <code>Complete</code> ends the playlist before rethrowing. Only the first video track decides cut points. In live mode keep the target at least as long as the GOP, since a longer segment raises <code>EXT-X-TARGETDURATION</code>, which a live playlist must not change (RFC 8216 §6.2.1). <code>AddFrame</code> on a packet segmenter, and <code>AddPacket</code> on a frame segmenter, throw <code>InvalidOperationException</code>.</p>
-      <p><strong>HlsMediaPacketSink.</strong> <code>OpenAsync</code> builds the segmenter for the tracks it receives (writing the fMP4 init segment), <code>WriteAsync</code> adds a packet and <code>CompleteAsync</code> completes it, synchronously, each returning a completed <code>ValueTask</code>; the <code>IStreamingSink</code> does the I/O. A canceled token throws before anything happens; writing before <code>OpenAsync</code>, or opening twice, throws <code>InvalidOperationException</code>; disposing doesn't complete the playlist.</p>
+      <p><strong>Validation.</strong> The constructors reject what the chosen container rejects (an empty set, MP3/Opus/AV1/VP9, AAC that ADTS can't describe for MPEG-TS). <code>AddPacket</code> throws <code>ArgumentException</code>, adding nothing, for a packet of a track not in the set, a <code>ConfigVersion</code> other than its track's (see configuration changes below), a negative DTS, a PTS before its DTS, or a DTS not greater than its track's previous one. When the container still rejects a pending packet at a cut (a malformed payload, a timestamp it can't hold), that segment is discarded, the exception is thrown from the <code>AddPacket</code> (or <code>Complete</code>) call that cut it, and the next segment starts at that cut point; the timeline then has a gap the playlist doesn't mark. An exception from the <code>IStreamingSink</code> during a cut (an <code>IOException</code> from a failed upload, say) gets the same recovery: the next segment still starts at that cut point, and a segment the sink failed to write is dropped without using up a sequence number. <code>Complete</code> ends the playlist before rethrowing. Only the first video track decides cut points. In live mode keep the target at least as long as the GOP, since a longer segment raises <code>EXT-X-TARGETDURATION</code>, which a live playlist must not change (RFC 8216 §6.2.1). <code>AddFrame</code> on a packet segmenter, and <code>AddPacket</code> on a frame segmenter, throw <code>InvalidOperationException</code>.</p>
+      <p><strong>Configuration changes.</strong> <code>UpdateTracks</code> switches the stream to a new configuration of the same tracks, item 5d of the plan: a new SPS when the encoder changes resolution or level, a new AudioSpecificConfig. The new set must hold the same track ids in the same order, each with its kind, codec and timescale unchanged; anything else throws <code>ArgumentException</code> and needs a new rendition. A track whose codec configuration bytes changed needs a new <code>ConfigVersion</code> (the same version with new bytes throws), and a set whose versions all match the current ones changes nothing. The set is checked against the container straight away (an fMP4 init segment is built from it, or an MPEG-TS muxer for it), so a rejected update throws from <code>UpdateTracks</code> and is ignored. Nothing is written yet: the next <code>AddPacket</code>, checked against the new set, ends the pending segment with the old configuration (its duration measured as <code>Complete</code> measures the final one), then the segmenter waits for the next cut point as at the start of the stream, dropping and counting the packets before it. The segment that starts there is preceded by <code>EXT-X-DISCONTINUITY</code> (unless it is the stream's first segment) and, for fMP4, by a new init segment, <code>init_2.mp4</code>, <code>init_3.mp4</code> and so on, written just before it and listed with <code>EXT-X-MAP</code>; if the sink fails to write it, that segment is discarded and the next cut retries the same name. Each track's DTS must keep increasing across the change, with no rebasing. In live mode, an init segment no segment left in the window needs is deleted through <code>IStreamingSink.DeleteInitSegment</code> (a no-op by default; <code>FileSystemStreamingSink</code> deletes the file, <code>InMemoryStreamingSink</code> keeps every named init in <code>InitSegments</code>, and <code>DelegateStreamingSink</code>'s five-delegate constructor passes init file names and deletions through), and <code>EXT-X-DISCONTINUITY-SEQUENCE</code> counts the discontinuities that left the window. An update not yet applied when <code>Complete</code> is called is dropped, and the master playlist's <code>CODECS</code> isn't rewritten. <code>FmpMediaSegmentWriter.UpdateTracks</code> and <code>MpegTsMuxer.UpdateTracks</code> do the same swap for the writers used on their own: the sequence number, decode times, PIDs, the PMT, continuity counters and the PCR carry on.</p>
+      <p><strong>HlsMediaPacketSink.</strong> <code>OpenAsync</code> builds the segmenter for the tracks it receives (writing the fMP4 init segment), <code>WriteAsync</code> adds a packet and <code>CompleteAsync</code> completes it, synchronously, each returning a completed <code>ValueTask</code>; the <code>IStreamingSink</code> does the I/O. A canceled token throws before anything happens; writing before <code>OpenAsync</code>, or opening twice, throws <code>InvalidOperationException</code>; disposing doesn't complete the playlist. <code>UpdateTracks</code> forwards to the segmenter (call it when the source reports new tracks, before writing their packets); <code>IMediaPacketSink</code> itself has no track-update member yet.</p>
       <p><strong>CODECS.</strong> <code>BuildCodecsString</code> gives a rendition's <code>CODECS</code> value for <code>HlsRenditionDescriptor</code>: video first, then audio, each distinct string once. H.264 is <code>avc1.PPCCLL</code> from the avcC record's first SPS, H.265 <code>hvc1.…</code> from the hvcC record's SPS, and AAC <code>mp4a.40.N</code> with N the AudioSpecificConfig's audio object type (2 for AAC-LC, 5 or 29 for HE-AAC signalled explicitly). Other codecs throw <code>NotSupportedException</code>; an unreadable configuration throws <code>ArgumentException</code>.</p>
       <pre><code class="language-csharp">// An FLV file (or an RTMP ingest) to an fMP4 HLS playlist with video, in 4-second segments.
 var sink = new FileSystemStreamingSink("out");
 await using var hls = new HlsMediaPacketSink(sink, targetDurationSeconds: 4);
 await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+MediaTrackSet? tracks = null;
 await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 {
-    if (hls.Segmenter is null)
+    if (tracks is null)
     {
         await hls.OpenAsync(source.Tracks!, cancellationToken);
     }
+    else if (!ReferenceEquals(tracks, source.Tracks))
+    {
+        hls.UpdateTracks(source.Tracks!); // a new sequence header mid-stream
+    }
+
+    tracks = source.Tracks;
 
     await hls.WriteAsync(packet, cancellationToken);
 }

@@ -516,7 +516,7 @@ added (with `WriteMediaSegment(n, fileName, bytes)` and `DeleteMediaSegment(n, u
 `FileSystemStreamingSink` naming fix in PR #150; before it, the unnamed `WriteInitSegment(bytes)`
 would have overwritten `init.mp4` under segments that still reference the old one. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
 
-**Status**: in progress. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):
+**Status**: done. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):
 `BuildInitSegment(MediaTrackSet)` and `FmpMediaSegmentWriter(MediaTrackSet)` +
 `BuildMediaSegment(packets, nextDecodeTimes)` write H.264/H.265/AAC (mono or stereo) tracks;
 self-parsed by `MovAtomReader` and a test-only multi-`traf` reader (per-sample flags and signed
@@ -566,7 +566,28 @@ Implementation choices: the common timestamp checks run before a packet is added
 rejection or a sink exception at a cut discards that segment and rethrows, the next segment still
 starting at the cut point (a failed sink write uses no sequence number; the independent review in
 PR #149 found the sink case leaving the segmenter on a stale start), and `Complete` ends the
-playlist before rethrowing. Not done here: `EXT-X-INDEPENDENT-SEGMENTS`. 5d not started.
+playlist before rethrowing. Not done here: `EXT-X-INDEPENDENT-SEGMENTS`. 5d done
+([PR #151](https://github.com/eggspot/EggEncoder/pull/151)): `UpdateTracks(MediaTrackSet)` on
+`HlsSegmenter`, `HlsMediaPacketSink`, `FmpMediaSegmentWriter` and `MpegTsMuxer`; the segment after a
+change gets `EXT-X-DISCONTINUITY` and, for fMP4, a new `init_N.mp4` with `EXT-X-MAP`;
+`EXT-X-DISCONTINUITY-SEQUENCE` counts discontinuities that left a live window, and
+`IStreamingSink.DeleteInitSegment` (a no-op default) removes init segments no listed segment needs;
+`InMemoryStreamingSink.InitSegments` and a five-delegate `DelegateStreamingSink` constructor (init
+file names passed through) support it. The `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` +
+`ffmpeg -f null` run on fMP4 and TS playlists with a change in the middle of `h264_aac_5s.flv`
+passes locally (ffmpeg 9.0.2). Decided by research (PR #151): only configuration may change (same
+track ids, order, kind, codec and timescale; anything else throws and needs a new rendition, since a
+late track would shift MP4 track ids and TS PIDs, and a codec change the PMT and `CODECS`); a change
+is detected by `ConfigVersion`, and new bytes under an unchanged version throw; DTS must keep
+increasing (no rebasing, item 8); the update is lazy: `UpdateTracks` validates and records it, the
+next packet ends the pending segment and the stream resumes at the next cut point, as at the start
+(ffmpeg's hlsenc writes no discontinuity for new extradata, so it is no precedent here); the new
+init is written right before the first segment that needs it, so back-to-back updates write one;
+`EXT-X-DISCONTINUITY` before `EXT-X-MAP`; `DeleteInitSegment` with a no-op default, and
+`DelegateStreamingSink`'s new constructor takes a named init delegate since the original can't tell
+`init.mp4` from `init_2.mp4`. Not done here: `IMediaPacketSink` has no track-update member (the
+restream hub, item 7, decides that), and the master playlist's `CODECS` isn't rewritten after a
+change (an H.264 level change leaves it stale).
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 

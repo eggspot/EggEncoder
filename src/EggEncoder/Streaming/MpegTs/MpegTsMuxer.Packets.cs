@@ -52,8 +52,9 @@ namespace EggEncoder.Streaming.MpegTs
 
         private readonly PacketTrack[]? _packetTracks;
         private readonly Dictionary<int, PacketTrack>? _packetTracksById;
-        private readonly PacketTrack? _pcrTrack;
+        private PacketTrack? _pcrTrack;
         private readonly byte[]? _packetModePmt;
+        private MediaTrackSet? _tracks;
         private int _patContinuityCounter;
         private int _pmtContinuityCounter;
         private long? _lastPcr;
@@ -79,11 +80,53 @@ namespace EggEncoder.Streaming.MpegTs
                 throw new ArgumentException("A packet-mode muxer needs at least one track.", nameof(tracks));
             }
 
-            _packetTracks = new PacketTrack[tracks.Tracks.Count];
-            _packetTracksById = [];
+            _packetTracks = CreatePacketTracks(tracks);
+            _packetTracksById = _packetTracks.ToDictionary(t => t.Info.TrackId);
+            _pcrTrack = Array.Find(_packetTracks, t => t.IsVideo) ?? _packetTracks[0];
+            _packetModePmt = BuildPmtPayload(_pcrTrack.Pid, _packetTracks.Select(t => (t.StreamType, t.Pid)).ToArray());
+            _tracks = tracks;
+        }
+
+        /// <summary>
+        /// Switches to a new configuration of the same tracks (a new SPS, a new AudioSpecificConfig)
+        /// for every segment built after this call: keyframes then carry the new parameter sets and
+        /// AAC frames the new ADTS header. PIDs, stream types and the PMT stay the same, and
+        /// continuity counters, the PCR and each track's previous DTS carry on, so DTS must keep
+        /// increasing across the change. Packets must then carry the new
+        /// <see cref="MediaTrackInfo.ConfigVersion"/>s. A call that throws leaves the muxer unchanged.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="tracks"/> doesn't hold the same track ids in the same order, each with its kind, codec and timescale unchanged; or a track's codec configuration bytes changed without a new <see cref="MediaTrackInfo.ConfigVersion"/>; or a track's codec configuration is missing or invalid.</exception>
+        /// <exception cref="NotSupportedException">An AAC track's new configuration can't be carried as ADTS, as <see cref="MpegTsMuxer(MediaTrackSet)"/> describes.</exception>
+        /// <exception cref="InvalidOperationException">This muxer was built for frames (the <c>(channels, sampleRate)</c> constructor).</exception>
+        public void UpdateTracks(MediaTrackSet tracks)
+        {
+            if (_packetTracks is null || _packetTracksById is null || _pcrTrack is null || _tracks is null)
+            {
+                throw new InvalidOperationException("This muxer was built for Mp4EncodedFrames; construct it with a MediaTrackSet to update its tracks.");
+            }
+
+            _tracks.RequireSameTrackLayout(tracks, TracksParameter);
+            var updated = CreatePacketTracks(tracks);
+            var pcrTrackIndex = Array.IndexOf(_packetTracks, _pcrTrack);
+            for (var i = 0; i < updated.Length; i++)
+            {
+                updated[i].LastDts = _packetTracks[i].LastDts;
+                updated[i].LastDts90k = _packetTracks[i].LastDts90k;
+                updated[i].ContinuityCounter = _packetTracks[i].ContinuityCounter;
+                _packetTracks[i] = updated[i];
+                _packetTracksById[updated[i].Info.TrackId] = updated[i];
+            }
+
+            _pcrTrack = _packetTracks[pcrTrackIndex];
+            _tracks = tracks;
+        }
+
+        private static PacketTrack[] CreatePacketTracks(MediaTrackSet tracks)
+        {
+            var packetTracks = new PacketTrack[tracks.Tracks.Count];
             var videoCount = 0;
             var audioCount = 0;
-            for (var i = 0; i < _packetTracks.Length; i++)
+            for (var i = 0; i < packetTracks.Length; i++)
             {
                 var info = tracks.Tracks[i];
                 var pid = FirstElementaryPid + i;
@@ -96,15 +139,13 @@ namespace EggEncoder.Streaming.MpegTs
 
                 if (videoCount > MaxVideoTracks || audioCount > MaxAudioTracks)
                 {
-                    throw new ArgumentException($"MPEG-TS stream ids allow at most {MaxVideoTracks} video and {MaxAudioTracks} audio tracks.", nameof(tracks));
+                    throw new ArgumentException($"MPEG-TS stream ids allow at most {MaxVideoTracks} video and {MaxAudioTracks} audio tracks.", TracksParameter);
                 }
 
-                _packetTracks[i] = track;
-                _packetTracksById.Add(info.TrackId, track);
+                packetTracks[i] = track;
             }
 
-            _pcrTrack = Array.Find(_packetTracks, t => t.IsVideo) ?? _packetTracks[0];
-            _packetModePmt = BuildPmtPayload(_pcrTrack.Pid, _packetTracks.Select(t => (t.StreamType, t.Pid)).ToArray());
+            return packetTracks;
         }
 
         /// <summary>

@@ -243,15 +243,19 @@ File.WriteAllBytes("segment0.ts", muxer.BuildSegment(gopPackets));
 
 ### HLS with video
 
-`new HlsSegmenter(MediaTrackSet tracks, targetDurationSeconds, sink[, liveWindowSize][, SegmentFormat])` + `AddPacket(packet)` + `Complete()` packages a packet stream (an RTMP ingest, an FLV file) as HLS with H.264/H.265 video and AAC audio, without decoding, in fMP4 or MPEG-TS segments, VOD or live sliding window. Segments are cut at video keyframes once the target duration is reached (on every packet for audio-only streams), so each one starts decodable and runs at most one GOP past the target; `EXTINF` comes from the keyframes' PTS. Packets before the first keyframe are dropped and counted (`DroppedLeadingPacketCount`). `HlsMediaPacketSink` wraps it as an `IMediaPacketSink` (it builds the segmenter in `OpenAsync`), and `M3u8MasterPlaylistWriter.BuildCodecsString(tracks)` gives the master playlist's `CODECS` value from the SPS and AudioSpecificConfig (`"avc1.64001F,mp4a.40.2"`). A track's configuration can't change mid-stream yet ([live plan](docs/live-ingest-restream-plan.md) item 5d). Checked with `ffprobe` and an `ffmpeg` decode of the playlists made from a real H.264 + AAC stream.
+`new HlsSegmenter(MediaTrackSet tracks, targetDurationSeconds, sink[, liveWindowSize][, SegmentFormat])` + `AddPacket(packet)` + `Complete()` packages a packet stream (an RTMP ingest, an FLV file) as HLS with H.264/H.265 video and AAC audio, without decoding, in fMP4 or MPEG-TS segments, VOD or live sliding window. Segments are cut at video keyframes once the target duration is reached (on every packet for audio-only streams), so each one starts decodable and runs at most one GOP past the target; `EXTINF` comes from the keyframes' PTS. Packets before the first keyframe are dropped and counted (`DroppedLeadingPacketCount`). `HlsMediaPacketSink` wraps it as an `IMediaPacketSink` (it builds the segmenter in `OpenAsync`), and `M3u8MasterPlaylistWriter.BuildCodecsString(tracks)` gives the master playlist's `CODECS` value from the SPS and AudioSpecificConfig (`"avc1.64001F,mp4a.40.2"`). `UpdateTracks(tracks)` (on the segmenter or the sink) handles a mid-stream configuration change, such as a new SPS when the encoder changes resolution: the same tracks with a new `ConfigVersion`. The next packet ends the pending segment, the stream resumes at the next keyframe, and that segment gets `EXT-X-DISCONTINUITY` and, for fMP4, a new init segment (`init_2.mp4`, listed with `EXT-X-MAP`); a live window deletes init segments it no longer needs (`IStreamingSink.DeleteInitSegment`) and counts `EXT-X-DISCONTINUITY-SEQUENCE`. Adding, removing or reordering tracks, or changing a codec, needs a new rendition. Checked with `ffprobe` and an `ffmpeg` decode of the playlists made from a real H.264 + AAC stream.
 
 ```csharp
+using EggEncoder.Media;
 using EggEncoder.Streaming.Hls;
 
 await using var hls = new HlsMediaPacketSink(new FileSystemStreamingSink("out"), targetDurationSeconds: 4);
+MediaTrackSet? tracks = null;
 await foreach (var packet in source.ReadPacketsAsync())   // source: e.g. an FlvFileSource or an RtmpIngestStream
 {
-    if (hls.Segmenter is null) await hls.OpenAsync(source.Tracks!);
+    if (tracks is null) await hls.OpenAsync(source.Tracks!);
+    else if (!ReferenceEquals(tracks, source.Tracks)) hls.UpdateTracks(source.Tracks!);   // a new sequence header
+    tracks = source.Tracks;
     await hls.WriteAsync(packet);
 }
 await hls.CompleteAsync();

@@ -31,10 +31,14 @@ namespace EggEncoder.Streaming.Hls
         private readonly List<HlsSegmentDescriptor> _segments = [];
 
         private readonly int? _liveWindowSize;
-        private readonly string? _initSegmentUri;
+        private readonly List<string> _initSegmentUris = [];
+        private string? _currentInitSegmentUri;
+        private int _initSegmentCount;
 
         private long _accumulatedSampleCount;
         private long _nextSequenceNumber = 1;
+        private long _discontinuitySequence;
+        private bool _nextSegmentIsDiscontinuity;
         private double _maxObservedSegmentDurationSeconds;
         private bool _completed;
 
@@ -69,7 +73,7 @@ namespace EggEncoder.Streaming.Hls
             if (segmentFormat == SegmentFormat.Fmp4)
             {
                 _fmp4Writer = new FmpMediaSegmentWriter();
-                _initSegmentUri = RequireUri(sink.WriteInitSegment(InitSegmentUri, FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate)));
+                WriteInitSegment(InitSegmentUri, FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
             }
             else
             {
@@ -172,21 +176,60 @@ namespace EggEncoder.Streaming.Hls
             _nextSequenceNumber++;
             _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
 
-            _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, uri));
+            _segments.Add(new HlsSegmentDescriptor(sequenceNumber, durationSeconds, uri)
+            {
+                Discontinuity = _nextSegmentIsDiscontinuity,
+                InitSegmentUri = _currentInitSegmentUri
+            });
+            _nextSegmentIsDiscontinuity = false;
 
+            var removedAny = false;
             while (_liveWindowSize is { } windowSize && _segments.Count > windowSize)
             {
                 var oldest = _segments[0];
                 _segments.RemoveAt(0);
+                removedAny = true;
+                if (oldest.Discontinuity)
+                {
+                    _discontinuitySequence++;
+                }
+
                 _sink.DeleteMediaSegment(oldest.SequenceNumber, oldest.Uri);
+            }
+
+            if (removedAny)
+            {
+                DeleteUnreferencedInitSegments();
+            }
+        }
+
+        private void WriteInitSegment(string fileName, byte[] initSegment)
+        {
+            var uri = RequireUri(_sink.WriteInitSegment(fileName, initSegment));
+            _currentInitSegmentUri = uri;
+            _initSegmentUris.Add(uri);
+            _initSegmentCount++;
+        }
+
+        private void DeleteUnreferencedInitSegments()
+        {
+            for (var i = _initSegmentUris.Count - 1; i >= 0; i--)
+            {
+                var uri = _initSegmentUris[i];
+                if (uri != _currentInitSegmentUri && !_segments.Exists(s => s.InitSegmentUri == uri))
+                {
+                    _initSegmentUris.RemoveAt(i);
+                    _sink.DeleteInitSegment(uri);
+                }
             }
         }
 
         private void WritePlaylist(bool endList)
         {
             var mediaSequence = _segments.Count > 0 ? _segments[0].SequenceNumber : 1;
+            var initSegmentUri = _segments.Count > 0 ? _segments[0].InitSegmentUri : _currentInitSegmentUri;
             var targetDurationTagValue = (int)Math.Ceiling(Math.Max(_targetDurationSeconds, _maxObservedSegmentDurationSeconds));
-            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, _initSegmentUri, endList);
+            var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _discontinuitySequence, _segments, initSegmentUri, endList);
             _sink.WritePlaylist(Encoding.UTF8.GetBytes(playlistText));
         }
 

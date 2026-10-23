@@ -219,7 +219,12 @@ default-interface-method overloads `string WriteInitSegment(string fileName, byt
 WriteMediaSegment(long n, string fileName, bytes)` (both return the URI the playlist lists) and
 `DeleteMediaSegment(long n, string uri)`; the defaults call the original members and return the
 name. `FileSystemStreamingSink(directory, filePrefix)` writes `{prefix}{fileName}` and returns it,
-so several prefixed renditions can share one directory.
+so several prefixed renditions can share one directory. After a configuration change the segmenter
+writes `init_2.mp4`, `init_3.mp4`, ... through `WriteInitSegment(fileName, bytes)`, and a live window
+calls `DeleteInitSegment(string uri)` (default: no-op) for an init segment no listed segment needs.
+`InMemoryStreamingSink.InitSegments` holds every named init segment; `DelegateStreamingSink` has a
+second constructor, `(Action<string, byte[]> onInitSegment, onMediaSegment, onPlaylist,
+onDeleteMediaSegment, Action<string> onDeleteInitSegment)`, that passes init file names through.
 `EggEncoder.Streaming.Hls.HlsSegmenter` ties everything together: `AddFrame(EncodedAudioFrame
 frame)` (takes the ref struct directly, no manual conversion needed) accumulates frames and cuts a
 media segment once their cumulative duration reaches a configured `targetDurationSeconds` or more,
@@ -259,12 +264,25 @@ in arrival order; packets before the first cut point are dropped and counted
 (`DroppedLeadingPacketCount`). EXTINF = cut-point PTS difference; the final segment runs to its
 latest PTS + one frame. The fMP4 writer gets the next keyframe's DTS as the video track's
 `nextDecodeTimes`. `AddPacket` throws `ArgumentException` (adding nothing) for an unknown track, a
-`ConfigVersion` other than the track's (mid-stream config changes are live plan item 5d), a negative
+`ConfigVersion` other than the track's (call `UpdateTracks` first, below), a negative
 DTS, PTS < DTS, or a non-increasing DTS; a packet the container rejects, or a sink exception, at a
 cut discards that segment and throws from the call that cut it, and the next segment still starts at
 that cut point (a failed sink write uses no sequence number). `HlsMediaPacketSink(IStreamingSink sink, int
 targetDurationSeconds, SegmentFormat segmentFormat = Fmp4, int? liveWindowSize = null)` is the
 `IMediaPacketSink` wrapper (`OpenAsync` builds the segmenter, exposed as `Segmenter`).
+`UpdateTracks(MediaTrackSet)` on the segmenter (and on `HlsMediaPacketSink`, forwarding) handles a
+mid-stream configuration change: the same track ids in the same order with the same kind, codec and
+timescale, and a new `ConfigVersion` for a track whose codec configuration changed (new bytes under
+the old version throw `ArgumentException`; all versions unchanged is a no-op). Nothing is written
+until the next packet, which ends the pending segment; the stream resumes at the next cut point
+(earlier packets dropped and counted), and that segment gets `EXT-X-DISCONTINUITY` (unless it is the
+stream's first) and, for fMP4, a new init segment `init_N.mp4` listed with `EXT-X-MAP`. DTS must keep
+increasing. In live mode, `EXT-X-DISCONTINUITY-SEQUENCE` counts discontinuities that left the window.
+`FmpMediaSegmentWriter.UpdateTracks` and `MpegTsMuxer.UpdateTracks` do the same swap for the
+writers on their own, keeping sequence numbers, decode times, PIDs, the PMT and continuity counters.
+`HlsSegmentDescriptor` has init-only `Discontinuity` and `InitSegmentUri`, and
+`M3u8PlaylistWriter.BuildMediaPlaylist(targetDuration, mediaSequence, discontinuitySequence,
+segments, initSegmentUri, endList)` writes the matching tags.
 `M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)` returns the `CODECS` value: video first,
 then audio, distinct, `avc1.PPCCLL` / `hvc1.…` from the SPS, `mp4a.40.<audio object type>`.
 

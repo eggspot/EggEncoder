@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.ExceptionServices;
 using EggEncoder.Media;
 using EggEncoder.Streaming.Mp4;
@@ -10,10 +11,15 @@ namespace EggEncoder.Streaming.Hls
         private const int DefaultVideoFrameRate = 30;
         private const int DefaultAacFrameSamples = 1024;
 
-        private readonly MediaTrackSet? _tracks;
-        private readonly MediaTrackInfo? _cutTrack;
+        private const string VersionedInitSegmentFileNameFormat = "init_{0}.mp4";
+
         private readonly long _targetDurationTicks;
-        private readonly long _defaultCutTrackFrameDuration;
+        private MediaTrackSet? _tracks;
+        private MediaTrackInfo? _cutTrack;
+        private long _defaultCutTrackFrameDuration;
+        private MediaTrackSet? _pendingTracks;
+        private byte[]? _pendingTracksInitSegment;
+        private byte[]? _initSegmentToWrite;
         private readonly List<MediaPacket> _pendingPackets = [];
         private readonly Dictionary<int, long> _lastDtsByTrack = [];
 
@@ -75,15 +81,15 @@ namespace EggEncoder.Streaming.Hls
 
             if (initSegment is not null)
             {
-                _initSegmentUri = RequireUri(sink.WriteInitSegment(InitSegmentUri, initSegment));
+                WriteInitSegment(InitSegmentUri, initSegment);
             }
         }
 
         /// <summary>
-        /// Packets dropped because they arrived before the first cut point: with a video track,
-        /// everything before its first keyframe (audio included), so the first segment starts
-        /// decodable; without one, packets of other tracks that arrive before the first track's
-        /// first packet.
+        /// Packets dropped because they arrived before the first cut point, of the stream or after
+        /// a configuration change (see <see cref="UpdateTracks"/>): with a video track, everything
+        /// before its first keyframe (audio included), so the segment starts decodable; without
+        /// one, packets of other tracks that arrive before the first track's next packet.
         /// </summary>
         public long DroppedLeadingPacketCount { get; private set; }
 
@@ -98,8 +104,8 @@ namespace EggEncoder.Streaming.Hls
         /// Only the first video track decides cut points, so a second video track's segments start
         /// wherever its packets fall. In live mode, keep the target at least as long as the
         /// stream's GOP: a longer segment raises <c>EXT-X-TARGETDURATION</c>, which RFC 8216
-        /// §6.2.1 doesn't allow a live playlist to change. A track's configuration can't change
-        /// mid-stream yet: a packet must carry its track's <see cref="MediaTrackInfo.ConfigVersion"/>.
+        /// §6.2.1 doesn't allow a live playlist to change. A packet must carry its track's
+        /// <see cref="MediaTrackInfo.ConfigVersion"/>; after <see cref="UpdateTracks"/>, the new one.
         /// </summary>
         /// <exception cref="ArgumentException">
         /// The packet names a track not in the set, has a <see cref="MediaPacket.ConfigVersion"/>
@@ -128,19 +134,24 @@ namespace EggEncoder.Streaming.Hls
                 throw new InvalidOperationException("Cannot add packets after Complete() has been called.");
             }
 
-            var track = _tracks.FindTrack(packet.TrackId)
+            var track = (_pendingTracks ?? _tracks).FindTrack(packet.TrackId)
                 ?? throw new ArgumentException($"Packet for track {packet.TrackId}, which isn't in this segmenter's track set.", nameof(packet));
             var previousDts = ValidateTimestamps(track, packet);
+            var cutFailure = _pendingTracks is not null ? ApplyPendingTrackUpdate() : null;
             _lastDtsByTrack[track.TrackId] = packet.Dts;
 
-            var isCutTrack = track.TrackId == _cutTrack.TrackId;
+            var isCutTrack = track.TrackId == _cutTrack!.TrackId;
             var isCutPoint = isCutTrack && (packet.IsKeyframe || !IsVideo(track));
-            Exception? cutFailure = null;
             if (_segmentStartPts is not { } segmentStartPts)
             {
                 if (!isCutPoint)
                 {
                     DroppedLeadingPacketCount++;
+                    if (cutFailure is not null)
+                    {
+                        ExceptionDispatchInfo.Throw(cutFailure);
+                    }
+
                     return;
                 }
 
@@ -170,11 +181,104 @@ namespace EggEncoder.Streaming.Hls
             }
         }
 
+        /// <summary>
+        /// Switches the stream to a new configuration of the same tracks: a new SPS (a resolution
+        /// or level change), a new AudioSpecificConfig. The new set must hold the same track ids in
+        /// the same order, each with its kind, codec and timescale unchanged (restart the rendition
+        /// for anything else); a track whose <see cref="MediaTrackInfo.ConfigVersion"/> is unchanged
+        /// must keep its codec configuration bytes, compared both with the configuration in use and
+        /// with an update not yet applied. A set whose versions all match the latest ones changes
+        /// nothing. Nothing is written here: the next <see cref="AddPacket"/> ends the
+        /// pending segment (built with the old configuration, its duration measured as
+        /// <see cref="Complete"/> measures the final one), then waits for the next cut point as at
+        /// the start of the stream, dropping packets before it (see
+        /// <see cref="DroppedLeadingPacketCount"/>). The segment that starts there is preceded by
+        /// <c>EXT-X-DISCONTINUITY</c> (unless it is the stream's first) and, for fMP4, by a new
+        /// init segment, written just before it as <c>init_2.mp4</c>, <c>init_3.mp4</c> and so on
+        /// and listed with <c>EXT-X-MAP</c>. Each track's DTS must keep increasing across the change.
+        /// In live mode, an init segment no listed segment needs any more is deleted through
+        /// <see cref="IStreamingSink.DeleteInitSegment"/>, and <c>EXT-X-DISCONTINUITY-SEQUENCE</c>
+        /// counts the discontinuities that left the window. An update not yet applied when
+        /// <see cref="Complete"/> is called is dropped. The master playlist's <c>CODECS</c> isn't
+        /// rewritten here.
+        /// </summary>
+        /// <param name="tracks">The tracks' new configuration.</param>
+        /// <exception cref="ArgumentException"><paramref name="tracks"/> changes the track layout, or new codec configuration bytes come without a new version, or the chosen container rejects a track (as the constructors describe); the update is ignored.</exception>
+        /// <exception cref="NotSupportedException">For MPEG-TS, an AAC track's new configuration can't be carried as ADTS; the update is ignored.</exception>
+        /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for audio frames.</exception>
+        public void UpdateTracks(MediaTrackSet tracks)
+        {
+            var latest = _pendingTracks ?? _tracks
+                ?? throw new InvalidOperationException("This segmenter was built for encoded audio frames; construct it with a MediaTrackSet to update tracks.");
+            if (_completed)
+            {
+                throw new InvalidOperationException("Cannot update tracks after Complete() has been called.");
+            }
+
+            _tracks!.RequireSameTrackLayout(tracks, nameof(tracks));
+            latest.RequireSameTrackLayout(tracks, nameof(tracks));
+            if (!HasNewConfigVersion(latest, tracks))
+            {
+                return;
+            }
+
+            byte[]? initSegment = null;
+            if (_segmentFormat == SegmentFormat.Fmp4)
+            {
+                initSegment = FmpInitSegmentWriter.BuildInitSegment(tracks);
+            }
+            else
+            {
+                _ = new MpegTsMuxer(tracks);
+            }
+
+            _pendingTracks = tracks;
+            _pendingTracksInitSegment = initSegment;
+        }
+
+        private static bool HasNewConfigVersion(MediaTrackSet current, MediaTrackSet updated)
+        {
+            for (var i = 0; i < current.Tracks.Count; i++)
+            {
+                if (updated.Tracks[i].ConfigVersion != current.Tracks[i].ConfigVersion)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private Exception? ApplyPendingTrackUpdate()
+        {
+            var failure = _pendingPackets.Count > 0 ? CutPacketSegmentAfterLastFrame(writePlaylist: true) : null;
+            _segmentStartPts = null;
+
+            var tracks = _pendingTracks!;
+            if (_segmentFormat == SegmentFormat.Fmp4)
+            {
+                _fmp4Writer!.UpdateTracks(tracks);
+                _initSegmentToWrite = _pendingTracksInitSegment;
+            }
+            else
+            {
+                _mpegTsMuxer!.UpdateTracks(tracks);
+            }
+
+            _tracks = tracks;
+            _cutTrack = tracks.FindTrack(_cutTrack!.TrackId)!;
+            _defaultCutTrackFrameDuration = DefaultFrameDuration(_cutTrack);
+            _nextSegmentIsDiscontinuity = _nextSequenceNumber > 1;
+            _pendingTracks = null;
+            _pendingTracksInitSegment = null;
+            return failure;
+        }
+
         private long? ValidateTimestamps(MediaTrackInfo track, MediaPacket packet)
         {
             if (packet.ConfigVersion != track.ConfigVersion)
             {
-                throw new ArgumentException($"Packet for track {track.TrackId} has config version {packet.ConfigVersion}; the track's is {track.ConfigVersion}. Configuration changes aren't supported yet.", nameof(packet));
+                throw new ArgumentException($"Packet for track {track.TrackId} has config version {packet.ConfigVersion}; the track's is {track.ConfigVersion}. Call UpdateTracks before adding packets of a new configuration.", nameof(packet));
             }
 
             if (packet.Dts < 0)
@@ -210,13 +314,18 @@ namespace EggEncoder.Streaming.Hls
                 return;
             }
 
-            var lastFrameDuration = _lastCutTrackFrameDuration ?? _defaultCutTrackFrameDuration;
-            var lastCutTrackDts = _lastDtsByTrack[_cutTrack!.TrackId];
-            var failure = CutPacketSegment(_pendingMaxCutTrackPts + lastFrameDuration, lastCutTrackDts + lastFrameDuration, writePlaylist: false);
+            var failure = CutPacketSegmentAfterLastFrame(writePlaylist: false);
             if (failure is not null)
             {
                 ExceptionDispatchInfo.Throw(failure);
             }
+        }
+
+        private Exception? CutPacketSegmentAfterLastFrame(bool writePlaylist)
+        {
+            var lastFrameDuration = _lastCutTrackFrameDuration ?? _defaultCutTrackFrameDuration;
+            var lastCutTrackDts = _lastDtsByTrack[_cutTrack!.TrackId];
+            return CutPacketSegment(_pendingMaxCutTrackPts + lastFrameDuration, lastCutTrackDts + lastFrameDuration, writePlaylist);
         }
 
         private Exception? CutPacketSegment(long endPts, long nextCutTrackDts, bool writePlaylist)
@@ -224,6 +333,12 @@ namespace EggEncoder.Streaming.Hls
             var durationSeconds = (endPts - _segmentStartPts!.Value) / (double)_cutTrack!.Timescale;
             try
             {
+                if (_initSegmentToWrite is { } initSegment)
+                {
+                    WriteInitSegment(string.Format(CultureInfo.InvariantCulture, VersionedInitSegmentFileNameFormat, _initSegmentCount + 1), initSegment);
+                    _initSegmentToWrite = null;
+                }
+
                 var segmentBytes = _segmentFormat == SegmentFormat.Fmp4
                     ? _fmp4Writer!.BuildMediaSegment(_pendingPackets, new Dictionary<int, long> { [_cutTrack.TrackId] = nextCutTrackDts })
                     : _mpegTsMuxer!.BuildSegment(_pendingPackets);

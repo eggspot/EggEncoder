@@ -153,6 +153,27 @@ try
         }
     });
 
+    await RunCheck("HLS: a mid-stream configuration change through HlsMediaPacketSink.UpdateTracks", async () =>
+    {
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var video = new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, avcC, 0);
+        var sink = new EggEncoder.Streaming.InMemoryStreamingSink();
+        await using var packetSink = new EggEncoder.Streaming.Hls.HlsMediaPacketSink(sink, 1, liveWindowSize: 1);
+        await packetSink.OpenAsync(new EggEncoder.Media.MediaTrackSet([video]));
+        await packetSink.WriteAsync(new EggEncoder.Media.MediaPacket(0, 0, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 }));
+        packetSink.UpdateTracks(new EggEncoder.Media.MediaTrackSet([video with { ConfigVersion = 1 }]));
+        await packetSink.WriteAsync(new EggEncoder.Media.MediaPacket(0, 1000, 1000, true, 1, new byte[] { 0, 0, 0, 1, 0x65 }));
+        await packetSink.WriteAsync(new EggEncoder.Media.MediaPacket(0, 2000, 2000, true, 1, new byte[] { 0, 0, 0, 1, 0x65 }));
+        await packetSink.CompleteAsync();
+
+        var playlist = System.Text.Encoding.UTF8.GetString(sink.Playlist!);
+        if (!sink.InitSegments.ContainsKey("init_2.mp4") || sink.InitSegments.ContainsKey("init.mp4")
+            || !playlist.Contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n#EXT-X-MAP:URI=\"init_2.mp4\"\n#EXTINF:1.000000,\nsegment_3.m4s\n#EXT-X-ENDLIST"))
+        {
+            throw new InvalidOperationException("An HLS configuration change produced unexpected results");
+        }
+    });
+
     await RunCheck("RTMP core: handshake, then connect/createStream/publish and media through the chunk writer/reader", () =>
     {
         var client = EggEncoder.Live.Rtmp.RtmpHandshake.CreateClient();
