@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Numerics;
+
 namespace EggEncoder.Transform
 {
     public sealed class BitReader
@@ -32,18 +35,18 @@ namespace EggEncoder.Transform
                 throw new EndOfStreamException("Attempted to read past the end of the bitstream");
             }
 
-            var value = 0u;
-
-            for (var i = 0; i < bitCount; i++)
+            if (bitCount == 0)
             {
-                var byteIndex = _bitPosition / 8;
-                var bitIndexInByte = 7 - (_bitPosition % 8);
-                var bit = (_buffer[byteIndex] >> bitIndexInByte) & 1;
-                value = (value << 1) | (uint)bit;
-                _bitPosition++;
+                return 0;
             }
 
-            return value;
+            // One big-endian load of the (at most 5) bytes spanning the requested bits, rather than
+            // one loop iteration per bit: bitOffset (0-7) + bitCount (1-32) never exceeds 64.
+            var bitOffset = _bitPosition & 7;
+            var window = LoadWindow(_bitPosition >> 3, (bitOffset + bitCount + 7) >> 3);
+            _bitPosition += bitCount;
+
+            return (uint)((window << bitOffset) >> (64 - bitCount));
         }
 
         public uint PeekBits(int bitCount)
@@ -64,12 +67,31 @@ namespace EggEncoder.Transform
         public uint ReadUnary()
         {
             var zeros = 0u;
-            while (ReadBits(1) == 0)
+            while (true)
             {
-                zeros++;
-            }
+                var remainingBits = RemainingBits;
+                if (remainingBits <= 0)
+                {
+                    throw new EndOfStreamException("Attempted to read past the end of the bitstream");
+                }
 
-            return zeros;
+                // Scan up to one 64-bit window at a time. Bits past _bitLength may still be in the
+                // buffer (a byteLength-limited reader), so they're masked off rather than counted.
+                var bitOffset = _bitPosition & 7;
+                var validBits = Math.Min(64 - bitOffset, remainingBits);
+                var window = LoadWindow(_bitPosition >> 3, (bitOffset + validBits + 7) >> 3) << bitOffset;
+                window &= ulong.MaxValue << (64 - validBits);
+
+                if (window != 0)
+                {
+                    var leadingZeros = BitOperations.LeadingZeroCount(window);
+                    _bitPosition += leadingZeros + 1;
+                    return zeros + (uint)leadingZeros;
+                }
+
+                zeros += (uint)validBits;
+                _bitPosition += validBits;
+            }
         }
 
         public void SkipBits(int bitCount)
@@ -100,6 +122,27 @@ namespace EggEncoder.Transform
             }
 
             _bitPosition = bitPosition;
+        }
+
+        // Loads byteCount (1-8) bytes starting at byteIndex as a big-endian value aligned to the top
+        // of a ulong, with zeros below them. Reads a full 8 bytes when the buffer has them (the
+        // common case, a single load); otherwise only the bytes asked for, so a reader whose
+        // byteLength runs past its buffer still fails with the same IndexOutOfRangeException it
+        // always did rather than silently reading zeros.
+        private ulong LoadWindow(int byteIndex, int byteCount)
+        {
+            if (byteIndex >= 0 && byteIndex <= _buffer.Length - 8)
+            {
+                return BinaryPrimitives.ReadUInt64BigEndian(_buffer.AsSpan(byteIndex, 8));
+            }
+
+            var window = 0UL;
+            for (var i = 0; i < byteCount; i++)
+            {
+                window |= (ulong)_buffer[byteIndex + i] << (56 - (8 * i));
+            }
+
+            return window;
         }
     }
 }
