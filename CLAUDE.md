@@ -292,9 +292,10 @@ defaults every network-facing item must meet.
   ADTS-framed segment format to `FmpMediaSegmentWriter`'s own fMP4/CMAF one. Every call to
   `BuildSegment` produces one complete, independently-parseable `.ts` file: PAT + PMT (declaring
   one `stream_type=0x0F`/ADTS-AAC stream) repeated at the start, then one PES packet per frame,
-  split across 188-byte TS packets (`adaptation_field_control`=01/payload-only always, even for a
-  short final packet -- plain `0xFF` stuffing, never an adaptation field, confirmed against a real
-  ffmpeg-produced `.ts` fixture). Each PES's own PTS (the MPEG-TS-mandated 90kHz clock, a different
+  split across 188-byte TS packets, a PES's short final packet filled with adaptation-field
+  stuffing (ISO/IEC 13818-1 2.4.3.3; it used to pad with `0xFF` bytes after the PES in the payload,
+  which a demuxer reads as more PES data -- fixed in PR #148; PAT/PMT sections are still followed
+  by `0xFF` filler, which the spec allows). Each PES's own PTS (the MPEG-TS-mandated 90kHz clock, a different
   timescale from fMP4's own configurable one) is `round(cumulativeSamplesBeforeThisFrame * 90000.0
   / sampleRate)`, computed from the running TOTAL sample count rather than accumulated as a fixed
   per-frame delta -- `1024 * 90000 / 44100` isn't an integer, so a naive delta would drift
@@ -326,8 +327,7 @@ defaults every network-facing item must meet.
   to bridge any gap of more than 100 ms (at most 50 of them, so a timestamp jump past 5 s is left
   alone rather than letting one DTS decide the segment's size). A DTS must also strictly increase
   in 90 kHz ticks, so a finer timescale can't put two equal DTS on one PID. random_access_indicator on every keyframe PES (every AAC one). PES packets are padded
-  with adaptation-field stuffing (13818-1 2.4.3.3); frame mode still pads with 0xFF payload bytes
-  and is byte-for-byte unchanged. Continuity counters (PAT and PMT included) continue across
+  with adaptation-field stuffing (13818-1 2.4.3.3), the same writer frame mode uses. Continuity counters (PAT and PMT included) continue across
   segments in packet mode, unlike frame mode. Validation and conversion run before anything is
   written, so a call that throws leaves the muxer unchanged. Tested against the FLV fixtures by
   the test-only `MpegTsTestReader` and an `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`.

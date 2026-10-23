@@ -107,6 +107,24 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         }
 
         [Fact]
+        public void BuildSegment_Should_Pad_Each_Pes_With_Adaptation_Field_Stuffing_Not_Payload_Bytes()
+        {
+            // ISO/IEC 13818-1 2.4.3.3: a TS packet whose PES data runs out is filled by an
+            // adaptation field; bytes after the PES in the payload would be read as more PES data.
+            var muxer = new MpegTsMuxer(Channels, SampleRate);
+            var frames = BuildFrames([16, 23, 30, 8]);
+
+            var packets = MpegTsTestReader.ReadPackets(muxer.BuildSegment(frames));
+
+            // ReadPes asserts every PES's bytes end exactly at its PES_packet_length, and
+            // ReadPackets that adaptation-field stuffing is all 0xFF.
+            var pes = MpegTsTestReader.ReadPes(packets, 0x0100);
+            pes.Select(p => p.Es.Skip(7).ToArray()).Should().BeEquivalentTo(frames.Select(f => f.Payload), o => o.WithStrictOrdering());
+            packets.Where(p => p.Pid == 0x0100).Should().Contain(p => p.AdaptationFieldLength != null);
+            packets.Where(p => p.Pid == 0x0100 && p.AdaptationFieldLength != null).Should().OnlyContain(p => !p.RandomAccess && p.Pcr == null, "frame mode writes no flags, only stuffing");
+        }
+
+        [Fact]
         public void BuildSegment_Pts_Should_TrackCumulativeSampleCount_WithNoUnboundedDrift()
         {
             var muxer = new MpegTsMuxer(Channels, SampleRate);
@@ -212,7 +230,9 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
                 }
 
                 var payloadUnitStart = (packet[1] & 0x40) != 0;
-                var payload = packet.Slice(4, TsPacketSize - 4).ToArray();
+                // Skip an adaptation field (the stuffing in a PES's last packet), if present.
+                var payloadStart = (packet[3] & 0x20) != 0 ? 5 + packet[4] : 4;
+                var payload = packet[payloadStart..].ToArray();
 
                 if (payloadUnitStart)
                 {
