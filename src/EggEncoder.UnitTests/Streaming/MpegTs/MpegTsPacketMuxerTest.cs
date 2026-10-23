@@ -441,6 +441,7 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
             { "truncated prefix", [Video(0, key: true, new byte[] { 0, 0 })] },
             { "empty video payload", [Video(0, key: true, Array.Empty<byte>())] },
             { "AAC payload too long for ADTS", [new MediaPacket(1, 0, 0, true, 0, new byte[8185])] },
+            { "timestamp overflowing a 90 kHz clock", [Audio(long.MaxValue / 10)] },
             { "valid packets before a bad one", [Video(0, key: true), Audio(0), Audio(-5)] }
         };
 

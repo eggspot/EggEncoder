@@ -43,6 +43,8 @@ namespace EggEncoder.Streaming.MpegTs
 
         private static ReadOnlySpan<byte> H265AccessUnitDelimiter => [0x46, 0x01, 0x50];
 
+        private static readonly byte[] PatPayload = BuildPatPayload();
+
         private readonly PacketTrack[]? _packetTracks;
         private readonly Dictionary<int, PacketTrack>? _packetTracksById;
         private readonly PacketTrack? _pcrTrack;
@@ -107,8 +109,8 @@ namespace EggEncoder.Streaming.MpegTs
         /// modulo 2^33. Video PES carry PTS and DTS (DTS only when it differs) and an Annex B access
         /// unit: an access unit delimiter first (the packet's own, when it starts with one), then,
         /// for a keyframe that carries no SPS of its own, the parameter sets from the track's
-        /// configuration record, then the packet's NAL units. AAC PES carry one ADTS frame. Every
-        /// keyframe PES (and every AAC one) sets <c>random_access_indicator</c>. A PCR of
+        /// configuration record, then the packet's NAL units. AAC PES carry one ADTS frame. The PES of
+        /// every keyframe packet (every AAC packet is one) sets <c>random_access_indicator</c>. A PCR of
         /// max(0, DTS - 700 ms) goes on every PES of the PCR PID, plus a PCR-only packet on that PID
         /// before any other PES when the segment has none yet or the last one is 100 ms old.
         /// Continuity counters continue from the previous segment. Validation and payload
@@ -120,8 +122,9 @@ namespace EggEncoder.Streaming.MpegTs
         /// <paramref name="packets"/> is empty; or a packet names a track not in the set, or has a
         /// <see cref="MediaPacket.ConfigVersion"/> other than its track's, a negative DTS, a PTS
         /// before its DTS, a DTS not strictly greater than its track's previous one (in this
-        /// segment or an earlier one), a malformed length-prefixed video payload, or an AAC payload
-        /// too long for one ADTS frame (8,184 bytes).
+        /// segment or an earlier one), a timestamp past what a 90 kHz clock holds in 64 bits, a
+        /// malformed length-prefixed video payload, or an AAC payload too long for one ADTS frame
+        /// (8,184 bytes).
         /// </exception>
         /// <exception cref="InvalidOperationException">This muxer was built for frames (the <c>(channels, sampleRate)</c> constructor).</exception>
         public byte[] BuildSegment(IReadOnlyList<MediaPacket> packets)
@@ -208,8 +211,6 @@ namespace EggEncoder.Streaming.MpegTs
             return output;
         }
 
-        private static byte[] PatPayload { get; } = BuildPatPayload();
-
         private List<PesUnit> PreparePesUnits(IReadOnlyList<MediaPacket> packets)
         {
             var lastDts = new Dictionary<PacketTrack, long>();
@@ -244,8 +245,17 @@ namespace EggEncoder.Streaming.MpegTs
 
                 lastDts[track] = packet.Dts;
 
-                var dts90k = MediaTimestamp.Rescale(packet.Dts, track.Info.Timescale, (int)PtsClockHz);
-                var pts90k = MediaTimestamp.Rescale(packet.Pts, track.Info.Timescale, (int)PtsClockHz);
+                long dts90k, pts90k;
+                try
+                {
+                    dts90k = MediaTimestamp.Rescale(packet.Dts, track.Info.Timescale, (int)PtsClockHz);
+                    pts90k = MediaTimestamp.Rescale(packet.Pts, track.Info.Timescale, (int)PtsClockHz);
+                }
+                catch (OverflowException e)
+                {
+                    throw new ArgumentException($"Packet for track {packet.TrackId} has a timestamp too large for a 90 kHz clock.", nameof(packets), e);
+                }
+
                 var pes = track.IsVideo
                     ? BuildVideoPes(track, packet, pts90k, dts90k)
                     : BuildAudioPes(track, packet, pts90k);
