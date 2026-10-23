@@ -192,6 +192,24 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         }
 
         [Fact]
+        public void Constructor_TrackKindDisagreeingWithItsCodec_Should_ClassifyByCodec_LikeTheWriters()
+        {
+            var sink = new InMemoryStreamingSink();
+            var mislabeledVideo = VideoTrack() with { Kind = MediaKind.Audio };
+            var segmenter = new HlsSegmenter(new MediaTrackSet([AudioTrack(), mislabeledVideo]), 1, sink);
+
+            segmenter.AddPacket(Audio(0));
+            segmenter.AddPacket(Video(0));
+            segmenter.AddPacket(Video(40, key: true));
+            segmenter.AddPacket(Video(1040));
+            segmenter.Complete();
+
+            segmenter.DroppedLeadingPacketCount.Should().Be(2);
+            sink.MediaSegments.Should().ContainSingle();
+            PlaylistDurations(sink).Should().Equal(2.0);
+        }
+
+        [Fact]
         public void AddPacket_KeyframeBelowTarget_Should_NotCut()
         {
             var sink = new InMemoryStreamingSink();

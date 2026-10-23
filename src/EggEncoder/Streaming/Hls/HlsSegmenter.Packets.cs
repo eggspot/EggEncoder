@@ -67,7 +67,7 @@ namespace EggEncoder.Streaming.Hls
             }
 
             _tracks = tracks;
-            _cutTrack = tracks.Tracks.FirstOrDefault(t => t.Kind == MediaKind.Video) ?? tracks.Tracks[0];
+            _cutTrack = tracks.Tracks.FirstOrDefault(IsVideo) ?? tracks.Tracks[0];
             _targetDurationTicks = (long)targetDurationSeconds * _cutTrack.Timescale;
             _defaultCutTrackFrameDuration = DefaultFrameDuration(_cutTrack);
 
@@ -122,7 +122,7 @@ namespace EggEncoder.Streaming.Hls
             _lastDtsByTrack[track.TrackId] = packet.Dts;
 
             var isCutTrack = track.TrackId == _cutTrack.TrackId;
-            var isCutPoint = isCutTrack && (packet.IsKeyframe || track.Kind == MediaKind.Audio);
+            var isCutPoint = isCutTrack && (packet.IsKeyframe || !IsVideo(track));
             ArgumentException? cutFailure = null;
             if (_segmentStartPts is not { } segmentStartPts)
             {
@@ -235,11 +235,13 @@ namespace EggEncoder.Streaming.Hls
 
         private static long DefaultFrameDuration(MediaTrackInfo track)
         {
-            var duration = track.Kind == MediaKind.Video
+            var duration = IsVideo(track)
                 ? MediaTimestamp.Rescale(1, DefaultVideoFrameRate, track.Timescale)
                 : MediaTimestamp.Rescale(DefaultAacFrameSamples, AacSampleRate(track), track.Timescale);
             return Math.Max(1, duration);
         }
+
+        private static bool IsVideo(MediaTrackInfo track) => track.Codec is MediaCodec.H264 or MediaCodec.H265;
 
         private static int AacSampleRate(MediaTrackInfo track) =>
             track.SampleRate > 0 ? track.SampleRate : AudioSpecificConfigReader.Read(track.CodecConfiguration.Span).SampleRate;
