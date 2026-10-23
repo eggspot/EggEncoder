@@ -158,6 +158,16 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         }
 
         [Fact]
+        public void HlsSegmenter_PacketFmp4_SinkReturningNoInitUri_Should_Throw()
+        {
+            var noUriSink = new NoUriSink(new InMemoryStreamingSink());
+
+            var act = () => new HlsSegmenter(HlsPacketSegmenterTest.FiveSecondCapture().Demuxer.Tracks!, 2, noUriSink);
+
+            act.Should().ThrowExactly<InvalidOperationException>();
+        }
+
+        [Fact]
         public void HlsSegmenter_PacketMpegTs_WithFilePrefix_Should_ListOnlyFilesThatExist()
         {
             var capture = HlsPacketSegmenterTest.FiveSecondCapture();

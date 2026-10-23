@@ -41,6 +41,7 @@ namespace EggEncoder.Streaming.Hls
         /// <summary>VOD mode: every segment ever produced stays in the playlist until <see cref="Complete"/> writes <c>EXT-X-ENDLIST</c>.</summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive.</exception>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(channels, sampleRate, targetDurationSeconds, sink, liveWindowSize: null, segmentFormat)
         {
@@ -54,6 +55,7 @@ namespace EggEncoder.Streaming.Hls
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(channels, sampleRate, targetDurationSeconds, sink, (int?)liveWindowSize, segmentFormat)
         {
@@ -97,7 +99,7 @@ namespace EggEncoder.Streaming.Hls
         /// <summary>The file name the init segment is written under; the playlist lists whatever URI the <see cref="IStreamingSink"/> returns for it.</summary>
         public const string InitSegmentUri = "init.mp4";
 
-        /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for packets (a <see cref="MediaTrackSet"/> constructor).</exception>
+        /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for packets (a <see cref="MediaTrackSet"/> constructor); or, at a cut, the sink returned no URI for the segment it wrote (the segment is left out of the playlist and its sequence number is reused).</exception>
         public void AddFrame(EncodedAudioFrame frame)
         {
             if (_tracks is not null)
