@@ -31,7 +31,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             PublishTimeout = publish,
             IdleTimeout = idle,
             ConsumerStallTimeout = stall,
-            EndPoint = options?.EndPoint ?? new IPEndPoint(IPAddress.Loopback, 0),
+            EndPoint = options is null ? new IPEndPoint(IPAddress.Loopback, 0) : ReplaceDefaultPortWithFreePort(options.EndPoint),
             AuthorizePublishAsync = options?.AuthorizePublishAsync ?? ((_, _) => ValueTask.FromResult(true)),
             Certificate = options?.Certificate,
             ChunkReader = options?.ChunkReader ?? new RtmpChunkReaderOptions(),
@@ -42,8 +42,13 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             PacketQueueMaxBytes = options?.PacketQueueMaxBytes ?? 64 * 1024 * 1024
         };
 
+        private static IPEndPoint ReplaceDefaultPortWithFreePort(IPEndPoint endPoint) =>
+            endPoint.Port == RtmpServerOptions.DefaultPort ? new IPEndPoint(endPoint.Address, 0) : endPoint;
+
         internal static async Task<RtmpServer> StartAsync(RtmpServerOptions options)
         {
+            options.EndPoint.Port.Should().Be(0,
+                "test processes for each target framework run in parallel and would race for a fixed port");
             var server = new RtmpServer(options);
             await server.StartAsync();
             return server;
@@ -725,6 +730,22 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             running.LocalEndPoint!.Port.Should().BePositive();
             await running.Invoking(s => s.StartAsync()).Should().ThrowAsync<InvalidOperationException>().WithMessage("*already started*");
             await running.Invoking(s => s.StartAsync(new CancellationToken(canceled: true))).Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        [Fact]
+        public void AcceptAll_GivenOptionsWithTheDefaultEndPoint_Should_Use_Loopback_Port_Zero()
+        {
+            var options = AcceptAll(new RtmpServerOptions { MaxConnections = 1 });
+
+            options.EndPoint.Should().Be(new IPEndPoint(IPAddress.Loopback, 0));
+        }
+
+        [Fact]
+        public void AcceptAll_GivenAnExplicitEndPoint_Should_Keep_It()
+        {
+            var endPoint = new IPEndPoint(IPAddress.IPv6Any, 0);
+
+            AcceptAll(new RtmpServerOptions { EndPoint = endPoint }).EndPoint.Should().BeSameAs(endPoint);
         }
 
         [Fact]
