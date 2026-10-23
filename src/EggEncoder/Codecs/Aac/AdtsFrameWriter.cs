@@ -1,5 +1,3 @@
-using EggEncoder.Transform;
-
 namespace EggEncoder.Codecs.Aac
 {
     // ADTS (Audio Data Transport Stream) frame-header writer -- the fixed 7-byte header a raw AAC
@@ -9,38 +7,38 @@ namespace EggEncoder.Codecs.Aac
     // docs/streaming-plan.md item 4 reuses this same helper rather than a second copy.
     internal static class AdtsFrameWriter
     {
-        private const uint AdtsSyncWord = 0xFFF;
-        private const uint AacLcProfile = 1;
-        private const uint NoCrcProtectionAbsent = 1;
-        private const int AdtsHeaderByteLength = 7;
-        private const uint AdtsBufferFullness = 0x7FF;
+        public const int HeaderLength = 7;
+
+        // frame_length is 13 bits and counts the header too.
+        public const int MaxPayloadLength = (1 << 13) - 1 - HeaderLength;
+
+        private const int AacLcProfile = 1;
 
         public static byte[] Wrap(byte[] payload, int sampleRateIndex, int channels)
         {
-            var writer = new BitWriter();
-
-            writer.WriteBits(AdtsSyncWord, 12);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 2);
-            writer.WriteBits(NoCrcProtectionAbsent, 1);
-            writer.WriteBits(AacLcProfile, 2);
-            writer.WriteBits((uint)sampleRateIndex, 4);
-            writer.WriteBits(0, 1);
-            writer.WriteBits((uint)channels, 3);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits(0, 1);
-            writer.WriteBits((uint)(AdtsHeaderByteLength + payload.Length), 13);
-            writer.WriteBits(AdtsBufferFullness, 11);
-            writer.WriteBits(0, 2);
-
-            var header = writer.ToArray();
-            var frame = new byte[header.Length + payload.Length];
-            Buffer.BlockCopy(header, 0, frame, 0, header.Length);
-            Buffer.BlockCopy(payload, 0, frame, header.Length, payload.Length);
+            var frame = new byte[HeaderLength + payload.Length];
+            WriteHeader(frame, AacLcProfile, sampleRateIndex, channels, payload.Length);
+            payload.CopyTo(frame, HeaderLength);
 
             return frame;
+        }
+
+        // ISO/IEC 14496-3 1.A.2.2 adts_fixed_header + adts_variable_header, no CRC: syncword 0xFFF,
+        // ID 0 (MPEG-4), layer 0, protection_absent 1, profile (audioObjectType - 1), the sampling
+        // frequency index, private_bit 0, channel_configuration, four zero flag bits, frame_length
+        // (header + payload), adts_buffer_fullness 0x7FF (variable rate) and one raw data block.
+        public static void WriteHeader(Span<byte> destination, int profile, int sampleRateIndex, int channels, int payloadLength)
+        {
+            const int bufferFullness = 0x7FF;
+            var frameLength = HeaderLength + payloadLength;
+
+            destination[0] = 0xFF;
+            destination[1] = 0xF1;
+            destination[2] = (byte)((profile << 6) | (sampleRateIndex << 2) | ((channels >> 2) & 0x1));
+            destination[3] = (byte)(((channels & 0x3) << 6) | ((frameLength >> 11) & 0x3));
+            destination[4] = (byte)(frameLength >> 3);
+            destination[5] = (byte)(((frameLength & 0x7) << 5) | (bufferFullness >> 6));
+            destination[6] = (byte)((bufferFullness & 0x3F) << 2);
         }
     }
 }

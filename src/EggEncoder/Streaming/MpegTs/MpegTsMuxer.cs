@@ -1,21 +1,23 @@
 using EggEncoder.Codecs.Aac;
+using EggEncoder.Media;
 using EggEncoder.Streaming.Mp4;
 
 namespace EggEncoder.Streaming.MpegTs
 {
     /// <summary>
-    /// Builds MPEG-TS segments (ISO/IEC 13818-1) for a single mono AAC-LC track -- the alternative,
-    /// ADTS-framed segment format to <see cref="FmpMediaSegmentWriter"/>'s own fMP4/CMAF one. Each
-    /// call to <see cref="BuildSegment"/> produces one complete, independently-parseable <c>.ts</c>
-    /// file (PAT + PMT repeated at the start of every segment, then one PES packet per frame) --
-    /// matching real HLS TS segmenters' own convention that every segment is a standalone file with
-    /// no cross-segment state, so PAT/PMT/continuity counters all restart at the beginning of each
-    /// call. PTS continuity across segments is still preserved: this muxer tracks the running total
-    /// sample count internally, the same way <see cref="FmpMediaSegmentWriter"/> tracks
-    /// <c>baseMediaDecodeTime</c> -- build a fresh instance per rendition. See
-    /// docs/streaming-plan.md item 4.
+    /// Builds MPEG-TS segments (ISO/IEC 13818-1) -- the alternative, ADTS-framed segment format to
+    /// <see cref="FmpMediaSegmentWriter"/>'s own fMP4/CMAF one. Two modes, chosen by constructor: a
+    /// single mono AAC-LC track fed <see cref="Mp4EncodedFrame"/>s from this project's own encoders
+    /// (docs/streaming-plan.md item 4), and a <see cref="MediaTrackSet"/> of H.264, H.265 and AAC
+    /// tracks fed <see cref="MediaPacket"/>s (docs/live-ingest-restream-plan.md item 5b). Each
+    /// <c>BuildSegment</c> call produces one complete, independently-parseable <c>.ts</c> file
+    /// (PAT + PMT at the start of every segment, then one PES packet per frame or packet). In frame
+    /// mode PAT/PMT/continuity counters all restart at the beginning of each call; in packet mode
+    /// they continue across calls, so segments read back to back form one continuous stream, as
+    /// HLS players read them. Timestamps carry forward from one call to the next in both modes --
+    /// build a fresh instance per rendition.
     /// </summary>
-    public sealed class MpegTsMuxer
+    public sealed partial class MpegTsMuxer
     {
         private const int PatPid = 0x0000;
         private const int PmtPid = 0x1000;
@@ -25,6 +27,7 @@ namespace EggEncoder.Streaming.MpegTs
         private const byte AudioStreamId = 0xC0;
         private const long PtsClockHz = 90000;
         private const long PtsWrapMask = (1L << 33) - 1;
+        private const int PtsOnlyPrefix = 0x2;
 
         private readonly int _channels;
         private readonly int _sampleRate;
@@ -32,6 +35,7 @@ namespace EggEncoder.Streaming.MpegTs
 
         private long _cumulativeSampleCount;
 
+        /// <summary>Frame mode: one mono AAC-LC track, fed by <see cref="BuildSegment(IReadOnlyList{Mp4EncodedFrame})"/>.</summary>
         /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         public MpegTsMuxer(int channels, int sampleRate)
         {
@@ -41,9 +45,15 @@ namespace EggEncoder.Streaming.MpegTs
         }
 
         /// <exception cref="ArgumentException"><paramref name="frames"/> is empty.</exception>
+        /// <exception cref="InvalidOperationException">This muxer was built for packets (the <see cref="MediaTrackSet"/> constructor).</exception>
         public byte[] BuildSegment(IReadOnlyList<Mp4EncodedFrame> frames)
         {
             ArgumentNullException.ThrowIfNull(frames);
+            if (_packetTracks is not null)
+            {
+                throw new InvalidOperationException("This muxer was built for a MediaTrackSet; pass MediaPackets instead of frames.");
+            }
+
             if (frames.Count == 0)
             {
                 throw new ArgumentException("A media segment must contain at least one frame.", nameof(frames));
@@ -55,7 +65,7 @@ namespace EggEncoder.Streaming.MpegTs
             WritePayload(output, PatPid, BuildPatPayload(), ref patContinuityCounter);
 
             var pmtContinuityCounter = 0;
-            WritePayload(output, PmtPid, BuildPmtPayload(), ref pmtContinuityCounter);
+            WritePayload(output, PmtPid, BuildPmtPayload(AudioPid, [(AdtsAacStreamType, AudioPid)]), ref pmtContinuityCounter);
 
             var audioContinuityCounter = 0;
             foreach (var frame in frames)
@@ -132,15 +142,19 @@ namespace EggEncoder.Streaming.MpegTs
             return PrependPointerField(section);
         }
 
-        private static byte[] BuildPmtPayload()
+        // PCR_PID and one stream loop entry (no descriptors) per elementary stream. Frame mode
+        // points PCR_PID at its single audio stream and writes no PCR at all (a deliberate MVP
+        // scope limitation; see docs/streaming-plan.md item 4's own status note); packet mode
+        // writes PCR on the PID it names here.
+        private static byte[] BuildPmtPayload(int pcrPid, IReadOnlyList<(byte StreamType, int Pid)> streams)
         {
             var section = new List<byte>
             {
                 0x02, // table_id (PMT/TS_program_map_section)
             };
 
-            const int streamLoopLength = 1 + 2 + 2; // stream_type + elementary_PID + ES_info_length
-            const int sectionLength = 2 + 1 + 1 + 1 + 2 + 2 + streamLoopLength + 4;
+            const int streamLoopEntryLength = 1 + 2 + 2; // stream_type + elementary_PID + ES_info_length
+            var sectionLength = 2 + 1 + 1 + 1 + 2 + 2 + (streams.Count * streamLoopEntryLength) + 4;
             section.Add((byte)(0xB0 | ((sectionLength >> 8) & 0x0F)));
             section.Add((byte)(sectionLength & 0xFF));
 
@@ -150,20 +164,19 @@ namespace EggEncoder.Streaming.MpegTs
             section.Add(0x00); // section_number
             section.Add(0x00); // last_section_number
 
-            // PCR_PID points at the audio elementary stream itself (no separate PCR-only stream),
-            // matching real single-audio-track convention -- this muxer does not insert adaptation-
-            // field PCR values at all (a deliberate MVP scope limitation; see docs/streaming-plan.md
-            // item 4's own status note).
-            section.Add((byte)(0xE0 | ((AudioPid >> 8) & 0x1F)));
-            section.Add((byte)(AudioPid & 0xFF));
+            section.Add((byte)(0xE0 | ((pcrPid >> 8) & 0x1F)));
+            section.Add((byte)(pcrPid & 0xFF));
             section.Add(0xF0); // reserved(4) + program_info_length(12)=0
             section.Add(0x00);
 
-            section.Add(AdtsAacStreamType);
-            section.Add((byte)(0xE0 | ((AudioPid >> 8) & 0x1F)));
-            section.Add((byte)(AudioPid & 0xFF));
-            section.Add(0xF0); // reserved(4) + ES_info_length(12)=0
-            section.Add(0x00);
+            foreach (var (streamType, pid) in streams)
+            {
+                section.Add(streamType);
+                section.Add((byte)(0xE0 | ((pid >> 8) & 0x1F)));
+                section.Add((byte)(pid & 0xFF));
+                section.Add(0xF0); // reserved(4) + ES_info_length(12)=0
+                section.Add(0x00);
+            }
 
             AppendCrc32(section);
 
@@ -203,23 +216,24 @@ namespace EggEncoder.Streaming.MpegTs
             packet[7] = 0x80; // PTS_DTS_flags='10' (PTS only) + ESCR/ES_rate/trick-mode/copy-info/CRC/extension all 0
             packet[8] = 0x05; // PES_header_data_length -- 5 bytes of PTS follow
 
-            EncodePts(pts33Bit, packet.AsSpan(9, 5));
+            EncodeTimestamp(pts33Bit, PtsOnlyPrefix, packet.AsSpan(9, 5));
 
             adtsFrame.CopyTo(packet, 9 + 5);
 
             return packet;
         }
 
-        // The 5-byte PTS-only timestamp format (ISO/IEC 13818-1 §2.4.3.6): '0010' PTS[32:30] '1'
-        // PTS[29:15] '1' PTS[14:0] '1' -- confirmed bit-for-bit against a real ffmpeg-produced .ts
-        // fixture's own PES header.
-        private static void EncodePts(long pts33Bit, Span<byte> destination)
+        // The 5-byte PTS/DTS timestamp format (ISO/IEC 13818-1 §2.4.3.6): a 4-bit prefix ('0010'
+        // for a PTS alone, '0011' for a PTS followed by a DTS, '0001' for that DTS), PTS[32:30] '1'
+        // PTS[29:15] '1' PTS[14:0] '1' -- the PTS-only form confirmed bit-for-bit against a real
+        // ffmpeg-produced .ts fixture's own PES header.
+        private static void EncodeTimestamp(long timestamp33Bit, int prefix, Span<byte> destination)
         {
-            var high3 = (pts33Bit >> 30) & 0x7;
-            var mid15 = (pts33Bit >> 15) & 0x7FFF;
-            var low15 = pts33Bit & 0x7FFF;
+            var high3 = (timestamp33Bit >> 30) & 0x7;
+            var mid15 = (timestamp33Bit >> 15) & 0x7FFF;
+            var low15 = timestamp33Bit & 0x7FFF;
 
-            destination[0] = (byte)(0x20 | (high3 << 1) | 0x01);
+            destination[0] = (byte)((prefix << 4) | (int)(high3 << 1) | 0x01);
 
             var midField = (mid15 << 1) | 1;
             destination[1] = (byte)(midField >> 8);

@@ -20,36 +20,51 @@ namespace EggEncoder.Media
         /// <exception cref="InvalidDataException">A length prefix is zero or runs past the end of the buffer, or there are no NAL units.</exception>
         public static byte[] ToAnnexB(ReadOnlySpan<byte> lengthPrefixed, int nalLengthSize = 4)
         {
-            ValidateNalLengthSize(nalLengthSize);
+            // Split (and validate) first, so the output is allocated exactly once.
+            var nalUnits = SplitLengthPrefixed(lengthPrefixed, nalLengthSize);
 
-            // Two passes: validate and size first, so the output is allocated exactly once.
             var outputLength = 0L;
-            var nalCount = 0;
-            for (var position = 0; position < lengthPrefixed.Length;)
+            foreach (var (_, length) in nalUnits)
             {
-                var nalLength = ReadNalLength(lengthPrefixed, position, nalLengthSize);
-                position += nalLengthSize + nalLength;
-                outputLength += StartCode.Length + nalLength;
-                nalCount++;
-            }
-
-            if (nalCount == 0)
-            {
-                throw new InvalidDataException("Access unit contains no NAL units");
+                outputLength += StartCode.Length + length;
             }
 
             var output = new byte[outputLength];
             var writePosition = 0;
-            for (var position = 0; position < lengthPrefixed.Length;)
+            foreach (var (offset, length) in nalUnits)
             {
-                var nalLength = ReadNalLength(lengthPrefixed, position, nalLengthSize);
                 StartCode.CopyTo(output.AsSpan(writePosition));
-                lengthPrefixed.Slice(position + nalLengthSize, nalLength).CopyTo(output.AsSpan(writePosition + StartCode.Length));
-                position += nalLengthSize + nalLength;
-                writePosition += StartCode.Length + nalLength;
+                lengthPrefixed.Slice(offset, length).CopyTo(output.AsSpan(writePosition + StartCode.Length));
+                writePosition += StartCode.Length + length;
             }
 
             return output;
+        }
+
+        /// <summary>
+        /// The offset and length of every NAL unit (without its length prefix) in one
+        /// length-prefixed access unit, validated the way <see cref="ToAnnexB"/> validates it.
+        /// Shared with the MPEG-TS muxer, which interleaves its own NAL units with these.
+        /// </summary>
+        /// <exception cref="InvalidDataException">A length prefix is zero or runs past the end of the buffer, or there are no NAL units.</exception>
+        internal static List<(int Offset, int Length)> SplitLengthPrefixed(ReadOnlySpan<byte> lengthPrefixed, int nalLengthSize)
+        {
+            ValidateNalLengthSize(nalLengthSize);
+
+            var nalUnits = new List<(int, int)>();
+            for (var position = 0; position < lengthPrefixed.Length;)
+            {
+                var nalLength = ReadNalLength(lengthPrefixed, position, nalLengthSize);
+                nalUnits.Add((position + nalLengthSize, nalLength));
+                position += nalLengthSize + nalLength;
+            }
+
+            if (nalUnits.Count == 0)
+            {
+                throw new InvalidDataException("Access unit contains no NAL units");
+            }
+
+            return nalUnits;
         }
 
         /// <summary>

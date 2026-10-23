@@ -23,7 +23,7 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         {
             var muxer = new MpegTsMuxer(Channels, SampleRate);
 
-            var act = () => muxer.BuildSegment([]);
+            var act = () => muxer.BuildSegment(new List<Mp4EncodedFrame>());
 
             act.Should().ThrowExactly<ArgumentException>();
         }
