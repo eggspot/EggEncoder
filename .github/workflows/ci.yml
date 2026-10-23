@@ -47,10 +47,15 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       - name: Test (.NET ${{ matrix.dotnet-version }})
+        if: ${{ !(matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '10.0.x') }}
         shell: bash
         run: |
           MAJOR=$(echo "${{ matrix.dotnet-version }}" | cut -d. -f1)
           dotnet test --configuration Release --no-build --framework "net${MAJOR}.0" --verbosity normal
+
+      - name: Test every target framework in parallel, as Publish NuGet does
+        if: matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '10.0.x'
+        run: dotnet test --configuration Release --no-build --verbosity normal
 
       # EggEncoder.AotSmokeTest only targets net10.0, so this only needs to run once per OS
       # regardless of which SDK the matrix leg is testing. A real `PublishAot=true` publish (not
