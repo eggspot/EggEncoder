@@ -43,12 +43,32 @@ namespace EggEncoder.Streaming
 
         public string WriteMediaSegment(long sequenceNumber, string fileName, ReadOnlySpan<byte> bytes) => WriteFile(fileName, bytes);
 
-        public void DeleteMediaSegment(long sequenceNumber, string uri) => DeleteFile(uri);
+        public void DeleteMediaSegment(long sequenceNumber, string uri)
+        {
+            ArgumentNullException.ThrowIfNull(uri);
+            if (!uri.StartsWith(_filePrefix, StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"'{uri}' is not a URI this sink returned.", nameof(uri));
+            }
+
+            RequireBareFileName(uri[_filePrefix.Length..], nameof(uri));
+            DeleteFile(uri);
+        }
+
+        private static void RequireBareFileName(string fileName, string parameterName)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(fileName, parameterName);
+            if (fileName is "." or ".." || Path.GetFileName(fileName) != fileName)
+            {
+                throw new ArgumentException($"'{fileName}' must be a bare file name, with no directory part.", parameterName);
+            }
+        }
 
         private string WriteFile(string fileName, ReadOnlySpan<byte> bytes)
         {
-            ArgumentException.ThrowIfNullOrEmpty(fileName);
+            RequireBareFileName(fileName, nameof(fileName));
             var uri = _filePrefix + fileName;
+
             File.WriteAllBytes(Path.Combine(_directory, uri), bytes.ToArray());
             return uri;
         }

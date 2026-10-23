@@ -567,7 +567,7 @@ discipline it should have followed the first time. A genuine process lesson, not
 correction: a self-review "fix" is not automatically more correct than what it replaces -- it needs
 the same verification bar as the original code.
 
-**Found later, fixed in its own PR (after live plan PR #149)**: `FileSystemStreamingSink` named
+**Found later, fixed in PR #150**: `FileSystemStreamingSink` named
 every media segment `{prefix}segment_{n}.m4s` while `HlsSegmenter` listed `segment_{n}.ts` for
 MPEG-TS, and its multi-rendition `filePrefix` reached the file names but never the playlist URIs,
 so both cases wrote playlists pointing at files that didn't exist. The segmenter now passes each

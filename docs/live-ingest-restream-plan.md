@@ -513,7 +513,7 @@ per-track state and on the TS muxer, `UpdateTracks` on `HlsSegmenter`/`HlsMediaP
 `IStreamingSink` extension for deleting an init segment that ages out of the live window. Versioned
 init names (`init_2.mp4`, ...) go through `WriteInitSegment(fileName, bytes)`, the named overload
 added (with `WriteMediaSegment(n, fileName, bytes)` and `DeleteMediaSegment(n, uri)`) by the
-`FileSystemStreamingSink` naming fix after PR #149; before it, the unnamed `WriteInitSegment(bytes)`
+`FileSystemStreamingSink` naming fix in PR #150; before it, the unnamed `WriteInitSegment(bytes)`
 would have overwritten `init.mp4` under segments that still reference the old one. The FLV → HLS and playlist `ffprobe`/`ffmpeg` criteria above are 5c's.
 
 **Status**: in progress. 5a done ([PR #143](https://github.com/eggspot/EggEncoder/pull/143)):

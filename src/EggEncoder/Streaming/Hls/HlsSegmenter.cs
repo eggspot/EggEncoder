@@ -67,7 +67,7 @@ namespace EggEncoder.Streaming.Hls
             if (segmentFormat == SegmentFormat.Fmp4)
             {
                 _fmp4Writer = new FmpMediaSegmentWriter();
-                _initSegmentUri = sink.WriteInitSegment(InitSegmentUri, FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate));
+                _initSegmentUri = RequireUri(sink.WriteInitSegment(InitSegmentUri, FmpInitSegmentWriter.BuildInitSegment(channels, sampleRate)));
             }
             else
             {
@@ -166,7 +166,7 @@ namespace EggEncoder.Streaming.Hls
         private void WriteSegment(byte[] segmentBytes, double durationSeconds)
         {
             var sequenceNumber = _nextSequenceNumber;
-            var uri = _sink.WriteMediaSegment(sequenceNumber, SegmentFileName(sequenceNumber), segmentBytes);
+            var uri = RequireUri(_sink.WriteMediaSegment(sequenceNumber, SegmentFileName(sequenceNumber), segmentBytes));
             _nextSequenceNumber++;
             _maxObservedSegmentDurationSeconds = Math.Max(_maxObservedSegmentDurationSeconds, durationSeconds);
 
@@ -187,6 +187,11 @@ namespace EggEncoder.Streaming.Hls
             var playlistText = M3u8PlaylistWriter.BuildMediaPlaylist(targetDurationTagValue, mediaSequence, _segments, _initSegmentUri, endList);
             _sink.WritePlaylist(Encoding.UTF8.GetBytes(playlistText));
         }
+
+        private static string RequireUri(string? uri) =>
+            string.IsNullOrEmpty(uri)
+                ? throw new InvalidOperationException("The streaming sink returned no URI for a segment it wrote.")
+                : uri;
 
         private string SegmentFileName(long sequenceNumber) => _segmentFormat == SegmentFormat.Fmp4 ? $"segment_{sequenceNumber}.m4s" : $"segment_{sequenceNumber}.ts";
     }

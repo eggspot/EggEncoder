@@ -273,7 +273,8 @@ defaults every network-facing item must meet.
   defaults call the original members and return the name unchanged. `FileSystemStreamingSink`
   overrides them to write `{prefix}{fileName}` and return that, so `.ts` segments and prefixed
   renditions in one directory get playlists whose URIs exist (it used to write `.m4s` for every
-  format and list unprefixed URIs; fixed in its own PR after #149). Live plan item 5d's versioned
+  format and list unprefixed URIs; fixed in PR #150). It rejects a file name or URI with a directory part, so
+  no call writes or deletes outside its directory. Live plan item 5d's versioned
   init segments build on these overloads.
 - `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`).
   `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into

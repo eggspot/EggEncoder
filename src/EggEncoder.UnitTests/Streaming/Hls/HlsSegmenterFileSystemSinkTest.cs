@@ -110,14 +110,64 @@ namespace EggEncoder.UnitTests.Streaming.Hls
         [Theory]
         [InlineData(null)]
         [InlineData("")]
-        public void FileSystemStreamingSink_NamedOverload_WithoutAFileName_Should_Throw(string? fileName)
+        [InlineData(".")]
+        [InlineData("..")]
+        [InlineData("../escape.ts")]
+        [InlineData("sub/segment_1.ts")]
+        public void FileSystemStreamingSink_NamedOverloads_WithoutABareFileName_Should_Throw(string? fileName)
         {
-            IStreamingSink sink = new FileSystemStreamingSink(_directory.FullName);
+            IStreamingSink sink = new FileSystemStreamingSink(_directory.FullName, "p_");
 
-            var act = () => sink.WriteMediaSegment(1, fileName!, [1]);
+            var writeSegment = () => sink.WriteMediaSegment(1, fileName!, [1]);
+            var writeInit = () => sink.WriteInitSegment(fileName!, [1]);
+
+            writeSegment.Should().Throw<ArgumentException>();
+            writeInit.Should().Throw<ArgumentException>();
+            Directory.GetFiles(_directory.Parent!.FullName, "escape.ts").Should().BeEmpty();
+            Directory.EnumerateFileSystemEntries(_directory.FullName).Should().BeEmpty();
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("q_segment_1.ts")]
+        [InlineData("p_../escape.ts")]
+        [InlineData("p_")]
+        public void FileSystemStreamingSink_DeleteMediaSegment_WithAUriItDidNotReturn_Should_Throw(string? uri)
+        {
+            IStreamingSink sink = new FileSystemStreamingSink(_directory.FullName, "p_");
+
+            var act = () => sink.DeleteMediaSegment(1, uri!);
 
             act.Should().Throw<ArgumentException>();
-            Directory.GetFiles(_directory.FullName).Should().BeEmpty();
+        }
+
+        [Theory]
+        [InlineData(SegmentFormat.Fmp4)]
+        [InlineData(SegmentFormat.MpegTs)]
+        public void HlsSegmenter_SinkReturningNoUri_Should_Throw(SegmentFormat format)
+        {
+            var sink = new DelegateStreamingSink(_ => { }, (_, _) => { }, _ => { }, _ => { });
+            var noUriSink = new NoUriSink(sink);
+            var act = () =>
+            {
+                var segmenter = new HlsSegmenter(1, SampleRate, 1, noUriSink, format);
+                AddSeconds(segmenter, 2);
+            };
+
+            act.Should().ThrowExactly<InvalidOperationException>();
+        }
+
+        [Fact]
+        public void HlsSegmenter_PacketMpegTs_WithFilePrefix_Should_ListOnlyFilesThatExist()
+        {
+            var capture = HlsPacketSegmenterTest.FiveSecondCapture();
+            var segmenter = new HlsSegmenter(capture.Demuxer.Tracks!, 2, new FileSystemStreamingSink(_directory.FullName, "ts_"), SegmentFormat.MpegTs);
+
+            capture.Packets.ForEach(segmenter.AddPacket);
+            segmenter.Complete();
+
+            PlaylistUris("ts_playlist.m3u8").Should().Equal("ts_segment_1.ts", "ts_segment_2.ts", "ts_segment_3.ts")
+                .And.OnlyContain(uri => File.Exists(Path.Combine(_directory.FullName, uri)));
         }
 
         [Fact]
@@ -143,6 +193,21 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             {
                 segmenter.AddFrame(new EncodedAudioFrame(new byte[] { 0x21, 0x10 }, SamplesPerFrame, i));
             }
+        }
+
+        private sealed class NoUriSink(IStreamingSink inner) : IStreamingSink
+        {
+            public void WriteInitSegment(ReadOnlySpan<byte> bytes) => inner.WriteInitSegment(bytes);
+
+            public void WriteMediaSegment(long sequenceNumber, ReadOnlySpan<byte> bytes) => inner.WriteMediaSegment(sequenceNumber, bytes);
+
+            public void WritePlaylist(ReadOnlySpan<byte> utf8Bytes) => inner.WritePlaylist(utf8Bytes);
+
+            public void DeleteMediaSegment(long sequenceNumber) => inner.DeleteMediaSegment(sequenceNumber);
+
+            public string WriteInitSegment(string fileName, ReadOnlySpan<byte> bytes) => string.Empty;
+
+            public string WriteMediaSegment(long sequenceNumber, string fileName, ReadOnlySpan<byte> bytes) => string.Empty;
         }
 
         private List<string> PlaylistUris(string playlistFileName) =>
