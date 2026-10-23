@@ -81,8 +81,6 @@ namespace EggEncoder.Streaming.Hls
             }
             else
             {
-                // MPEG-TS carries its own PAT/PMT inside every segment -- no separate init segment
-                // or EXT-X-MAP tag needed (see WritePlaylist).
                 _mpegTsMuxer = new MpegTsMuxer(channels, sampleRate);
             }
         }
@@ -125,10 +123,6 @@ namespace EggEncoder.Streaming.Hls
             WritePlaylist(endList: true);
         }
 
-        // Builds and writes one media segment from _pendingFrames; does NOT write the playlist --
-        // each of this method's two callers writes it afterward with its own correct endList value
-        // (AddFrame: false; Complete: true), rather than writing it here unconditionally and having
-        // Complete immediately overwrite that same write again with the real, final value.
         private void CutSegment()
         {
             var sequenceNumber = _nextSequenceNumber++;
@@ -156,12 +150,6 @@ namespace EggEncoder.Streaming.Hls
         private void WritePlaylist(bool endList)
         {
             var mediaSequence = _segments.Count > 0 ? _segments[0].SequenceNumber : 1;
-
-            // The playlist's own TARGETDURATION must never be shorter than any segment it lists
-            // (RFC 8216 §4.3.3.1) -- since cutting on frame boundaries only can overshoot the
-            // configured target slightly, this tracks the real maximum observed so far rather than
-            // just echoing the configured value back, which a long-enough-running stream could
-            // eventually violate.
             var targetDurationTagValue = (int)Math.Ceiling(Math.Max(_targetDurationSeconds, _maxObservedSegmentDurationSeconds));
             var initSegmentUri = _segmentFormat == SegmentFormat.Fmp4 ? InitSegmentUri : null;
 
