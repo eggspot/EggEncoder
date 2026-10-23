@@ -158,6 +158,7 @@ namespace EggEncoder.Live.Rtmp
                 throw failure;
             }
 
+            _phase = "the publish";
             _state = State.Publishing;
             _receiveLoop = Task.Run(ReceiveLoopAsync, CancellationToken.None);
         }
@@ -542,7 +543,6 @@ namespace EggEncoder.Live.Rtmp
                     return;
                 }
 
-                _phase = "the publish";
                 await FailAsync(Classify(e, timedOut: false, connecting: false) ?? e).ConfigureAwait(false);
             }
         }

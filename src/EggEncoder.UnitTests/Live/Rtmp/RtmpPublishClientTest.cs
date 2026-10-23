@@ -685,6 +685,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             var failure = await ExpectFailureAsync(() => WriteUntilFailureAsync(client, fixture.Packets[1]));
 
             failure.Reason.Should().Be(RtmpClientFailureReason.ConnectionLost);
+            failure.Message.Should().Be("RTMP: the connection was lost during the publish");
             (await client.Invoking(c => c.WriteAsync(fixture.Packets[1]).AsTask()).Should().ThrowAsync<RtmpClientException>()).Which.Should().BeSameAs(failure);
             (await client.Invoking(c => c.CompleteAsync().AsTask()).Should().ThrowAsync<RtmpClientException>()).Which.Should().BeSameAs(failure);
             client.Invoking(c => c.UpdateTracks(fixture.TrackSets[^1])).Should().Throw<RtmpClientException>().Which.Should().BeSameAs(failure);
@@ -708,6 +709,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             });
 
             failure.Reason.Should().Be(RtmpClientFailureReason.Timeout);
+            failure.Message.Should().Be("RTMP: the publish timed out");
         }
 
         [Fact]
