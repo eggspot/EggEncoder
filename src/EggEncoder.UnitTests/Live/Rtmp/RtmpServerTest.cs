@@ -220,10 +220,25 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             var s0s1s2 = new byte[1 + (2 * RtmpHandshake.PacketLength)];
             await network.ReadExactlyAsync(s0s1s2);
             s0s1s2[0].Should().Be(RtmpHandshake.Version);
+            // The server ends the publish and closes the connection on FCUnpublish, but the capture
+            // still holds ffmpeg's trailing deleteStream. Closing with those bytes unread resets the
+            // connection, so a slow (1-byte) replay can fail writing them -- reliably on Windows. A
+            // write failure is expected only from FCUnpublish on; the packet check below still
+            // proves every media message arrived.
+            var fcUnpublishOffset = capture.AsSpan().LastIndexOf("FCUnpublish"u8);
+            fcUnpublishOffset.Should().BePositive();
             for (var offset = C0C1; offset < capture.Length;)
             {
                 var length = Math.Min(writeSize, capture.Length - offset);
-                await network.WriteAsync(capture.AsMemory(offset, length));
+                try
+                {
+                    await network.WriteAsync(capture.AsMemory(offset, length));
+                }
+                catch (IOException) when (offset + length > fcUnpublishOffset)
+                {
+                    break;
+                }
+
                 offset += length;
             }
 
