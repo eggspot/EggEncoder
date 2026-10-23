@@ -23,18 +23,10 @@ namespace EggEncoder.Containers.Flv
     /// </remarks>
     public sealed class FlvWriter : IMediaPacketSink, IDisposable
     {
-        private const int MaxCompositionTime = (1 << 23) - 1;
-        private const int MinCompositionTime = -(1 << 23);
-
-        // SoundFormat 10, and the rate/size/type bits the specification says AAC always sets
-        // (44 kHz, 16-bit, stereo); the real values are in the AudioSpecificConfig.
-        private const byte AacHeaderByte = FlvTagBodyParser.SoundFormatAac << 4 | 3 << 2 | 1 << 1 | 1;
-
         private readonly Stream _destination;
         private readonly bool _leaveOpen;
         private readonly FlvMetadata? _metadata;
-        private readonly Dictionary<int, MediaTrackInfo> _tracks = [];
-        private readonly Dictionary<int, int> _writtenConfigVersions = [];
+        private readonly FlvTagMuxer _muxer;
         private byte[] _scratch = new byte[64 * 1024];
         private bool _opened;
         private bool _completed;
@@ -54,6 +46,7 @@ namespace EggEncoder.Containers.Flv
             _destination = destination;
             _leaveOpen = leaveOpen;
             _metadata = metadata;
+            _muxer = new FlvTagMuxer(WriteTag);
         }
 
         /// <summary>Writes the file header and <c>onMetaData</c> for these tracks.</summary>
@@ -68,8 +61,7 @@ namespace EggEncoder.Containers.Flv
                 throw new InvalidOperationException("The writer is already open");
             }
 
-            SetTracks(tracks);
-            // Encoded before anything is written, so invalid metadata leaves the destination untouched.
+            _muxer.SetTracks(tracks);
             var metadata = _metadata ?? FlvMetadata.FromTracks(tracks);
             var metadataBody = Amf0Writer.Encode(Amf0Value.FromString("onMetaData"), Amf0Value.FromEcmaArray(metadata.Properties));
             var flags = (byte)0;
@@ -81,7 +73,7 @@ namespace EggEncoder.Containers.Flv
             Span<byte> header = [(byte)'F', (byte)'L', (byte)'V', 1, flags, 0, 0, 0, (byte)FlvDemuxer.FileHeaderSize, 0, 0, 0, 0];
             _destination.Write(header);
             _opened = true;
-            WriteTag(FlvTagType.ScriptData, 0, metadataBody);
+            WriteTag(FlvTagType.ScriptData, 0, metadataBody, ReadOnlySpan<byte>.Empty);
         }
 
         /// <summary>
@@ -96,15 +88,7 @@ namespace EggEncoder.Containers.Flv
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(tracks);
             ThrowIfNotWritable();
-            foreach (var track in tracks.Tracks)
-            {
-                if (_tracks.TryGetValue(track.TrackId, out var existing) && existing.Kind != track.Kind)
-                {
-                    throw new ArgumentException($"Track {track.TrackId} was opened as a {existing.Kind} track, not {track.Kind}", nameof(tracks));
-                }
-            }
-
-            SetTracks(tracks);
+            _muxer.UpdateTracks(tracks);
         }
 
         /// <summary>Writes one packet, preceded by its track's sequence header when that hasn't been written for this configuration yet.</summary>
@@ -114,53 +98,7 @@ namespace EggEncoder.Containers.Flv
         {
             ThrowIfDisposed();
             ThrowIfNotWritable();
-            if (!_tracks.TryGetValue(packet.TrackId, out var track))
-            {
-                throw new ArgumentException($"Packet track {packet.TrackId} is not in the open track set", nameof(packet));
-            }
-
-            if (packet.ConfigVersion != track.ConfigVersion)
-            {
-                throw new ArgumentException($"Packet config version {packet.ConfigVersion} is not track {track.TrackId}'s current version {track.ConfigVersion}; call UpdateTracks first", nameof(packet));
-            }
-
-            var dts = MediaTimestamp.Rescale(packet.Dts, track.Timescale, FlvDemuxer.Timescale);
-            if (dts < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(packet), packet.Dts, "FLV timestamps must not be negative");
-            }
-
-            var compositionTime = MediaTimestamp.Rescale(packet.Pts, track.Timescale, FlvDemuxer.Timescale) - dts;
-            if (compositionTime is < MinCompositionTime or > MaxCompositionTime)
-            {
-                throw new ArgumentOutOfRangeException(nameof(packet), compositionTime, "The composition offset does not fit FLV's signed 24-bit field");
-            }
-
-            if (track.Kind == MediaKind.Audio && compositionTime != 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(packet), compositionTime, "An audio packet's PTS must equal its DTS");
-            }
-
-            if (track.Codec is MediaCodec.Av1 or MediaCodec.Vp9 && compositionTime != 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(packet), compositionTime, $"FLV carries no composition time for {track.Codec}");
-            }
-
-            var timestamp = unchecked((uint)dts);
-            if (!_writtenConfigVersions.TryGetValue(track.TrackId, out var written) || written != track.ConfigVersion)
-            {
-                WriteSequenceHeader(track, timestamp);
-                _writtenConfigVersions[track.TrackId] = track.ConfigVersion;
-            }
-
-            if (track.Kind == MediaKind.Video)
-            {
-                WriteVideoFrame(track, packet, (int)compositionTime, timestamp);
-            }
-            else
-            {
-                WriteAudioFrame(track, packet.Payload.Span, timestamp);
-            }
+            _muxer.Write(packet);
         }
 
         /// <summary>Ends the file and flushes the destination. Further writes throw.</summary>
@@ -217,144 +155,6 @@ namespace EggEncoder.Containers.Flv
             Dispose();
             return ValueTask.CompletedTask;
         }
-
-        // The legacy CodecID for H.264, and the FourCC (as a number, as ffmpeg writes it) for the
-        // Enhanced-FLV codecs: what onMetaData's videocodecid carries.
-        internal static int GetVideoCodecId(MediaCodec codec) => codec switch
-        {
-            MediaCodec.H264 => FlvTagBodyParser.VideoCodecAvc,
-            MediaCodec.H265 => (int)FlvTagBodyParser.FourCcHvc1,
-            MediaCodec.Av1 => (int)FlvTagBodyParser.FourCcAv01,
-            MediaCodec.Vp9 => (int)FlvTagBodyParser.FourCcVp09,
-            _ => throw new NotSupportedException($"FLV cannot carry {codec} video")
-        };
-
-        internal static int GetSoundFormat(MediaCodec codec) => codec switch
-        {
-            MediaCodec.Aac => FlvTagBodyParser.SoundFormatAac,
-            MediaCodec.Mp3 => FlvTagBodyParser.SoundFormatMp3,
-            _ => throw new NotSupportedException($"FLV cannot carry {codec} audio")
-        };
-
-        private void SetTracks(MediaTrackSet tracks)
-        {
-            var audio = 0;
-            var video = 0;
-            foreach (var track in tracks.Tracks)
-            {
-                // MP3 is the only carried codec with no configuration record; an empty one for any
-                // other would be written as a sequence header no demuxer can use.
-                if (track.Codec != MediaCodec.Mp3 && track.Kind != MediaKind.Data && track.CodecConfiguration.IsEmpty)
-                {
-                    throw new ArgumentException($"Track {track.TrackId} ({track.Codec}) has no codec configuration", nameof(tracks));
-                }
-
-                switch (track.Kind)
-                {
-                    case MediaKind.Audio:
-                        GetSoundFormat(track.Codec);
-                        audio++;
-                        break;
-                    case MediaKind.Video:
-                        GetVideoCodecId(track.Codec);
-                        video++;
-                        break;
-                    default:
-                        throw new NotSupportedException("FLV cannot carry a data track");
-                }
-            }
-
-            if (audio > 1 || video > 1)
-            {
-                throw new NotSupportedException("FLV carries at most one audio and one video track");
-            }
-
-            _tracks.Clear();
-            foreach (var track in tracks.Tracks)
-            {
-                _tracks[track.TrackId] = track;
-            }
-        }
-
-        private void WriteSequenceHeader(MediaTrackInfo track, uint timestamp)
-        {
-            switch (track.Codec)
-            {
-                case MediaCodec.Mp3:
-                    return; // MP3 has no configuration record.
-                case MediaCodec.Aac:
-                    WriteTag(FlvTagType.Audio, timestamp, [AacHeaderByte, 0], track.CodecConfiguration.Span);
-                    return;
-                case MediaCodec.H264:
-                    WriteTag(FlvTagType.Video, timestamp, [FlvTagBodyParser.FrameTypeKeyframe << 4 | FlvTagBodyParser.VideoCodecAvc, 0, 0, 0, 0], track.CodecConfiguration.Span);
-                    return;
-                default:
-                    Span<byte> header = stackalloc byte[5];
-                    WriteExVideoHeader(header, FlvTagBodyParser.FrameTypeKeyframe, FlvTagBodyParser.ExPacketSequenceStart, track.Codec);
-                    WriteTag(FlvTagType.Video, timestamp, header, track.CodecConfiguration.Span);
-                    return;
-            }
-        }
-
-        private void WriteAudioFrame(MediaTrackInfo track, ReadOnlySpan<byte> payload, uint timestamp)
-        {
-            if (track.Codec == MediaCodec.Aac)
-            {
-                WriteTag(FlvTagType.Audio, timestamp, [AacHeaderByte, 1], payload);
-                return;
-            }
-
-            var format = track.SampleRate == 8000 ? FlvTagBodyParser.SoundFormatMp3_8Khz : FlvTagBodyParser.SoundFormatMp3;
-            var rateIndex = track.SampleRate switch { >= 44100 => 3, >= 22050 => 2, >= 11025 => 1, _ => 0 };
-            var stereo = track.Channels == 1 ? 0 : 1;
-            WriteTag(FlvTagType.Audio, timestamp, [(byte)(format << 4 | rateIndex << 2 | 1 << 1 | stereo)], payload);
-        }
-
-        private void WriteVideoFrame(MediaTrackInfo track, MediaPacket packet, int compositionTime, uint timestamp)
-        {
-            var frameType = packet.IsKeyframe ? FlvTagBodyParser.FrameTypeKeyframe : FlvTagBodyParser.FrameTypeInterframe;
-            Span<byte> header = stackalloc byte[8];
-            int headerLength;
-            if (track.Codec == MediaCodec.H264)
-            {
-                header[0] = (byte)(frameType << 4 | FlvTagBodyParser.VideoCodecAvc);
-                header[1] = 1;
-                WriteSignedInt24(header[2..], compositionTime);
-                headerLength = 5;
-            }
-            else if (track.Codec == MediaCodec.H265 && compositionTime != 0)
-            {
-                WriteExVideoHeader(header, frameType, FlvTagBodyParser.ExPacketCodedFrames, track.Codec);
-                WriteSignedInt24(header[5..], compositionTime);
-                headerLength = 8;
-            }
-            else
-            {
-                // HEVC with no composition offset uses CodedFramesX (no offset field), as ffmpeg does;
-                // AV1 and VP9 CodedFrames carry no offset field at all.
-                var packetType = track.Codec == MediaCodec.H265 ? FlvTagBodyParser.ExPacketCodedFramesX : FlvTagBodyParser.ExPacketCodedFrames;
-                WriteExVideoHeader(header, frameType, packetType, track.Codec);
-                headerLength = 5;
-            }
-
-            WriteTag(FlvTagType.Video, timestamp, header[..headerLength], packet.Payload.Span);
-        }
-
-        private static void WriteExVideoHeader(Span<byte> header, int frameType, int packetType, MediaCodec codec)
-        {
-            header[0] = (byte)(0x80 | frameType << 4 | packetType);
-            BinaryPrimitives.WriteUInt32BigEndian(header[1..], (uint)GetVideoCodecId(codec));
-        }
-
-        private static void WriteSignedInt24(Span<byte> destination, int value)
-        {
-            destination[0] = (byte)(value >> 16);
-            destination[1] = (byte)(value >> 8);
-            destination[2] = (byte)value;
-        }
-
-        private void WriteTag(FlvTagType type, uint timestamp, ReadOnlySpan<byte> body) =>
-            WriteTag(type, timestamp, body, ReadOnlySpan<byte>.Empty);
 
         private void WriteTag(FlvTagType type, uint timestamp, ReadOnlySpan<byte> bodyHeader, ReadOnlySpan<byte> bodyPayload)
         {

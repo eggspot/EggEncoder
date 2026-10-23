@@ -65,7 +65,7 @@ namespace EggEncoder.Containers.Flv
                         properties.Add(Number("height", track.Height));
                     }
 
-                    properties.Add(Number("videocodecid", FlvWriter.GetVideoCodecId(track.Codec)));
+                    properties.Add(Number("videocodecid", FlvTagMuxer.GetVideoCodecId(track.Codec)));
                 }
                 else if (track.Kind == MediaKind.Audio)
                 {
@@ -79,7 +79,7 @@ namespace EggEncoder.Containers.Flv
                         properties.Add(new("stereo", Amf0Value.FromBoolean(track.Channels > 1)));
                     }
 
-                    properties.Add(Number("audiocodecid", FlvWriter.GetSoundFormat(track.Codec)));
+                    properties.Add(Number("audiocodecid", FlvTagMuxer.GetSoundFormat(track.Codec)));
                 }
             }
 
