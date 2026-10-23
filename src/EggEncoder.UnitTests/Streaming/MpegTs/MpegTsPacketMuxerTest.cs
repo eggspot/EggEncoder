@@ -410,6 +410,18 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         }
 
         [Fact]
+        public void BuildSegment_JumpTooLongToBridge_On_Another_Pid_Should_Move_The_Pcr_To_The_New_Timeline()
+        {
+            var muxer = new MpegTsMuxer(new MediaTrackSet([VideoTrack(), AudioTrack()]));
+
+            var ts = ReadPackets(muxer.BuildSegment([Video(0, key: true), Audio(0), Audio(20000), Audio(20050)]));
+
+            var pcrOnly = ts.Where(p => p.AdaptationFieldControl == 0x2).ToList();
+            pcrOnly.Select(p => p.Pcr!.Value / 300).Should().Equal((20000 * 90) - PcrDelay90k);
+            AssertPcrNeverPassesALaterDts(ts);
+        }
+
+        [Fact]
         public void BuildSegment_DtsRoundingToTheSame90kHzTick_Should_Throw()
         {
             // 5 us is 0.45 ticks of 90 kHz: both DTS would be written as 0 on one PID.

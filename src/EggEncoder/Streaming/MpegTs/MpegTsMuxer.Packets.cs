@@ -153,22 +153,22 @@ namespace EggEncoder.Streaming.MpegTs
             // Work out the PCR plan first, so the output can be sized exactly. A PES's PCR is
             // max(0, DTS - 700 ms), never below the last one. When that is more than 100 ms past
             // the last PCR, PCR-only packets 100 ms apart bridge the gap first; a PES on another
-            // PID that opens the segment also gets one at its own PCR.
+            // PID that opens the segment, or that follows a jump too long to bridge, also gets one
+            // at its own PCR.
             var lastPcr = _lastPcr;
             var totalPacketCount = PsiPacketCount(PatPayload.Length) + PsiPacketCount(_packetModePmt.Length);
             for (var i = 0; i < units.Count; i++)
             {
                 var unit = units[i];
                 var pcr = Math.Max(lastPcr ?? 0, Math.Max(0, unit.Dts90k - PcrDelayTicks));
+                var jumped = false;
                 if (lastPcr is { } last && pcr - last > MaxPcrIntervalTicks)
                 {
                     var bridgeCount = (pcr - last - 1) / MaxPcrIntervalTicks;
-                    if (bridgeCount <= MaxPcrBridgePackets)
+                    jumped = bridgeCount > MaxPcrBridgePackets;
+                    for (var k = 1; !jumped && k <= bridgeCount; k++)
                     {
-                        for (var k = 1; k <= bridgeCount; k++)
-                        {
-                            unit.PcrOnlyPackets.Add(last + (k * MaxPcrIntervalTicks));
-                        }
+                        unit.PcrOnlyPackets.Add(last + (k * MaxPcrIntervalTicks));
                     }
                 }
 
@@ -176,8 +176,10 @@ namespace EggEncoder.Streaming.MpegTs
                 {
                     unit.Pcr = pcr;
                 }
-                else if (i == 0 || lastPcr is null)
+                else if (i == 0 || lastPcr is null || jumped)
                 {
+                    // Also after a jump: the clock moves to the new timeline right away, rather
+                    // than every later PES seeing the same unbridgeable gap until the PCR PID's next.
                     unit.PcrOnlyPackets.Add(pcr);
                 }
 
