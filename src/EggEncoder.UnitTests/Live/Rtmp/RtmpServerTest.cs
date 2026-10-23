@@ -47,7 +47,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
 
         internal static async Task<RtmpServer> StartAsync(RtmpServerOptions options)
         {
-            options.EndPoint.Port.Should().NotBe(RtmpServerOptions.DefaultPort,
+            options.EndPoint.Port.Should().Be(0,
                 "test processes for each target framework run in parallel and would race for a fixed port");
             var server = new RtmpServer(options);
             await server.StartAsync();
@@ -733,7 +733,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         }
 
         [Fact]
-        public void AcceptAll_GivenOptionsWithTheDefaultEndPoint_Should_Listen_On_A_Free_Loopback_Port()
+        public void AcceptAll_GivenOptionsWithTheDefaultEndPoint_Should_Use_Loopback_Port_Zero()
         {
             var options = AcceptAll(new RtmpServerOptions { MaxConnections = 1 });
 
