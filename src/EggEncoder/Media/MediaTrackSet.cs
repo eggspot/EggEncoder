@@ -59,5 +59,39 @@ namespace EggEncoder.Media
 
             return null;
         }
+
+        internal void RequireSameTrackLayout(MediaTrackSet updated, string parameterName)
+        {
+            ArgumentNullException.ThrowIfNull(updated, parameterName);
+            if (updated.Tracks.Count != Tracks.Count)
+            {
+                throw new ArgumentException($"The updated set has {updated.Tracks.Count} tracks; the current one has {Tracks.Count}. Restart the rendition to add or remove a track.", parameterName);
+            }
+
+            for (var i = 0; i < Tracks.Count; i++)
+            {
+                var current = Tracks[i];
+                var next = updated.Tracks[i];
+                if (next.TrackId != current.TrackId)
+                {
+                    throw new ArgumentException($"Track {i} of the updated set has id {next.TrackId}; the current one has {current.TrackId}. Restart the rendition to reorder or renumber tracks.", parameterName);
+                }
+
+                if (next.Kind != current.Kind || next.Codec != current.Codec)
+                {
+                    throw new ArgumentException($"Track {current.TrackId} changed from {current.Kind} {current.Codec} to {next.Kind} {next.Codec}; restart the rendition to change a track's kind or codec.", parameterName);
+                }
+
+                if (next.Timescale != current.Timescale)
+                {
+                    throw new ArgumentException($"Track {current.TrackId} changed timescale from {current.Timescale} to {next.Timescale}; restart the rendition to change a timescale.", parameterName);
+                }
+
+                if (next.ConfigVersion == current.ConfigVersion && !next.CodecConfiguration.Span.SequenceEqual(current.CodecConfiguration.Span))
+                {
+                    throw new ArgumentException($"Track {current.TrackId} has new codec configuration bytes under the same config version {current.ConfigVersion}; a changed configuration needs a new ConfigVersion.", parameterName);
+                }
+            }
+        }
     }
 }

@@ -69,6 +69,16 @@ namespace EggEncoder.Streaming.Hls
             return ValueTask.CompletedTask;
         }
 
+        /// <summary>
+        /// Switches to a new configuration of the same tracks, as
+        /// <see cref="HlsSegmenter.UpdateTracks"/> describes: call it when a source reports new
+        /// tracks (a new sequence header), before writing their packets. Synchronous, like
+        /// <see cref="Containers.Flv.FlvWriter.UpdateTracks"/>; nothing is written until the next packet.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The sink isn't open yet, or is already complete.</exception>
+        /// <exception cref="ArgumentException">The update is rejected, as <see cref="HlsSegmenter.UpdateTracks"/> describes.</exception>
+        public void UpdateTracks(MediaTrackSet tracks) => OpenSegmenter().UpdateTracks(tracks);
+
         /// <inheritdoc />
         /// <exception cref="InvalidOperationException">The sink isn't open yet.</exception>
         public ValueTask CompleteAsync(CancellationToken cancellationToken = default)

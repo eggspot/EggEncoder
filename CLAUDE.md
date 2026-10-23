@@ -200,7 +200,7 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
 demux/mux, the RTMP protocol core, the RTMP ingest server, video tracks in the fMP4 writers and the MPEG-TS
-muxer, and packet-driven HLS are done; still open: mid-stream config changes in HLS (item 5d), RTMP client incl. RTMPS push, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+muxer, and packet-driven HLS with mid-stream config changes are done; still open: RTMP client incl. RTMPS push, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.
@@ -265,7 +265,7 @@ defaults every network-facing item must meet.
   `FileSystemStreamingSink` (a directory on disk, `init.mp4`/`segment_{n}.m4s`/`playlist.m3u8`, an
   optional file-name prefix for multi-rendition use), `InMemoryStreamingSink` (no filesystem at all
   -- the primary vehicle for this surface's own tests), and `DelegateStreamingSink` (four
-  constructor-supplied delegates, one per interface member -- the concrete answer to "a user
+  constructor-supplied delegates, one per interface member, or five with named init segments -- the concrete answer to "a user
   callback for HTTP/S3 upload" without writing a full class). The segmenter names each file
   (`init.mp4`, `segment_{n}.m4s` or `segment_{n}.ts`, by segment format) and calls the
   default-interface-method overloads `WriteInitSegment(fileName, bytes)`/`WriteMediaSegment(n,
@@ -274,8 +274,15 @@ defaults every network-facing item must meet.
   overrides them to write `{prefix}{fileName}` and return that, so `.ts` segments and prefixed
   renditions in one directory get playlists whose URIs exist (it used to write `.m4s` for every
   format and list unprefixed URIs; fixed in PR #150). It rejects a file name or URI with a directory part, so
-  no call writes or deletes outside its directory. Live plan item 5d's versioned
-  init segments build on these overloads.
+  no call writes or deletes outside its directory. After a configuration change
+  (`HlsSegmenter.UpdateTracks`, live plan item 5d) the segmenter writes `init_2.mp4`, `init_3.mp4`
+  and so on through the named overload, and in live mode calls the default-interface method
+  `DeleteInitSegment(uri)` (default: no-op) once no segment left in the window needs an init
+  segment; `FileSystemStreamingSink` deletes the file (same URI checks as `DeleteMediaSegment`),
+  `InMemoryStreamingSink` keeps every named init in `InitSegments` (`InitSegment` is the latest),
+  and `DelegateStreamingSink` has a second constructor whose init delegate receives the file name,
+  plus an `onDeleteInitSegment` delegate (the original four-delegate constructor can't tell
+  versioned inits apart).
 - `Streaming.Hls.HlsSegmenter`/`M3u8PlaylistWriter`/`HlsSegmentDescriptor` (`Streaming/Hls/`).
   `HlsSegmenter.AddFrame` takes an `EncodedAudioFrame` directly (copying `Payload` into
   its own accumulating list internally), so a caller wires `AacStreamingEncoder.Create(..., frame =>
@@ -352,10 +359,27 @@ defaults every network-facing item must meet.
   (track, `ConfigVersion`, DTS >= 0, PTS >= DTS, DTS increasing) throw before a packet is added;
   a container rejection or a sink exception at a cut discards that segment (a failed sink write uses
   no sequence number), rethrows from that call, and the next segment still starts at the cut point
-  (found by the independent review in PR #149); `Complete` writes `EXT-X-ENDLIST` before rethrowing. Mid-stream
-  configuration changes (new init segment + `EXT-X-DISCONTINUITY`, which needs an `IStreamingSink`
-  extension for versioned init segments) are item 5d. `HlsMediaPacketSink` is the
-  `IMediaPacketSink` wrapper (builds the segmenter in `OpenAsync`; synchronous inside), and
+  (found by the independent review in PR #149); `Complete` writes `EXT-X-ENDLIST` before rethrowing. **Configuration
+  changes** (item 5d, PR #151): `UpdateTracks(MediaTrackSet)` takes the same track ids in the same
+  order, each with its kind, codec and timescale unchanged (else `ArgumentException`: restart the
+  rendition), and rejects new codec configuration bytes under an unchanged `ConfigVersion`; a set
+  with every version unchanged is a no-op, and the new set is validated against the container up
+  front. It writes nothing: the next `AddPacket` (validated against the new set) ends the pending
+  segment, measured like the final one, then waits for the next cut point as at stream start
+  (dropped packets counted in `DroppedLeadingPacketCount`). The segment starting there gets
+  `EXT-X-DISCONTINUITY` (unless it's the first) and, for fMP4, a new `init_N.mp4` written just before
+  it (a sink failure there discards that segment, and the next cut retries the same name) and listed
+  with `EXT-X-MAP`; DTS must keep increasing (no rebasing). `FmpMediaSegmentWriter.UpdateTracks`/
+  `MpegTsMuxer.UpdateTracks` (shared layout check `MediaTrackSet.RequireSameTrackLayout`, internal)
+  swap the per-track configuration while keeping the sequence number, decode-time state, PIDs,
+  PMT, continuity counters and PCR. `HlsSegmentDescriptor` gained init-only `Discontinuity`/
+  `InitSegmentUri`, and `M3u8PlaylistWriter.BuildMediaPlaylist` an overload taking
+  `discontinuitySequence` (written as `EXT-X-DISCONTINUITY-SEQUENCE` only when > 0, incremented as
+  flagged segments leave a live window; existing output is byte-identical). An update not yet
+  applied when `Complete` runs is dropped; the master playlist's `CODECS` isn't rewritten.
+  `HlsMediaPacketSink` is the
+  `IMediaPacketSink` wrapper (builds the segmenter in `OpenAsync`; synchronous inside; its own
+  `UpdateTracks` forwards, since `IMediaPacketSink` has no track-update member), and
   `M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)` derives `CODECS` from the avcC/hvcC SPS
   and the AudioSpecificConfig object type. Fixture: `Streaming/Hls/h264_aac_5s.flv` (ffmpeg 9.0.2,
   x264 1 s GOPs with B-frames + AAC); the `EGGENCODER_FFMPEG_ORACLE=1`-gated test runs `ffprobe` and

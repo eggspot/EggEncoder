@@ -4,7 +4,8 @@ namespace EggEncoder.Streaming
     /// Writes an HLS output to a directory on disk: <c>{prefix}playlist.m3u8</c>, overwritten each
     /// time <see cref="WritePlaylist"/> is called, next to the init and media segments under the
     /// names <see cref="Hls.HlsSegmenter"/> chooses, prefixed (<c>{prefix}init.mp4</c>,
-    /// <c>{prefix}segment_{n}.m4s</c> or <c>{prefix}segment_{n}.ts</c>). The URIs it returns for the
+    /// <c>{prefix}segment_{n}.m4s</c> or <c>{prefix}segment_{n}.ts</c>, and <c>{prefix}init_2.mp4</c> and
+    /// so on after a configuration change). The URIs it returns for the
     /// playlist are those prefixed names, relative to the playlist, so several renditions can share
     /// one directory. The unnamed overloads write <c>{prefix}init.mp4</c> and
     /// <c>{prefix}segment_{n}.m4s</c>. The directory must already exist.
@@ -43,7 +44,11 @@ namespace EggEncoder.Streaming
 
         public string WriteMediaSegment(long sequenceNumber, string fileName, ReadOnlySpan<byte> bytes) => WriteFile(fileName, bytes);
 
-        public void DeleteMediaSegment(long sequenceNumber, string uri)
+        public void DeleteMediaSegment(long sequenceNumber, string uri) => DeleteReturnedUri(uri);
+
+        public void DeleteInitSegment(string uri) => DeleteReturnedUri(uri);
+
+        private void DeleteReturnedUri(string uri)
         {
             ArgumentNullException.ThrowIfNull(uri);
             if (!uri.StartsWith(_filePrefix, StringComparison.Ordinal))

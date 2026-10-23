@@ -27,16 +27,44 @@ namespace EggEncoder.Streaming.Hls
         /// </param>
         /// <param name="mediaSequence"><c>EXT-X-MEDIA-SEQUENCE</c> -- the sequence number of the first segment still listed.</param>
         /// <param name="segments">In playback order; empty is valid (a not-yet-started live playlist, or a VOD stream with no content).</param>
-        /// <param name="initSegmentUri"><c>EXT-X-MAP</c>'s own URI, or <c>null</c> to omit the tag entirely (a non-fMP4 segment format needs none).</param>
+        /// <param name="initSegmentUri"><c>EXT-X-MAP</c>'s own URI, or <c>null</c> to omit the tag (a non-fMP4 segment format needs none). A segment that names its own <see cref="HlsSegmentDescriptor.InitSegmentUri"/>, or is flagged <see cref="HlsSegmentDescriptor.Discontinuity"/>, gets its tags as the other overload describes.</param>
         /// <param name="endList">Writes <c>EXT-X-ENDLIST</c> when true -- a VOD playlist, or a live one whose broadcast has ended. Never true for an in-progress live playlist.</param>
         public static string BuildMediaPlaylist(
             int targetDurationSeconds,
             long mediaSequence,
             IReadOnlyList<HlsSegmentDescriptor> segments,
             string? initSegmentUri,
+            bool endList) =>
+            BuildMediaPlaylist(targetDurationSeconds, mediaSequence, discontinuitySequence: 0, segments, initSegmentUri, endList);
+
+        /// <summary>
+        /// The same playlist, for a stream whose encoding parameters change: writes
+        /// <c>EXT-X-DISCONTINUITY</c> before every segment flagged
+        /// <see cref="HlsSegmentDescriptor.Discontinuity"/>, and <c>EXT-X-MAP</c> again before every
+        /// segment whose <see cref="HlsSegmentDescriptor.InitSegmentUri"/> differs from the init
+        /// segment in effect (RFC 8216 §4.3.2.5).
+        /// </summary>
+        /// <param name="targetDurationSeconds"><c>EXT-X-TARGETDURATION</c>, as in the other overload.</param>
+        /// <param name="mediaSequence"><c>EXT-X-MEDIA-SEQUENCE</c>, as in the other overload.</param>
+        /// <param name="discontinuitySequence">
+        /// <c>EXT-X-DISCONTINUITY-SEQUENCE</c>: how many <c>EXT-X-DISCONTINUITY</c> tags have left a
+        /// live window so far (RFC 8216 §6.2.2). Written only when it isn't 0, the value a playlist
+        /// without the tag implies; must not be negative.
+        /// </param>
+        /// <param name="segments">In playback order; empty is valid.</param>
+        /// <param name="initSegmentUri">The init segment in effect for the first listed segment (a segment's own <see cref="HlsSegmentDescriptor.InitSegmentUri"/> overrides it), or <c>null</c> to omit <c>EXT-X-MAP</c> until a segment names one.</param>
+        /// <param name="endList">Writes <c>EXT-X-ENDLIST</c> when true.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="discontinuitySequence"/> is negative.</exception>
+        public static string BuildMediaPlaylist(
+            int targetDurationSeconds,
+            long mediaSequence,
+            long discontinuitySequence,
+            IReadOnlyList<HlsSegmentDescriptor> segments,
+            string? initSegmentUri,
             bool endList)
         {
             ArgumentNullException.ThrowIfNull(segments);
+            ArgumentOutOfRangeException.ThrowIfNegative(discontinuitySequence);
 
             var text = new StringBuilder();
 
@@ -44,14 +72,30 @@ namespace EggEncoder.Streaming.Hls
             text.Append("#EXT-X-VERSION:").Append(Version).Append('\n');
             text.Append("#EXT-X-TARGETDURATION:").Append(targetDurationSeconds).Append('\n');
             text.Append("#EXT-X-MEDIA-SEQUENCE:").Append(mediaSequence).Append('\n');
-
-            if (initSegmentUri is not null)
+            if (discontinuitySequence > 0)
             {
-                text.Append("#EXT-X-MAP:URI=\"").Append(initSegmentUri).Append("\"\n");
+                text.Append("#EXT-X-DISCONTINUITY-SEQUENCE:").Append(discontinuitySequence).Append('\n');
+            }
+
+            var currentInitSegmentUri = initSegmentUri;
+            if (currentInitSegmentUri is not null)
+            {
+                AppendMap(text, currentInitSegmentUri);
             }
 
             foreach (var segment in segments)
             {
+                if (segment.Discontinuity)
+                {
+                    text.Append("#EXT-X-DISCONTINUITY\n");
+                }
+
+                if (segment.InitSegmentUri is { } segmentInitUri && segmentInitUri != currentInitSegmentUri)
+                {
+                    AppendMap(text, segmentInitUri);
+                    currentInitSegmentUri = segmentInitUri;
+                }
+
                 text.Append("#EXTINF:").Append(segment.DurationSeconds.ToString("0.000000", CultureInfo.InvariantCulture)).Append(",\n");
                 text.Append(segment.Uri).Append('\n');
             }
@@ -63,5 +107,8 @@ namespace EggEncoder.Streaming.Hls
 
             return text.ToString();
         }
+
+        private static void AppendMap(StringBuilder text, string initSegmentUri) =>
+            text.Append("#EXT-X-MAP:URI=\"").Append(initSegmentUri).Append("\"\n");
     }
 }

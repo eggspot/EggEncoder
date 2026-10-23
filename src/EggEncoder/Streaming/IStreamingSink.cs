@@ -56,5 +56,16 @@ namespace EggEncoder.Streaming
         /// <see cref="DeleteMediaSegment(long)"/>.
         /// </summary>
         void DeleteMediaSegment(long sequenceNumber, string uri) => DeleteMediaSegment(sequenceNumber);
+
+        /// <summary>
+        /// Called in live mode for an init segment that no segment left in the sliding window
+        /// needs any more (one replaced by a configuration change, see
+        /// <see cref="Hls.HlsSegmenter.UpdateTracks"/>), with the URI
+        /// <see cref="WriteInitSegment(string, ReadOnlySpan{byte})"/> returned for it. Never called
+        /// in VOD mode. The default does nothing.
+        /// </summary>
+        void DeleteInitSegment(string uri)
+        {
+        }
     }
 }

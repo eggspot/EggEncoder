@@ -41,6 +41,7 @@ namespace EggEncoder.Streaming.Mp4
 
         private readonly PacketTrack[]? _packetTracks;
         private readonly Dictionary<int, PacketTrack>? _packetTracksById;
+        private MediaTrackSet? _tracks;
 
         private uint _nextSequenceNumber = 1;
         private long _cumulativeSampleCount;
@@ -66,16 +67,52 @@ namespace EggEncoder.Streaming.Mp4
                 throw new ArgumentException("A packet-mode writer needs at least one track.", nameof(tracks));
             }
 
-            _packetTracks = new PacketTrack[tracks.Tracks.Count];
-            _packetTracksById = [];
-            for (var i = 0; i < _packetTracks.Length; i++)
+            _packetTracks = CreatePacketTracks(tracks);
+            _packetTracksById = _packetTracks.ToDictionary(t => t.Info.TrackId);
+            _tracks = tracks;
+        }
+
+        /// <summary>
+        /// Switches to a new configuration of the same tracks (a new SPS, a new AudioSpecificConfig)
+        /// for every segment built after this call; pair it with a new init segment from
+        /// <see cref="FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)"/> for the same set. The
+        /// <c>sequence_number</c> and each track's decode-time state carry on, so DTS must keep
+        /// increasing across the change. Packets must then carry the new
+        /// <see cref="MediaTrackInfo.ConfigVersion"/>s. A call that throws leaves the writer unchanged.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="tracks"/> doesn't hold the same track ids in the same order, each with its kind, codec and timescale unchanged; or a track's codec configuration bytes changed without a new <see cref="MediaTrackInfo.ConfigVersion"/>; or a track is rejected the way <see cref="FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)"/> rejects it.</exception>
+        /// <exception cref="InvalidOperationException">This writer was built for frames (the parameterless constructor).</exception>
+        public void UpdateTracks(MediaTrackSet tracks)
+        {
+            if (_packetTracks is null || _packetTracksById is null || _tracks is null)
+            {
+                throw new InvalidOperationException("This writer was built for Mp4EncodedFrames; construct it with a MediaTrackSet to update its tracks.");
+            }
+
+            _tracks.RequireSameTrackLayout(tracks, nameof(tracks));
+            var updated = CreatePacketTracks(tracks);
+            for (var i = 0; i < updated.Length; i++)
+            {
+                updated[i].LastDts = _packetTracks[i].LastDts;
+                updated[i].LastDuration = _packetTracks[i].LastDuration;
+                _packetTracks[i] = updated[i];
+                _packetTracksById[updated[i].Info.TrackId] = updated[i];
+            }
+
+            _tracks = tracks;
+        }
+
+        private static PacketTrack[] CreatePacketTracks(MediaTrackSet tracks)
+        {
+            var packetTracks = new PacketTrack[tracks.Tracks.Count];
+            for (var i = 0; i < packetTracks.Length; i++)
             {
                 var info = tracks.Tracks[i];
                 var initTrack = FmpInitSegmentWriter.ToInitTrack(info, i + 1);
-                var track = new PacketTrack(info, initTrack.Mp4TrackId, initTrack.Kind == MediaKind.Video, DefaultSampleDuration(initTrack));
-                _packetTracks[i] = track;
-                _packetTracksById.Add(info.TrackId, track);
+                packetTracks[i] = new PacketTrack(info, initTrack.Mp4TrackId, initTrack.Kind == MediaKind.Video, DefaultSampleDuration(initTrack));
             }
+
+            return packetTracks;
         }
 
         /// <exception cref="ArgumentException"><paramref name="frames"/> is empty.</exception>
