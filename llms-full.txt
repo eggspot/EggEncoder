@@ -899,6 +899,18 @@ public sealed class MpegTsMuxer
     // one complete, independently-parseable .ts file per call: PAT + PMT (stream_type=0x0F, ADTS
     // AAC) repeated at the start, then one PES packet per frame, split across 188-byte TS packets.
     // Throws ArgumentException for an empty frames list.
+
+    public MpegTsMuxer(EggEncoder.Media.MediaTrackSet tracks);
+    // packet mode (live ingest plan item 5b): H.264 (0x1B), H.265 (0x24) and AAC-as-ADTS (0x0F)
+    // tracks on PIDs 0x100 + position; PCR on the first video track, else the first track.
+    // NotSupportedException for other codecs or AAC that ADTS can't carry (object type not 1-4,
+    // explicit sample rate, channel configuration not 1-7).
+
+    public byte[] BuildSegment(IReadOnlyList<EggEncoder.Media.MediaPacket> packets);
+    // PAT + PMT, then one PES per packet in DTS order; video as Annex B with an AUD first and the
+    // avcC/hvcC parameter sets before keyframes lacking an SPS; PCR = max(0, DTS - 700 ms), PCR-only
+    // packets bridge gaps over 100 ms (up to 5 s); adaptation-field stuffing; continuity counters
+    // continue across segments. ArgumentException (muxer unchanged) for invalid packets.
 }
 ```
 

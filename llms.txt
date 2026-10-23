@@ -231,6 +231,17 @@ URI extension. `MpegTsMuxer` packetizes ADTS-framed AAC into 188-byte TS packets
 PTS (a 90kHz clock, different from fMP4's own configurable timescale) computed from the running
 total sample count -- not a fixed per-frame delta, since `1024 * 90000 / 44100` isn't an integer
 and a naive delta would drift -- bounding rounding error to at most ±0.5 ticks at any point.
+For the packet model, `new MpegTsMuxer(MediaTrackSet)` + `BuildSegment(IReadOnlyList<MediaPacket>)`
+writes H.264 (stream_type 0x1B), H.265 (0x24) and AAC (ADTS, 0x0F) tracks: PIDs 0x100 + the track's
+position in the set, packets written in DTS order (stable sort), timestamps rescaled to 90 kHz as
+given (no rebasing; non-negative DTS strictly increasing per track, also in 90 kHz ticks; PTS >= DTS), video as Annex B
+with an access unit delimiter first and the configuration record's parameter sets before every
+keyframe that has no SPS of its own, PES_packet_length 0 for video, PCR = max(0, DTS - 700 ms) on
+the first video track (else the first track) plus PCR-only packets bridging any gap over 100 ms
+(up to 5 s), random_access_indicator on keyframes, adaptation-field stuffing, and continuity counters
+that continue across segments. AAC must fit ADTS (object type 1-4, indexed sample rate, channel
+configuration 1-7) or the constructor throws `NotSupportedException`; MP3/Opus/AV1/VP9 too. A call
+that throws `ArgumentException` leaves the muxer unchanged.
 
 `EggEncoder.Streaming.Hls.M3u8MasterPlaylistWriter.BuildMasterPlaylist(IReadOnlyList<
 HlsRenditionDescriptor> renditions)` formats a top-level master playlist listing multiple

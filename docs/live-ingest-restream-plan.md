@@ -519,7 +519,24 @@ MP4 `track_ID` = position in the set + 1; the last sample of a track takes the c
 samples or 1/30 s (the next `tfdt` is always the real DTS, so no drift); negative or not strictly
 increasing DTS, a `ConfigVersion` mismatch and 32-bit overflows throw instead of rebasing (rebasing
 is item 8); no edit list (signed version 1 `trun` offsets instead); MP3/Opus/AV1/VP9 tracks throw
-`NotSupportedException`. 5b and 5c not started.
+`NotSupportedException`. 5b done ([PR #147](https://github.com/eggspot/EggEncoder/pull/147)):
+`new MpegTsMuxer(MediaTrackSet)` + `BuildSegment(packets)` write H.264 (0x1B), H.265 (0x24) and
+AAC (ADTS, 0x0F) on PIDs 0x100 + position, Annex B with an AUD first and the record's parameter sets
+before keyframes that carry no SPS, PCR on the first video track (else the first track), checked by
+a test-only TS reader (PAT/PMT/PES/PCR/continuity fields, PCR ≤ DTS) and the
+`EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null` run on segments from `h264_aac.flv`
+and `hevc.flv`, which passes locally (ffmpeg 9.0.2). Decided by research (PR #147): timestamps are
+written as given in 90 kHz (no ffmpeg-style 1.4 s offset; rebasing is item 8); PCR = max(0, DTS -
+700 ms) (ffmpeg's default mux delay), on every PES of the PCR PID, plus PCR-only packets: one
+before another PID's PES that opens a segment, and 100 ms apart to bridge any longer gap (up to
+5 s, after the independent review); it holds at 0 for the first 700 ms; packets are written in DTS order (stable sort) whatever order they come in; PES
+packets are padded with adaptation-field stuffing; continuity counters (PAT/PMT included) continue
+across segments, as players read segments back to back; video PES_packet_length is always 0;
+random_access_indicator on keyframes and every AAC frame; AAC must fit ADTS (object type 1-4,
+indexed rate, channel configuration 1-7), so explicit HE-AAC that fMP4 accepts is rejected here
+(Apple players take HEVC only in fMP4, so 5c should default HEVC renditions to fMP4). Frame mode is
+byte-for-byte unchanged; it still pads PES packets with 0xFF payload bytes, which ISO/IEC 13818-1
+2.4.3.3 doesn't allow, left for its own fix. 5c not started.
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 
