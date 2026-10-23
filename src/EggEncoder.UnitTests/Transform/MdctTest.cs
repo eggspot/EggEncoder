@@ -85,5 +85,150 @@ namespace EggEncoder.UnitTests.Transform
                 reconstructed[i].Should().BeApproximately(paddedSignal[i] * scale, Math.Abs(scale) * 1e-6, $"sample {i} should match");
             }
         }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(4)]
+        [InlineData(8)]
+        [InlineData(16)]
+        [InlineData(18)]
+        [InlineData(64)]
+        [InlineData(128)]
+        [InlineData(256)]
+        [InlineData(1024)]
+        [InlineData(2048)]
+        public void Forward_AnySize_Should_MatchTheDirectDefinition(int coefficientCount)
+        {
+            var samples = RandomSignal(seed: coefficientCount, length: 2 * coefficientCount, amplitude: 32768);
+
+            var coefficients = Mdct.Forward(samples);
+
+            AssertClose(coefficients, ReferenceForward(samples));
+        }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(4)]
+        [InlineData(8)]
+        [InlineData(16)]
+        [InlineData(18)]
+        [InlineData(64)]
+        [InlineData(128)]
+        [InlineData(256)]
+        [InlineData(1024)]
+        [InlineData(2048)]
+        public void Inverse_AnySize_Should_MatchTheDirectDefinition(int coefficientCount)
+        {
+            var coefficients = RandomSignal(seed: coefficientCount + 1, length: coefficientCount, amplitude: 1e6);
+
+            var samples = Mdct.Inverse(coefficients);
+
+            AssertClose(samples, ReferenceInverse(coefficients));
+        }
+
+        [Theory]
+        [InlineData(18)]
+        [InlineData(200)]
+        public void Forward_Inverse_NonPowerOfTwoSize_Should_BeBitIdenticalToTheDirectDefinition(int coefficientCount)
+        {
+            // MP3's 18-coefficient MDCT keeps the direct sums (cached cosines for small sizes, plain
+            // Math.Cos above the cache limit, as for 200 here), so its output stays bit for bit.
+            var samples = RandomSignal(seed: 7, length: 2 * coefficientCount, amplitude: 1);
+            var coefficients = RandomSignal(seed: 8, length: coefficientCount, amplitude: 1);
+
+            Mdct.Forward(samples).Should().Equal(ReferenceForward(samples));
+            Mdct.Inverse(coefficients).Should().Equal(ReferenceInverse(coefficients));
+        }
+
+        [Fact]
+        public void Forward_Inverse_EmptyInput_Should_ReturnEmptyOutput()
+        {
+            Mdct.Forward([]).Should().BeEmpty();
+            Mdct.Inverse([]).Should().BeEmpty();
+        }
+
+        [Fact]
+        public void Forward_Inverse_CalledFromManyThreadsAtOnce_Should_MatchSingleThreadedResults()
+        {
+            // Plans and cosine tables are shared across threads; scratch buffers are per call.
+            var sizes = new[] { 18, 128, 1024 };
+            var inputs = sizes.Select(size => RandomSignal(seed: size, length: 2 * size, amplitude: 1000)).ToArray();
+            var expected = inputs.Select(input => Mdct.Inverse(Mdct.Forward(input))).ToArray();
+            var mismatches = 0;
+
+            Parallel.For(0, 300, iteration =>
+            {
+                var which = iteration % sizes.Length;
+                if (!Mdct.Inverse(Mdct.Forward(inputs[which])).SequenceEqual(expected[which]))
+                {
+                    Interlocked.Increment(ref mismatches);
+                }
+            });
+
+            mismatches.Should().Be(0);
+        }
+
+        private static double[] RandomSignal(int seed, int length, double amplitude)
+        {
+            var random = new Random(seed);
+            var signal = new double[length];
+            for (var i = 0; i < length; i++)
+            {
+                signal[i] = ((random.NextDouble() * 2) - 1) * amplitude;
+            }
+
+            return signal;
+        }
+
+        // The textbook definitions, with the same cosine expression the direct path uses.
+        private static double[] ReferenceForward(double[] samples)
+        {
+            var count = samples.Length / 2;
+            var coefficients = new double[count];
+            for (var k = 0; k < count; k++)
+            {
+                var sum = 0.0;
+                for (var n = 0; n < samples.Length; n++)
+                {
+                    sum += samples[n] * Math.Cos((Math.PI / count) * (n + 0.5 + (count / 2.0)) * (k + 0.5));
+                }
+
+                coefficients[k] = sum;
+            }
+
+            return coefficients;
+        }
+
+        private static double[] ReferenceInverse(double[] coefficients)
+        {
+            var count = coefficients.Length;
+            var samples = new double[count * 2];
+            var normalization = 1.0 / count;
+            for (var n = 0; n < samples.Length; n++)
+            {
+                var sum = 0.0;
+                for (var k = 0; k < count; k++)
+                {
+                    sum += coefficients[k] * Math.Cos((Math.PI / count) * (n + 0.5 + (count / 2.0)) * (k + 0.5));
+                }
+
+                samples[n] = sum * normalization;
+            }
+
+            return samples;
+        }
+
+        // Within 1e-10 of the largest magnitude: the fast path's rounding is about 1e-12 relative.
+        private static void AssertClose(double[] actual, double[] expected)
+        {
+            actual.Should().HaveCount(expected.Length);
+            var scale = expected.Length == 0 ? 1 : expected.Max(Math.Abs);
+            for (var i = 0; i < expected.Length; i++)
+            {
+                actual[i].Should().BeApproximately(expected[i], scale * 1e-10, $"index {i}");
+            }
+        }
     }
 }
