@@ -622,7 +622,24 @@ source.
   server closes mid-stream — each surfaces a typed exception and frees the socket.
 - AOT smoke test: client → server loopback.
 
-**Status**: not started.
+**Status**: 6a done ([PR #153](https://github.com/eggspot/EggEncoder/pull/153)): `RtmpPublishClient`;
+6b (`RtmpPlayClient` and its test-only play responder) not started. Split like item 5, decided by
+research: the play client needs its own responder and only item 8 depends on it, while item 7 needs
+only the publish client. Decided by research (PR #153): one constructor taking the server URL and the
+stream key separately, as YouTube/Twitch/Facebook hand them out and OBS takes them (ffmpeg's
+full-URL split is ambiguous for multi-segment apps); `tcUrl` keeps the port only when the URL names
+one (OBS's librtmp; ffmpeg always adds it, and servers accept both); a server URL with user info, a
+query or a fragment is refused, so secrets stay in the key; failures are one `RtmpClientException`
+with `RtmpClientFailureReason` and the server's `StatusCode`, never its free-text description (a
+server may echo the key); `fourCcList` is sent only for H.265/AV1/VP9 (ffmpeg sends it only when
+asked, OBS never), so an H.264/AAC `connect` matches ffmpeg's wire bytes; `CompleteAsync` half-closes
+and waits up to `CloseTimeout` (2 s) for the server to close, which ffmpeg and OBS don't, to avoid an
+RST discarding the tail. Implementation choices: `FlvWriter`'s tag-body logic moved into the internal
+`FlvTagMuxer` and is shared; `UpdateTracks` forwards mid-stream configuration changes;
+`WriteTimeout` (30 s) bounds a write the server doesn't drain, and a write cancelled part-way leaves
+the client failed. The `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffmpeg -listen 1` recording + `ffprobe`
+passes locally (ffmpeg 9.0.2). Pushing to real YouTube/Twitch needs credentials and stays a manual
+check; it was not run (an unattended session).
 
 ## 7. Restream fan-out
 

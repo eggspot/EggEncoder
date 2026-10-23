@@ -162,6 +162,24 @@ namespace EggEncoder.Live.Rtmp
             _receiveLoop = Task.Run(ReceiveLoopAsync, CancellationToken.None);
         }
 
+        /// <summary>
+        /// Replaces the track set after a configuration change or when a track appears late (as an
+        /// <see cref="RtmpIngestStream"/> or <see cref="FlvFileSource"/> can report), with
+        /// <see cref="FlvWriter.UpdateTracks"/>'s rules: a track keeps its kind, and the next packet of
+        /// a track whose <see cref="MediaTrackInfo.ConfigVersion"/> changed is preceded by its new
+        /// sequence header. Call it between writes, not during one.
+        /// </summary>
+        /// <exception cref="ArgumentException">A track changes kind, or a track has no codec configuration.</exception>
+        /// <exception cref="NotSupportedException">A track set FLV can't carry.</exception>
+        public void UpdateTracks(MediaTrackSet tracks)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(tracks);
+            ThrowIfFailed();
+            ThrowIfNotPublishing();
+            _muxer.UpdateTracks(tracks);
+        }
+
         /// <summary>Sends one packet, preceded by its track's sequence header when that hasn't been sent for this configuration yet.</summary>
         /// <exception cref="ArgumentException">An unknown track, or a <see cref="MediaPacket.ConfigVersion"/> that isn't the track's current one.</exception>
         /// <exception cref="ArgumentOutOfRangeException">A negative DTS, or a composition offset FLV can't carry.</exception>

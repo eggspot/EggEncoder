@@ -136,6 +136,59 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         }
 
         [Fact]
+        public async Task UpdateTracks_MidStream_Should_Send_The_New_Sequence_Header_Before_The_Next_Packet()
+        {
+            await using var server = await RtmpServerTest.StartAsync(RtmpServerTest.AcceptAll());
+            var consumer = new RtmpServerTest.Consumer(server);
+            var fixture = Fixture();
+            var tracks = fixture.TrackSets[^1];
+            var audio = tracks.Tracks.Single(t => t.Kind == MediaKind.Audio);
+            var stereo = audio with { CodecConfiguration = new byte[] { 0x12, 0x10 }, ConfigVersion = audio.ConfigVersion + 1, Channels = 2 };
+            var updated = new MediaTrackSet(tracks.Tracks.Select(t => t.Kind == MediaKind.Audio ? stereo : t).ToList());
+            var half = fixture.Packets.Count / 2;
+            var expected = fixture.Packets.Take(half)
+                .Concat(fixture.Packets.Skip(half).Select(p => p.TrackId == audio.TrackId ? p with { ConfigVersion = stereo.ConfigVersion } : p))
+                .ToList();
+
+            await using var client = new RtmpPublishClient(ServerUrl(server), StreamKey, Patient);
+            await client.OpenAsync(tracks);
+            foreach (var packet in expected.Take(half))
+            {
+                await client.WriteAsync(packet);
+            }
+
+            client.UpdateTracks(updated);
+            foreach (var packet in expected.Skip(half))
+            {
+                await client.WriteAsync(packet);
+            }
+
+            await client.CompleteAsync();
+
+            var received = await consumer.PacketsAsync();
+            received.Select(p => p.Payload.ToArray()).Should().BeEquivalentTo(expected.Select(p => p.Payload.ToArray()), o => o.WithStrictOrdering());
+            received.Where(p => p.TrackId == audio.TrackId).Select(p => p.ConfigVersion).Distinct().Should().HaveCount(2);
+            (await consumer.Started).Tracks!.Tracks.Single(t => t.Kind == MediaKind.Audio).CodecConfiguration.ToArray().Should().Equal(0x12, 0x10);
+        }
+
+        [Fact]
+        public async Task UpdateTracks_InvalidCalls_Should_Throw()
+        {
+            await using var scripted = new RtmpScriptedServer();
+            var tracks = H264AacTracks();
+            var unopened = new RtmpPublishClient(new Uri("rtmp://127.0.0.1/live"), StreamKey);
+            await using var client = await OpenScriptedAsync(scripted);
+            var video = tracks.Tracks.Single(t => t.Kind == MediaKind.Video);
+            var kindChanged = new MediaTrackSet([video with { Kind = MediaKind.Audio, Codec = MediaCodec.Aac }]);
+
+            unopened.Invoking(c => c.UpdateTracks(tracks)).Should().Throw<InvalidOperationException>();
+            client.Invoking(c => c.UpdateTracks(null!)).Should().Throw<ArgumentNullException>();
+            client.Invoking(c => c.UpdateTracks(kindChanged)).Should().Throw<ArgumentException>();
+            await unopened.DisposeAsync();
+            unopened.Invoking(c => c.UpdateTracks(tracks)).Should().Throw<ObjectDisposedException>();
+        }
+
+        [Fact]
         public async Task Publish_WithCustomMetadata_Should_Send_That_Metadata()
         {
             await using var server = await RtmpServerTest.StartAsync(RtmpServerTest.AcceptAll());
@@ -634,6 +687,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
             failure.Reason.Should().Be(RtmpClientFailureReason.ConnectionLost);
             (await client.Invoking(c => c.WriteAsync(fixture.Packets[1]).AsTask()).Should().ThrowAsync<RtmpClientException>()).Which.Should().BeSameAs(failure);
             (await client.Invoking(c => c.CompleteAsync().AsTask()).Should().ThrowAsync<RtmpClientException>()).Which.Should().BeSameAs(failure);
+            client.Invoking(c => c.UpdateTracks(fixture.TrackSets[^1])).Should().Throw<RtmpClientException>().Which.Should().BeSameAs(failure);
             await WaitForNoConnectionsAsync(server);
         }
 

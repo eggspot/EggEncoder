@@ -10,8 +10,8 @@ namespace EggEncoder.UnitTests.Live.Rtmp
     /// <summary>
     /// A test-only RTMP publisher built on the item 3 primitives, driving <see cref="RtmpServer"/>
     /// one step at a time (handshake, connect, createStream, publish, media, unpublish) so tests can
-    /// stop at any point or send something malformed instead. Item 6's RtmpPublishClient replaces it
-    /// once merged.
+    /// stop at any point or send something malformed instead, which <see cref="RtmpPublishClient"/> by
+    /// design never does.
     /// </summary>
     internal sealed class RtmpTestPublisher : IAsyncDisposable
     {

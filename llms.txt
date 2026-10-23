@@ -474,6 +474,37 @@ on the connection's task: hand off, don't block. Verified by an in-process loopb
 replayed ffmpeg 9 wire capture, and an `EGGENCODER_FFMPEG_ORACLE=1`-gated live `ffmpeg -re ... -f flv
 rtmp://` publish.
 
+## RTMP publish client (push)
+
+`EggEncoder.Live.Rtmp.RtmpPublishClient : IMediaPacketSink` (docs/live-ingest-restream-plan.md item
+6a): pushes packets to any RTMP server (YouTube, Twitch, Facebook, `RtmpServer`).
+`new RtmpPublishClient(Uri serverUrl, string streamKey, RtmpPublishClientOptions? options = null)`:
+`rtmp://` (default port 1935) or `rtmps://` (443, TLS via `SslStream` with default validation); app =
+the URL path without leading/trailing `/` (may contain `/`); the URL must carry no user info, query or
+fragment (ArgumentException); the key is sent exactly as given (`key?bandwidthtest=true` works).
+`AppName`, `TcUrl` (`scheme://host[:port as written]/app`, never the key). `OpenAsync(tracks, ct)`:
+validates tracks as `FlvWriter` does (one audio AAC/MP3, one video H.264/H.265/AV1/VP9) before
+connecting, then TCP, TLS, handshake, `connect` (`app`, `type`, `flashVer`, `tcUrl`, plus `fourCcList`
+only for H.265/AV1/VP9), Set Chunk Size (`OutboundChunkSize`, 4096), `releaseStream`, `FCPublish`,
+`createStream`, `publish` (live) on the new stream, wait for `NetStream.Publish.Start`, then
+`@setDataFrame`/`onMetaData` (`Options.Metadata` or `FlvMetadata.FromTracks`). `WriteAsync(packet,
+ct)`: one FLV tag body per packet via the internal `FlvTagMuxer` (shared with `FlvWriter`), sequence
+header first per configuration; invalid packets throw ArgumentException and the publish continues.
+`UpdateTracks(tracks)`: mid-stream configuration change/late track (FlvWriter's rules).
+`CompleteAsync(ct)`: `FCUnpublish` + `deleteStream`, TLS close_notify + half-close, waits up to
+`CloseTimeout` for the server to close. Answers pings, Set Peer Bandwidth (with Window Ack Size) and
+acknowledgement windows. `RtmpPublishClientOptions`: `ConnectTimeout` 10 s (TCP+TLS+handshake),
+`PublishTimeout` 10 s (to publish accepted), `WriteTimeout` 30 s (per write), `CloseTimeout` 2 s,
+`OutboundChunkSize`, `ChunkReader`, `TimeProvider`, `RemoteCertificateValidation`, `Metadata`.
+Failures close the socket and throw `RtmpClientException : IOException` (`Reason`:
+`RtmpClientFailureReason.ConnectFailed`/`TlsFailed`/`Rejected`/`Timeout`/`ConnectionLost`/
+`ProtocolError`; `StatusCode` for `Rejected`, e.g. `NetStream.Publish.BadName`; the server's
+description is not exposed); every later call rethrows the same exception. Caller cancellation is
+`OperationCanceledException`; a write cancelled mid-flush leaves the client failed. Messages never
+contain the stream key. No reconnect, no pacing (restream hub / live sources). Verified against
+`RtmpServer` (plain, RTMPS, IPv6), a scripted test server for every failure path, and an
+`EGGENCODER_FFMPEG_ORACLE=1`-gated `ffmpeg -listen 1` recording checked with `ffprobe`.
+
 ## MP3 ID3v2 Tags
 
 `Probe`-ing an MP3 file with an ID3v2.3/2.4 tag populates the same `ProbeResult.Tags` WAV's own
