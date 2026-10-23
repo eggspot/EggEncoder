@@ -534,9 +534,9 @@ packets are padded with adaptation-field stuffing; continuity counters (PAT/PMT 
 across segments, as players read segments back to back; video PES_packet_length is always 0;
 random_access_indicator on keyframes and every AAC frame; AAC must fit ADTS (object type 1-4,
 indexed rate, channel configuration 1-7), so explicit HE-AAC that fMP4 accepts is rejected here
-(Apple players take HEVC only in fMP4, so 5c should default HEVC renditions to fMP4). Frame mode is
-byte-for-byte unchanged; it still pads PES packets with 0xFF payload bytes, which ISO/IEC 13818-1
-2.4.3.3 doesn't allow, left for its own fix. 5c not started.
+(Apple players take HEVC only in fMP4, so 5c should default HEVC renditions to fMP4). Frame mode was left
+byte-for-byte unchanged here; its 0xFF payload padding after each PES, which ISO/IEC 13818-1
+2.4.3.3 doesn't allow, was fixed separately in PR #148. 5c not started.
 
 ## 6. RTMP client: publish (rtmp/rtmps) and play
 

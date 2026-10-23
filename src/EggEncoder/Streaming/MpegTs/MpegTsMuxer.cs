@@ -22,7 +22,6 @@ namespace EggEncoder.Streaming.MpegTs
         private const int PatPid = 0x0000;
         private const int PmtPid = 0x1000;
         private const int AudioPid = 0x0100;
-        private const int TsPayloadSize = 184;
         private const byte AdtsAacStreamType = 0x0F;
         private const byte AudioStreamId = 0xC0;
         private const long PtsClockHz = 90000;
@@ -59,60 +58,36 @@ namespace EggEncoder.Streaming.MpegTs
                 throw new ArgumentException("A media segment must contain at least one frame.", nameof(frames));
             }
 
-            var output = new List<byte>();
-
-            var patContinuityCounter = 0;
-            WritePayload(output, PatPid, BuildPatPayload(), ref patContinuityCounter);
-
-            var pmtContinuityCounter = 0;
-            WritePayload(output, PmtPid, BuildPmtPayload(AudioPid, [(AdtsAacStreamType, AudioPid)]), ref pmtContinuityCounter);
-
-            var audioContinuityCounter = 0;
-            foreach (var frame in frames)
+            var pmt = BuildPmtPayload(AudioPid, [(AdtsAacStreamType, AudioPid)]);
+            var pesPackets = new byte[frames.Count][];
+            var packetCount = PsiPacketCount(PatPayload.Length) + PsiPacketCount(pmt.Length);
+            var sampleCount = _cumulativeSampleCount;
+            for (var i = 0; i < frames.Count; i++)
             {
-                var adtsFrame = AdtsFrameWriter.Wrap(frame.Payload, _sampleRateIndex, _channels);
-                var pts = (long)Math.Round(_cumulativeSampleCount * (double)PtsClockHz / _sampleRate) & PtsWrapMask;
-
-                WritePayload(output, AudioPid, BuildPesPacket(adtsFrame, pts), ref audioContinuityCounter);
-
-                _cumulativeSampleCount += frame.SampleCount;
+                var adtsFrame = AdtsFrameWriter.Wrap(frames[i].Payload, _sampleRateIndex, _channels);
+                var pts = (long)Math.Round(sampleCount * (double)PtsClockHz / _sampleRate) & PtsWrapMask;
+                pesPackets[i] = BuildPesPacket(adtsFrame, pts);
+                packetCount += PesPacketCount(pesPackets[i].Length, firstAdaptationFieldLength: 0);
+                sampleCount += frames[i].SampleCount;
             }
 
-            return output.ToArray();
-        }
-
-        // Splits one logical payload (a PSI section, including its own leading pointer_field, or a
-        // complete PES packet) across as many 188-byte TS packets as it takes: payload_unit_start_
-        // indicator set only on the first packet, adaptation_field_control always "payload only"
-        // (01) -- confirmed against a real ffmpeg-produced .ts fixture that every PAT/PMT/PES packet
-        // uses this same simple 0xFF-stuffed-payload convention, never an adaptation field, even
-        // for a short final packet that doesn't fill the full 184-byte payload capacity.
-        private static void WritePayload(List<byte> output, int pid, byte[] payload, ref int continuityCounter)
-        {
-            var offset = 0;
-            do
+            // Every segment restarts its continuity counters at 0 and writes no PCR or random
+            // access flags; a PES's last TS packet is filled with adaptation-field stuffing
+            // (ISO/IEC 13818-1 2.4.3.3).
+            var output = new byte[packetCount * TsPacketSize];
+            var patContinuityCounter = 0;
+            var pmtContinuityCounter = 0;
+            var audioContinuityCounter = 0;
+            var position = WritePsi(output, 0, PatPid, PatPayload, ref patContinuityCounter);
+            position = WritePsi(output, position, PmtPid, pmt, ref pmtContinuityCounter);
+            foreach (var pes in pesPackets)
             {
-                var chunkSize = Math.Min(TsPayloadSize, payload.Length - offset);
-                var payloadUnitStart = offset == 0;
+                position = WritePes(output, position, AudioPid, pes, randomAccess: false, pcr: null, ref audioContinuityCounter);
+            }
 
-                output.Add(0x47);
-                output.Add((byte)((payloadUnitStart ? 0x40 : 0x00) | ((pid >> 8) & 0x1F)));
-                output.Add((byte)(pid & 0xFF));
-                output.Add((byte)(0x10 | (continuityCounter & 0x0F))); // adaptation_field_control=01 (payload only)
+            _cumulativeSampleCount = sampleCount;
 
-                for (var i = 0; i < chunkSize; i++)
-                {
-                    output.Add(payload[offset + i]);
-                }
-
-                for (var i = chunkSize; i < TsPayloadSize; i++)
-                {
-                    output.Add(0xFF); // stuffing -- the real encoder fixture this was verified against pads exactly this way
-                }
-
-                offset += chunkSize;
-                continuityCounter = (continuityCounter + 1) & 0x0F;
-            } while (offset < payload.Length);
+            return output;
         }
 
         private static byte[] BuildPatPayload()
@@ -145,7 +120,8 @@ namespace EggEncoder.Streaming.MpegTs
         // PCR_PID and one stream loop entry (no descriptors) per elementary stream. Frame mode
         // points PCR_PID at its single audio stream and writes no PCR at all (a deliberate MVP
         // scope limitation; see docs/streaming-plan.md item 4's own status note); packet mode
-        // writes PCR on the PID it names here.
+        // writes PCR on the PID it names here. PAT/PMT layout and CRCs confirmed against a real
+        // ffmpeg-produced .ts fixture.
         private static byte[] BuildPmtPayload(int pcrPid, IReadOnlyList<(byte StreamType, int Pid)> streams)
         {
             var section = new List<byte>

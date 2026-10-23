@@ -185,7 +185,7 @@ namespace EggEncoder.Streaming.MpegTs
 
                 lastPcr = unit.Pcr ?? (unit.PcrOnlyPackets.Count > 0 ? unit.PcrOnlyPackets[^1] : lastPcr);
 
-                totalPacketCount += unit.PcrOnlyPackets.Count + PesPacketCount(unit.Pes.Length, AdaptationFieldLength(unit));
+                totalPacketCount += unit.PcrOnlyPackets.Count + PesPacketCount(unit.Pes.Length, AdaptationFieldLength(unit.Pcr is not null, unit.IsKeyframe));
             }
 
             var output = new byte[totalPacketCount * TsPacketSize];
@@ -210,7 +210,7 @@ namespace EggEncoder.Streaming.MpegTs
                 }
 
                 var continuityCounter = continuityCounters[unit.Track];
-                position = WritePes(output, position, unit, ref continuityCounter);
+                position = WritePes(output, position, unit.Track.Pid, unit.Pes, unit.IsKeyframe, unit.Pcr, ref continuityCounter);
                 continuityCounters[unit.Track] = continuityCounter;
             }
 
@@ -422,9 +422,9 @@ namespace EggEncoder.Streaming.MpegTs
 
         // The adaptation field (length byte included) the first TS packet of a PES needs before any
         // stuffing: a flags byte for random_access_indicator and/or a PCR.
-        private static int AdaptationFieldLength(PesUnit unit) =>
-            unit.Pcr is not null ? 2 + PcrFieldLength
-            : unit.IsKeyframe ? 2
+        private static int AdaptationFieldLength(bool hasPcr, bool randomAccess) =>
+            hasPcr ? 2 + PcrFieldLength
+            : randomAccess ? 2
             : 0;
 
         private static int PesPacketCount(int pesLength, int firstAdaptationFieldLength)
@@ -458,26 +458,19 @@ namespace EggEncoder.Streaming.MpegTs
         // One PES across as many TS packets as it takes. The first carries the PCR and
         // random_access_indicator, if any; the last is padded with adaptation-field stuffing bytes
         // (2.4.3.3), never with bytes after the PES.
-        private static int WritePes(byte[] output, int position, PesUnit unit, ref int continuityCounter)
+        private static int WritePes(byte[] output, int position, int pid, byte[] pes, bool randomAccess, long? pcr, ref int continuityCounter)
         {
-            var pes = unit.Pes;
             for (var offset = 0; offset < pes.Length;)
             {
                 var first = offset == 0;
-                var flagsLength = first ? AdaptationFieldLength(unit) : 0;
+                var flagsLength = first ? AdaptationFieldLength(pcr is not null, randomAccess) : 0;
                 var chunk = Math.Min(TsPacketSize - TsHeaderSize - flagsLength, pes.Length - offset);
                 var adaptationFieldLength = TsPacketSize - TsHeaderSize - chunk;
 
-                WriteTsHeader(output, position, unit.Track.Pid, payloadUnitStart: first, hasAdaptationField: adaptationFieldLength > 0, hasPayload: true, continuityCounter);
+                WriteTsHeader(output, position, pid, payloadUnitStart: first, hasAdaptationField: adaptationFieldLength > 0, hasPayload: true, continuityCounter);
                 if (adaptationFieldLength > 0)
                 {
-                    byte flags = 0;
-                    if (first && unit.IsKeyframe)
-                    {
-                        flags |= RandomAccessIndicator;
-                    }
-
-                    WriteAdaptationField(output.AsSpan(position + TsHeaderSize, adaptationFieldLength), flags, first ? unit.Pcr : null);
+                    WriteAdaptationField(output.AsSpan(position + TsHeaderSize, adaptationFieldLength), first && randomAccess ? RandomAccessIndicator : (byte)0, first ? pcr : null);
                 }
 
                 pes.AsSpan(offset, chunk).CopyTo(output.AsSpan(position + TsHeaderSize + adaptationFieldLength));

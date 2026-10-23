@@ -628,9 +628,9 @@ the segmenter from item 3 a second segment-format option alongside fMP4.
   `round(cumulativeSamplesBeforeThisFrame * 90000.0 / sampleRate)`, wrapped to 33 bits per the
   spec's own clock-rollover rule -- bounded to at most ±0.5 ticks of rounding error at any point,
   never unboundedly drifting. Splits each PES into 188-byte TS packets with the mandatory sync byte
-  (`0x47`)/PID/continuity-counter fields (confirmed against a real ffmpeg-produced `.ts` fixture:
-  every packet uses `adaptation_field_control`=01/payload-only, even a short final one, with plain
-  `0xFF` stuffing bytes rather than an adaptation field's own stuffing mechanism), and emits a PAT +
+  (`0x47`)/PID/continuity-counter fields (a PES's short final packet is filled with
+  adaptation-field stuffing, as ISO/IEC 13818-1 2.4.3.3 requires -- the original implementation
+  padded with `0xFF` bytes after the PES in the payload instead, fixed in PR #148), and emits a PAT +
   PMT (declaring one `stream_type=0x0F`/ADTS-AAC stream) at the start of every segment -- every
   segment is an independently-parseable file with its own fresh continuity counters, matching real
   HLS TS segmenters' own convention (PTS continuity is preserved across segments by the muxer's own
