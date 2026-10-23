@@ -199,8 +199,8 @@ known total length required anywhere in this surface). See `docs/streaming-plan.
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
-demux/mux, the RTMP protocol core, the RTMP ingest server and video tracks in the fMP4 writers are done; still open: RTMP client incl. RTMPS push, video tracks in the
-MPEG-TS muxer, packet-driven HLS, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+demux/mux, the RTMP protocol core, the RTMP ingest server and video tracks in the fMP4 writers and the MPEG-TS
+muxer are done; still open: RTMP client incl. RTMPS push, packet-driven HLS, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.
@@ -306,8 +306,29 @@ defaults every network-facing item must meet.
   established. `MpegTsCrc32` is ISO/IEC 13818-1 Annex B's own PSI-table CRC-32: same polynomial and
   bit direction as `Codecs.Opus.OggCrc32`, but a different initial value (0xFFFFFFFF vs. 0) -- not
   interchangeable despite the shared shape, so it's its own small implementation. PCR is not
-  implemented (a deliberate, documented MVP scope limitation -- see docs/streaming-plan.md item 4's
-  own status note for what this could affect and why it wasn't pursued further).
+  implemented in this frame mode (a deliberate, documented MVP scope limitation -- see
+  docs/streaming-plan.md item 4's own status note for what this could affect and why it wasn't
+  pursued further). **Packet mode** (`docs/live-ingest-restream-plan.md` item 5b, in the partial
+  `MpegTsMuxer.Packets.cs`): `new MpegTsMuxer(MediaTrackSet)` + `BuildSegment(IReadOnlyList<MediaPacket>)`
+  writes H.264 (0x1B), H.265 (0x24) and AAC (ADTS, 0x0F) tracks on PIDs 0x100 + position in the set,
+  stream ids 0xE0+/0xC0+ (at most 16 video and 32 audio tracks). Packets are written in DTS order (a
+  stable sort on the 90 kHz DTS), timestamps rescaled via `MediaTimestamp.Rescale` and written as
+  given (masked to 33 bits, never rebased). Video: `AnnexBConverter.SplitLengthPrefixed` (internal,
+  shared with `ToAnnexB`) with the avcC/hvcC NAL length size, an access unit delimiter first (the
+  packet's own when it starts with one), then the record's SPS/PPS (VPS/SPS/PPS) before every
+  keyframe that carries no SPS, PES_packet_length 0, data_alignment_indicator set, PTS + DTS only
+  when they differ. AAC: one ADTS frame per PES via `AdtsFrameWriter.WriteHeader` (profile =
+  audioObjectType - 1 from `AudioSpecificConfigReader.ReadFields`); object types other than 1-4, an
+  explicit sample rate and channel configurations other than 1-7 throw `NotSupportedException`
+  (fMP4 accepts them). PCR = max(0, DTS - 700 ms) on every PES of the PCR PID (the first video
+  track, else the first track), plus a PCR-only packet (adaptation field only, continuity counter
+  not advanced) on that PID before another PID's PES when the segment has none yet or the last is
+  100 ms old. random_access_indicator on every keyframe PES (every AAC one). PES packets are padded
+  with adaptation-field stuffing (13818-1 2.4.3.3); frame mode still pads with 0xFF payload bytes
+  and is byte-for-byte unchanged. Continuity counters (PAT and PMT included) continue across
+  segments in packet mode, unlike frame mode. Validation and conversion run before anything is
+  written, so a call that throws leaves the muxer unchanged. Tested against the FLV fixtures by
+  the test-only `MpegTsTestReader` and an `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`.
 - `Streaming.Hls.M3u8MasterPlaylistWriter`/`HlsRenditionDescriptor` (`Streaming/Hls/`) -- a
   top-level playlist listing multiple audio-bitrate renditions, each a complete, independent
   audio rendition (not an `EXT-X-MEDIA:TYPE=AUDIO` alternate-track-alongside-video grouping, a

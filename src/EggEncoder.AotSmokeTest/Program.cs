@@ -108,6 +108,34 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("MPEG-TS: H.264 + AAC packet segment with Annex B, ADTS and PCR", () =>
+    {
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var tracks = new EggEncoder.Media.MediaTrackSet(
+        [
+            new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, avcC, 0),
+            new EggEncoder.Media.MediaTrackInfo(1, EggEncoder.Media.MediaKind.Audio, EggEncoder.Media.MediaCodec.Aac, 1000, new byte[] { 0x12, 0x08 }, 0)
+        ]);
+        var muxer = new EggEncoder.Streaming.MpegTs.MpegTsMuxer(tracks);
+        var segment = muxer.BuildSegment(
+        [
+            new EggEncoder.Media.MediaPacket(1, 0, 0, true, 0, new byte[] { 0x21 }),
+            new EggEncoder.Media.MediaPacket(0, 80, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 })
+        ]);
+        // PAT, PMT, a PCR-only packet on the video PID (the segment starts with audio: equal DTS
+        // keeps the given order), the audio PES (ADTS), then the video PES: AUD, SPS, PPS, IDR.
+        var hex = Convert.ToHexString(segment);
+        if (segment.Length != 5 * 188 || segment[(2 * 188) + 3] != 0x2F || (segment[(4 * 188) + 1] & 0x40) == 0
+            || !hex.Contains("0000000109F0" + "00000001674D400A")
+            || !hex.Contains("00000001" + "68CE0FC8" + "0000000165")
+            || !hex.Contains("FFF1504001"))
+        {
+            throw new InvalidOperationException("MPEG-TS packet mode produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     await RunCheck("RTMP core: handshake, then connect/createStream/publish and media through the chunk writer/reader", () =>
     {
         var client = EggEncoder.Live.Rtmp.RtmpHandshake.CreateClient();

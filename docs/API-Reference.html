@@ -843,6 +843,37 @@ await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
 
 if (gop.Count &gt; 0) output.Write(writer!.BuildMediaSegment(gop));</code></pre>
 
+      <h2 id="mpegts-packet-mode">MPEG-TS from Packets</h2>
+      <p>Namespace: <code>EggEncoder.Streaming.MpegTs</code>. Writes MPEG-TS segments (ISO/IEC 13818-1), the other segment format HLS serves, from <a href="#media-packet-model">packets</a>: H.264 and H.265 video is passed through without decoding, next to AAC audio. This is item 5b of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; the type also keeps its original single mono AAC track mode (<code>new MpegTsMuxer(channels, sampleRate)</code> and <code>BuildSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt;)</code>), which the HLS segmenter uses today.</p>
+      <pre><code class="language-csharp">public sealed class MpegTsMuxer // stateful: one instance per rendition
+{
+    public MpegTsMuxer(MediaTrackSet tracks);          // packet mode
+    public MpegTsMuxer(int channels, int sampleRate);  // frame mode
+    public byte[] BuildSegment(IReadOnlyList&lt;MediaPacket&gt; packets);
+    public byte[] BuildSegment(IReadOnlyList&lt;Mp4EncodedFrame&gt; frames);
+}</code></pre>
+      <p><strong>Tracks.</strong> H.264 is written with <code>stream_type</code> 0x1B, H.265 with 0x24 and AAC as ADTS with 0x0F. A track's elementary PID is 0x100 plus its position in the set; video tracks get stream ids 0xE0 upward and audio tracks 0xC0 upward, so a set may hold at most 16 video and 32 audio tracks. The PCR rides on the first video track, or on the first track when there is no video. AAC must fit an ADTS header: audio object type 1-4 (so AAC-LC, or HE-AAC signalled implicitly, but not HE-AAC with explicit SBR/PS signalling, which fMP4 does accept), an indexed sample rate and a channel configuration of 1-7; anything else, and MP3, Opus, AV1 and VP9 tracks, throw <code>NotSupportedException</code>. An empty set or a missing or invalid codec configuration throws <code>ArgumentException</code>.</p>
+      <p><strong>Segments.</strong> Each call returns one standalone <code>.ts</code> file: PAT, PMT, then one PES per packet, in DTS order (a stable sort, so packets may come grouped by track). Timestamps are rescaled to 90 kHz and written as given, modulo 2<sup>33</sup>; nothing is rebased. A video PES holds the access unit in Annex B form: an access unit delimiter first (the packet's own, if it starts with one), then, on a keyframe that carries no SPS of its own, the parameter sets from the track's avcC/hvcC, then the packet's NAL units. Its <code>PES_packet_length</code> is 0 and it carries a DTS only when it differs from the PTS. An AAC PES holds one ADTS frame. Keyframe PES (and every AAC one) set <code>random_access_indicator</code>. The PCR is <code>max(0, DTS - 700 ms)</code>, written on every PES of the PCR PID, with a PCR-only packet on that PID before another PID's PES when the segment has none yet or the last one is 100 ms old. The last TS packet of a PES is padded with adaptation-field stuffing. Continuity counters, PAT and PMT included, run on from one segment to the next, so a playlist of segments reads as one continuous stream. Packets must belong to the set, carry their track's <code>ConfigVersion</code>, have a PTS no earlier than a non-negative DTS that strictly increases per track (across segments too), a well-formed length-prefixed video payload, and AAC payloads of at most 8,184 bytes; otherwise the call throws <code>ArgumentException</code> and the muxer is left unchanged. Calling the other mode's <code>BuildSegment</code> throws <code>InvalidOperationException</code>.</p>
+      <pre><code class="language-csharp">// Remux an FLV (or an RTMP ingest's packets) to MPEG-TS segments, one per GOP.
+await using var source = new FlvFileSource(File.OpenRead("in.flv"));
+MpegTsMuxer? muxer = null;
+var gop = new List&lt;MediaPacket&gt;();
+var index = 0;
+await foreach (var packet in source.ReadPacketsAsync(cancellationToken))
+{
+    muxer ??= new MpegTsMuxer(source.Tracks!);
+    var isVideoKeyframe = packet.IsKeyframe &amp;&amp; source.Tracks!.FindTrack(packet.TrackId)!.Kind == MediaKind.Video;
+    if (isVideoKeyframe &amp;&amp; gop.Count &gt; 0)
+    {
+        File.WriteAllBytes($"segment{index++}.ts", muxer.BuildSegment(gop));
+        gop.Clear();
+    }
+
+    gop.Add(packet);
+}
+
+if (gop.Count &gt; 0) File.WriteAllBytes($"segment{index}.ts", muxer!.BuildSegment(gop));</code></pre>
+
       <h2 id="amf0">AMF0</h2>
       <p>Namespace: <code>EggEncoder.Live.Rtmp.Amf0</code>. The Action Message Format 0 codec FLV <code>onMetaData</code> and RTMP command messages use, hand-written with no reflection (AOT-safe).</p>
       <pre><code class="language-csharp">public enum Amf0Type : byte { Number, Boolean, String, Object, Null, Undefined, EcmaArray, StrictArray, Date, LongString, XmlDocument }
