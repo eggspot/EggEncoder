@@ -12,9 +12,6 @@ concurrency:
 
 jobs:
   build-and-test:
-    # Every codec is now pure managed C# (no native binary, no P/Invoke, anywhere in this
-    # project — see docs/managed-codec-rewrite-plan.md item 8), so this runs on every major OS
-    # rather than being pinned to windows-latest.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -28,9 +25,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Install all required SDKs so every TFM (including net10.0) can be compiled
-      # regardless of which runtime version the matrix is currently testing.
-      - name: Setup .NET SDKs
+      - name: Setup .NET SDKs for every target framework
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
@@ -57,12 +52,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '10.0.x'
         run: dotnet test --configuration Release --no-build --verbosity normal
 
-      # EggEncoder.AotSmokeTest only targets net10.0, so this only needs to run once per OS
-      # regardless of which SDK the matrix leg is testing. A real `PublishAot=true` publish (not
-      # just a build) is required to catch trimming/AOT issues the Roslyn analyzer alone would
-      # miss — e.g. in the NLayer MP3 decoder dependency, which ships no AOT/trim metadata of its
-      # own. Each OS AOT-compiles and runs its own native RID (EggEncoder.AotSmokeTest's
-      # RuntimeIdentifiers covers all three: win-x64, linux-x64, osx-arm64).
       - name: Determine AOT RID and executable name
         if: matrix.dotnet-version == '10.0.x'
         id: aot
