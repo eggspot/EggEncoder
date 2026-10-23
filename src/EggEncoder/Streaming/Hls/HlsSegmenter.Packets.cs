@@ -33,6 +33,7 @@ namespace EggEncoder.Streaming.Hls
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive.</exception>
         /// <exception cref="ArgumentException"><paramref name="tracks"/> is empty or has a track the chosen container rejects.</exception>
         /// <exception cref="NotSupportedException">A track's codec (or, for MPEG-TS, its AAC configuration) can't be carried in the chosen container.</exception>
+        /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(tracks, targetDurationSeconds, sink, liveWindowSize: null, segmentFormat)
         {
@@ -45,6 +46,7 @@ namespace EggEncoder.Streaming.Hls
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
         /// <exception cref="ArgumentException"><paramref name="tracks"/> is empty or has a track the chosen container rejects.</exception>
         /// <exception cref="NotSupportedException">A track's codec (or, for MPEG-TS, its AAC configuration) can't be carried in the chosen container.</exception>
+        /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(MediaTrackSet tracks, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(tracks, targetDurationSeconds, sink, (int?)liveWindowSize, segmentFormat)
         {
@@ -73,7 +75,7 @@ namespace EggEncoder.Streaming.Hls
 
             if (initSegment is not null)
             {
-                sink.WriteInitSegment(initSegment);
+                _initSegmentUri = RequireUri(sink.WriteInitSegment(InitSegmentUri, initSegment));
             }
         }
 
@@ -113,7 +115,7 @@ namespace EggEncoder.Streaming.Hls
         /// this packet starts the next segment, and a segment the sink failed to write is dropped
         /// without using up a sequence number.
         /// </exception>
-        /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for audio frames.</exception>
+        /// <exception cref="InvalidOperationException"><see cref="Complete"/> has already been called, or this segmenter was built for audio frames; or, at a cut, the sink returned no URI for the segment it wrote (the segment is left out of the playlist and its sequence number is reused).</exception>
         public void AddPacket(MediaPacket packet)
         {
             if (_tracks is null || _cutTrack is null)

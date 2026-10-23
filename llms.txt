@@ -214,6 +214,12 @@ media segments, a playlist rewritten on every change, segment deletion for a liv
 with three implementations: `FileSystemStreamingSink` (a directory on disk), `InMemoryStreamingSink`
 (no filesystem, used by this library's own tests), and `DelegateStreamingSink` (four
 constructor-supplied delegates, for an HTTP/S3-upload-style destination with no new class needed).
+`HlsSegmenter` names each file (`init.mp4`, `segment_{n}.m4s` or `segment_{n}.ts`) and calls the
+default-interface-method overloads `string WriteInitSegment(string fileName, bytes)`, `string
+WriteMediaSegment(long n, string fileName, bytes)` (both return the URI the playlist lists) and
+`DeleteMediaSegment(long n, string uri)`; the defaults call the original members and return the
+name. `FileSystemStreamingSink(directory, filePrefix)` writes `{prefix}{fileName}` and returns it,
+so several prefixed renditions can share one directory.
 `EggEncoder.Streaming.Hls.HlsSegmenter` ties everything together: `AddFrame(EncodedAudioFrame
 frame)` (takes the ref struct directly, no manual conversion needed) accumulates frames and cuts a
 media segment once their cumulative duration reaches a configured `targetDurationSeconds` or more,

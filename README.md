@@ -118,7 +118,7 @@ using EggEncoder.Streaming.Aac;
 using EggEncoder.Streaming.Hls;
 
 Directory.CreateDirectory("hls-output");
-var sink = new FileSystemStreamingSink("hls-output"); // or InMemoryStreamingSink / DelegateStreamingSink
+var sink = new FileSystemStreamingSink("hls-output"); // or ("hls-output", filePrefix: "low_") per rendition; or InMemoryStreamingSink / DelegateStreamingSink
 var segmenter = new HlsSegmenter(channels: 1, sampleRate: 44100, targetDurationSeconds: 6, sink);
 // or: new HlsSegmenter(1, 44100, 6, sink, SegmentFormat.MpegTs) for legacy .ts segments instead of fMP4
 
