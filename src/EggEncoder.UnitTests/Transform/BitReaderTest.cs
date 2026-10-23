@@ -228,5 +228,204 @@ namespace EggEncoder.UnitTests.Transform
 
             reader.RemainingBits.Should().Be(16);
         }
+
+        [Fact]
+        public void ReadBits_AllWidths_AtEveryBitOffset_Should_MatchABitByBitReference()
+        {
+            // 20 bytes covers both LoadWindow paths: a single 8-byte load while 8 bytes remain, then
+            // the byte-at-a-time tail once fewer do.
+            var data = RandomBytes(seed: 1, length: 20);
+
+            for (var start = 0; start < 8; start++)
+            {
+                for (var width = 0; width <= 32 && start + width <= data.Length * 8; width++)
+                {
+                    for (var position = start; position + width <= data.Length * 8; position += 13)
+                    {
+                        var reader = new BitReader(data);
+                        reader.SkipBits(position);
+
+                        reader.ReadBits(width).Should().Be(ReferenceReadBits(data, position, width), $"{width} bits at bit {position}");
+                        reader.BitPosition.Should().Be(position + width);
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void ReadBits_RandomOperationSequence_Should_MatchABitByBitReference()
+        {
+            var data = RandomBytes(seed: 2, length: 4096);
+            var random = new Random(3);
+            var reader = new BitReader(data);
+            var position = 0;
+
+            while (true)
+            {
+                if (random.Next(4) == 0)
+                {
+                    var zeros = ReferenceUnaryLength(data, position, data.Length * 8);
+                    if (zeros < 0)
+                    {
+                        break;
+                    }
+
+                    reader.ReadUnary().Should().Be((uint)zeros, $"unary at bit {position}");
+                    position += zeros + 1;
+                }
+                else
+                {
+                    var width = random.Next(33);
+                    if (position + width > data.Length * 8)
+                    {
+                        break;
+                    }
+
+                    reader.ReadBits(width).Should().Be(ReferenceReadBits(data, position, width), $"{width} bits at bit {position}");
+                    position += width;
+                }
+
+                reader.BitPosition.Should().Be(position);
+            }
+        }
+
+        [Fact]
+        public void ReadUnary_RunLongerThanOneWindow_Should_CountEveryZero()
+        {
+            // 150 zero bits then a one: the scan must carry its count across several 64-bit windows,
+            // starting from an unaligned bit position.
+            var data = new byte[24];
+            data[18] = 0b0100_0000; // bit 145
+            var reader = new BitReader(data);
+            reader.ReadBits(3);
+
+            reader.ReadUnary().Should().Be(142u);
+            reader.BitPosition.Should().Be(146);
+        }
+
+        [Fact]
+        public void ReadUnary_WithOnlyZerosBeforeByteLength_Should_Throw_EvenIfTheBufferContinues()
+        {
+            // The one bit lies past byteLength: a reader limited to the first 9 bytes must not see it.
+            var data = new byte[16];
+            data[9] = 0xFF;
+            var reader = new BitReader(data, byteOffset: 0, byteLength: 9);
+
+            var act = () => reader.ReadUnary();
+
+            act.Should().ThrowExactly<EndOfStreamException>();
+            reader.BitPosition.Should().Be(72);
+        }
+
+        [Fact]
+        public void ReadUnary_TerminatingOneOnTheLastBitBeforeByteLength_Should_BeFound()
+        {
+            var data = new byte[16];
+            data[8] = 0b0000_0001;
+            data[9] = 0xFF;
+            var reader = new BitReader(data, byteOffset: 0, byteLength: 9);
+
+            reader.ReadUnary().Should().Be(71u);
+            reader.RemainingBits.Should().Be(0);
+        }
+
+        [Fact]
+        public void ReadBits_WithByteLengthPastTheBuffer_Should_ThrowIndexOutOfRange_LikeBefore()
+        {
+            // A reader constructed past its buffer's end has always failed on the first missing
+            // byte rather than reading zeros; the word-at-a-time load keeps that.
+            var reader = new BitReader([0xAB], byteOffset: 0, byteLength: 2);
+
+            reader.ReadBits(8).Should().Be(0xABu);
+            var act = () => reader.ReadBits(4);
+
+            act.Should().ThrowExactly<IndexOutOfRangeException>();
+        }
+
+        [Fact]
+        public void ReadUnary_WithByteLengthPastTheBuffer_Should_ThrowIndexOutOfRange_LikeBefore()
+        {
+            var reader = new BitReader([0x00], byteOffset: 0, byteLength: 2);
+
+            var act = () => reader.ReadUnary();
+
+            act.Should().ThrowExactly<IndexOutOfRangeException>();
+        }
+
+        [Theory]
+        [InlineData(new byte[] { 0x80 }, 2, 0u, 1)]
+        [InlineData(new byte[] { 0x00, 0x01 }, 5, 15u, 16)]
+        [InlineData(new byte[] { 0x33, 0xB5, 0x00, 0xC4, 0xC7 }, 14, 2u, 3)]
+        [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08 }, 12, 76u, 77)]
+        public void ReadUnary_WithByteLengthPastTheBuffer_And_AOneBitInTheBuffer_Should_FindIt(byte[] data, int byteLength, uint expectedZeros, int expectedPosition)
+        {
+            var reader = new BitReader(data, byteOffset: 0, byteLength: byteLength);
+
+            var zeros = reader.ReadUnary();
+
+            zeros.Should().Be(expectedZeros);
+            reader.BitPosition.Should().Be(expectedPosition);
+        }
+
+        [Fact]
+        public void ReadBits_FromANegativeBitPosition_Should_ThrowIndexOutOfRange()
+        {
+            var reader = new BitReader([0xFF, 0xFF]);
+            reader.SkipBits(-3);
+
+            var act = () => reader.ReadBits(4);
+
+            act.Should().ThrowExactly<IndexOutOfRangeException>();
+        }
+
+        [Fact]
+        public void ReadBits_FromAByteOffsetReader_Should_NotSeeTheBytesBeforeIt()
+        {
+            var data = RandomBytes(seed: 4, length: 32);
+            var reader = new BitReader(data, byteOffset: 5, byteLength: 20);
+
+            reader.ReadBits(32).Should().Be(ReferenceReadBits(data, 40, 32));
+            reader.ReadBits(17).Should().Be(ReferenceReadBits(data, 72, 17));
+        }
+
+        private static byte[] RandomBytes(int seed, int length)
+        {
+            var data = new byte[length];
+            new Random(seed).NextBytes(data);
+
+            // Clear some runs so ReadUnary sees long zero stretches, not just ~1-bit ones.
+            for (var i = 0; i < length; i += 37)
+            {
+                Array.Clear(data, i, Math.Min(9, length - i));
+            }
+
+            return data;
+        }
+
+        private static uint ReferenceReadBits(byte[] data, int position, int width)
+        {
+            var value = 0u;
+            for (var i = 0; i < width; i++)
+            {
+                var bit = (data[(position + i) / 8] >> (7 - ((position + i) % 8))) & 1;
+                value = (value << 1) | (uint)bit;
+            }
+
+            return value;
+        }
+
+        // The number of zero bits before the next one bit, or -1 if none appears before bitLength.
+        private static int ReferenceUnaryLength(byte[] data, int position, int bitLength)
+        {
+            for (var i = position; i < bitLength; i++)
+            {
+                if (ReferenceReadBits(data, i, 1) == 1)
+                {
+                    return i - position;
+                }
+            }
+
+            return -1;
+        }
     }
 }

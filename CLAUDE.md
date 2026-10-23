@@ -415,7 +415,7 @@ own "Decision" section and `THIRD-PARTY-NOTICES.md`'s matching entry for the ful
 
 ## Benchmarks
 
-`src/EggEncoder.Benchmarks/` is a standalone [BenchmarkDotNet](https://benchmarkdotnet.org/) console project — local, manual, point-in-time performance measurements, not part of the test suite and not run in CI. Covers WAV I/O throughput (`WavIoBenchmarks`), end-to-end decode+encode throughput for WAV→MP3/FLAC (`AudioCutterBenchmarks`), `AacEncoderSession`'s own incremental streaming push throughput (`AacStreamingBenchmarks`), and pure decode throughput for FLAC/MP3/WavPack/TTA (`CodecDecodeBenchmarks`) — see [docs/benchmarks.md](docs/benchmarks.md) for how to run it and what's not yet covered.
+`src/EggEncoder.Benchmarks/` is a standalone [BenchmarkDotNet](https://benchmarkdotnet.org/) console project — local, manual, point-in-time performance measurements, not part of the test suite and not run in CI. Covers WAV I/O throughput (`WavIoBenchmarks`), end-to-end decode+encode throughput for WAV→MP3/FLAC (`AudioCutterBenchmarks`), `AacEncoderSession`'s own incremental streaming push throughput (`AacStreamingBenchmarks`), and pure decode throughput for FLAC/MP3/WavPack/TTA/ALAC/WMA/AAC (`CodecDecodeBenchmarks`) — see [docs/benchmarks.md](docs/benchmarks.md) for how to run it and what's not yet covered.
 
 ## Release Process
 

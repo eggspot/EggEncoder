@@ -1,9 +1,12 @@
 using BenchmarkDotNet.Attributes;
+using EggEncoder.Codecs.Aac;
+using EggEncoder.Codecs.Alac;
 using EggEncoder.Codecs.Flac;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.Codecs.Tta;
 using EggEncoder.Codecs.Wav;
 using EggEncoder.Codecs.WavPack;
+using EggEncoder.Codecs.Wma;
 
 namespace EggEncoder.Benchmarks
 {
@@ -24,6 +27,9 @@ namespace EggEncoder.Benchmarks
         private string _mp3Path = null!;
         private string _wavPackPath = null!;
         private string _ttaPath = null!;
+        private string _alacPath = null!;
+        private string _wmaPath = null!;
+        private string _aacPath = null!;
 
         [GlobalSetup]
         public void Setup()
@@ -55,6 +61,24 @@ namespace EggEncoder.Benchmarks
 
                 _ttaPath = Path.Combine(Path.GetTempPath(), $"bench_decode_{Guid.NewGuid():N}.tta");
                 TtaEncoder.Encode(wavPath, _ttaPath);
+
+                _alacPath = Path.Combine(Path.GetTempPath(), $"bench_decode_{Guid.NewGuid():N}.caf");
+                AlacEncoder.Encode(wavPath, _alacPath);
+
+                var interleaved = Array.ConvertAll(pcm, sample => (short)sample);
+                _wmaPath = Path.Combine(Path.GetTempPath(), $"bench_decode_{Guid.NewGuid():N}.wma");
+                WmaEncoder.Encode(_wmaPath, interleaved, Channels, SampleRate);
+
+                // AAC encode is mono-only (AacFrameEncoder's own scope), so this one fixture is the
+                // left channel alone -- its numbers are per mono stream, not comparable 1:1 with the rest.
+                var mono = new short[TotalFrames];
+                for (var frame = 0; frame < TotalFrames; frame++)
+                {
+                    mono[frame] = interleaved[frame * Channels];
+                }
+
+                _aacPath = Path.Combine(Path.GetTempPath(), $"bench_decode_{Guid.NewGuid():N}.aac");
+                AacEncoder.Encode(_aacPath, mono, channels: 1, SampleRate);
             }
             finally
             {
@@ -69,6 +93,9 @@ namespace EggEncoder.Benchmarks
             File.Delete(_mp3Path);
             File.Delete(_wavPackPath);
             File.Delete(_ttaPath);
+            File.Delete(_alacPath);
+            File.Delete(_wmaPath);
+            File.Delete(_aacPath);
         }
 
         [Benchmark(Description = "FlacDecoder: decode 10s stereo/16-bit")]
@@ -100,6 +127,30 @@ namespace EggEncoder.Benchmarks
         {
             long total = 0;
             TtaDecoder.Decode(_ttaPath, (block, _, _, _, _) => total += block.Length);
+            return total;
+        }
+
+        [Benchmark(Description = "AlacDecoder: decode 10s stereo/16-bit")]
+        public long DecodeAlac()
+        {
+            long total = 0;
+            AlacDecoder.Decode(_alacPath, (block, _, _, _, _) => total += block.Length);
+            return total;
+        }
+
+        [Benchmark(Description = "WmaDecoder: decode 10s stereo/16-bit")]
+        public long DecodeWma()
+        {
+            long total = 0;
+            WmaDecoder.Decode(_wmaPath, (block, _, _, _, _) => total += block.Length);
+            return total;
+        }
+
+        [Benchmark(Description = "AacDecoder: decode 10s mono/16-bit")]
+        public long DecodeAac()
+        {
+            long total = 0;
+            AacDecoder.Decode(_aacPath, (block, _, _, _, _) => total += block.Length);
             return total;
         }
     }
