@@ -26,6 +26,12 @@ namespace EggEncoder.Streaming
         /// overload; the default calls <see cref="WriteInitSegment(ReadOnlySpan{byte})"/> and
         /// returns <paramref name="fileName"/>.
         /// </summary>
+        /// <remarks>
+        /// After a configuration change (<see cref="Hls.HlsSegmenter.UpdateTracks"/>) the segmenter
+        /// writes further init segments, <c>init_2.mp4</c> and so on, which the playlist lists by
+        /// the URI returned here. The default keeps only one init segment, so a sink used with
+        /// configuration changes should override this overload and keep each one under its name.
+        /// </remarks>
         /// <param name="fileName">A bare file name chosen by the segmenter, e.g. <c>init.mp4</c>.</param>
         /// <param name="bytes">The init segment.</param>
         string WriteInitSegment(string fileName, ReadOnlySpan<byte> bytes)

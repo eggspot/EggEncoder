@@ -147,6 +147,11 @@ namespace EggEncoder.Streaming.Hls
                 if (!isCutPoint)
                 {
                     DroppedLeadingPacketCount++;
+                    if (cutFailure is not null)
+                    {
+                        ExceptionDispatchInfo.Throw(cutFailure);
+                    }
+
                     return;
                 }
 
@@ -181,8 +186,9 @@ namespace EggEncoder.Streaming.Hls
         /// or level change), a new AudioSpecificConfig. The new set must hold the same track ids in
         /// the same order, each with its kind, codec and timescale unchanged (restart the rendition
         /// for anything else); a track whose <see cref="MediaTrackInfo.ConfigVersion"/> is unchanged
-        /// must keep its codec configuration bytes. A set whose versions all match the current ones
-        /// changes nothing. Nothing is written here: the next <see cref="AddPacket"/> ends the
+        /// must keep its codec configuration bytes, compared both with the configuration in use and
+        /// with an update not yet applied. A set whose versions all match the latest ones changes
+        /// nothing. Nothing is written here: the next <see cref="AddPacket"/> ends the
         /// pending segment (built with the old configuration, its duration measured as
         /// <see cref="Complete"/> measures the final one), then waits for the next cut point as at
         /// the start of the stream, dropping packets before it (see
@@ -209,6 +215,7 @@ namespace EggEncoder.Streaming.Hls
                 throw new InvalidOperationException("Cannot update tracks after Complete() has been called.");
             }
 
+            _tracks!.RequireSameTrackLayout(tracks, nameof(tracks));
             latest.RequireSameTrackLayout(tracks, nameof(tracks));
             if (!HasNewConfigVersion(latest, tracks))
             {

@@ -351,6 +351,47 @@ namespace EggEncoder.UnitTests.Streaming.Hls
             PlaylistText(sink).Should().NotContain("#EXT-X-DISCONTINUITY", "no segment before the change made it into the playlist");
         }
 
+        [Theory]
+        [InlineData(SegmentFormat.Fmp4)]
+        [InlineData(SegmentFormat.MpegTs)]
+        public void AddPacket_DroppedPacketThatAppliesAnUpdate_Should_StillThrowTheCutFailure(SegmentFormat format)
+        {
+            var inner = new InMemoryStreamingSink();
+            var sink = new FailingSink(inner);
+            var segmenter = new HlsSegmenter(Tracks(), 1, sink, format);
+            segmenter.AddPacket(Video(0, key: true));
+            segmenter.AddPacket(Video(1000, key: true));
+            segmenter.AddPacket(Video(1040));
+            segmenter.UpdateTracks(UpdatedTracks());
+            sink.FailMediaSegments = true;
+
+            var act = () => segmenter.AddPacket(Audio(1050));
+
+            act.Should().ThrowExactly<IOException>();
+            segmenter.DroppedLeadingPacketCount.Should().Be(1);
+            sink.FailMediaSegments = false;
+            segmenter.AddPacket(Video(2000, key: true, version: 1));
+            segmenter.Complete();
+            inner.MediaSegments.Keys.Should().Equal(1L, 2L);
+        }
+
+        [Fact]
+        public void UpdateTracks_ReusingTheAppliedVersionWithNewBytes_Should_Throw_And_KeepThePendingUpdate()
+        {
+            var sink = new InMemoryStreamingSink();
+            var segmenter = new HlsSegmenter(Tracks(), 1, sink);
+            segmenter.AddPacket(Video(0, key: true));
+            segmenter.UpdateTracks(UpdatedTracks());
+
+            var act = () => segmenter.UpdateTracks(new MediaTrackSet([VideoTrack(0) with { CodecConfiguration = MediaFixtures.AvcBaselineRecord }, AudioTrack(0)]));
+
+            act.Should().ThrowExactly<ArgumentException>();
+            segmenter.AddPacket(Video(1000, key: true, version: 1));
+            segmenter.AddPacket(Video(2000, key: true, version: 1));
+            sink.MediaSegments.Keys.Should().Equal(1L, 2L);
+            sink.InitSegments["init_2.mp4"].Should().Equal(FmpInitSegmentWriter.BuildInitSegment(UpdatedTracks()));
+        }
+
         [Fact]
         public async Task HlsMediaPacketSink_UpdateTracks_Should_ForwardToTheSegmenter()
         {
@@ -442,6 +483,29 @@ namespace EggEncoder.UnitTests.Streaming.Hls
 
         private static bool ContainsSequence(byte[] haystack, byte[] needle) =>
             haystack.AsSpan().IndexOf(needle) >= 0;
+
+        private sealed class FailingSink(InMemoryStreamingSink inner) : IStreamingSink
+        {
+            public bool FailMediaSegments { get; set; }
+
+            public void WriteInitSegment(ReadOnlySpan<byte> bytes) => inner.WriteInitSegment(bytes);
+
+            public void WriteMediaSegment(long sequenceNumber, ReadOnlySpan<byte> bytes)
+            {
+                if (FailMediaSegments)
+                {
+                    throw new IOException("Upload failed");
+                }
+
+                inner.WriteMediaSegment(sequenceNumber, bytes);
+            }
+
+            public void WritePlaylist(ReadOnlySpan<byte> utf8Bytes) => inner.WritePlaylist(utf8Bytes);
+
+            public void DeleteMediaSegment(long sequenceNumber) => inner.DeleteMediaSegment(sequenceNumber);
+
+            public string WriteInitSegment(string fileName, ReadOnlySpan<byte> bytes) => inner.WriteInitSegment(fileName, bytes);
+        }
 
         private sealed class LoggingSink : IStreamingSink
         {
