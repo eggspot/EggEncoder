@@ -65,6 +65,7 @@
     <None Include="Containers\Flv\h264_aac.flv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\hevc.flv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\mp3.flv" CopyToOutputDirectory="Always" />
+    <None Include="Streaming\Hls\h264_aac_5s.flv" CopyToOutputDirectory="Always" />
     <None Include="Live\Rtmp\ffmpeg_publish.bin" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mp3\cbr128.mp3" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mp3\no_xing.mp3" CopyToOutputDirectory="Always" />

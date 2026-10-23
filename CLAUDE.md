@@ -199,8 +199,8 @@ known total length required anywhere in this surface). See `docs/streaming-plan.
 ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
-demux/mux, the RTMP protocol core, the RTMP ingest server and video tracks in the fMP4 writers and the MPEG-TS
-muxer are done; still open: RTMP client incl. RTMPS push, packet-driven HLS, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+demux/mux, the RTMP protocol core, the RTMP ingest server, video tracks in the fMP4 writers and the MPEG-TS
+muxer, and packet-driven HLS are done; still open: mid-stream config changes in HLS (item 5d), RTMP client incl. RTMPS push, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.
@@ -331,6 +331,26 @@ defaults every network-facing item must meet.
   segments in packet mode, unlike frame mode. Validation and conversion run before anything is
   written, so a call that throws leaves the muxer unchanged. Tested against the FLV fixtures by
   the test-only `MpegTsTestReader` and an `EGGENCODER_FFMPEG_ORACLE=1`-gated `ffprobe` + `ffmpeg -f null`.
+- **Packet-driven HLS** (`docs/live-ingest-restream-plan.md` item 5c, `Streaming/Hls/HlsSegmenter.Packets.cs`):
+  `new HlsSegmenter(MediaTrackSet, targetDurationSeconds, sink[, liveWindowSize][, SegmentFormat])` +
+  `AddPacket(MediaPacket)` drives the fMP4/MPEG-TS packet writers above. Cut points are the first
+  video track's keyframes (every packet of the first track when there is no video); a cut point whose
+  PTS is >= target past the segment's first cut point starts the next segment, packets go into
+  segments in arrival order (ffmpeg's hlsenc rule), and packets before the first cut point (audio
+  included) are dropped and counted in `DroppedLeadingPacketCount`. EXTINF is the cut-point PTS
+  difference; the final segment runs to its latest PTS plus the cut track's last DTS step (default
+  1/30 s or 1024 AAC samples), also passed to the fMP4 writer as `nextDecodeTimes`. Common checks
+  (track, `ConfigVersion`, DTS >= 0, PTS >= DTS, DTS increasing) throw before a packet is added;
+  a container rejection or a sink exception at a cut discards that segment (a failed sink write uses
+  no sequence number), rethrows from that call, and the next segment still starts at the cut point
+  (found by the independent review in PR #149); `Complete` writes `EXT-X-ENDLIST` before rethrowing. Mid-stream
+  configuration changes (new init segment + `EXT-X-DISCONTINUITY`, which needs an `IStreamingSink`
+  extension for versioned init segments) are item 5d. `HlsMediaPacketSink` is the
+  `IMediaPacketSink` wrapper (builds the segmenter in `OpenAsync`; synchronous inside), and
+  `M3u8MasterPlaylistWriter.BuildCodecsString(MediaTrackSet)` derives `CODECS` from the avcC/hvcC SPS
+  and the AudioSpecificConfig object type. Fixture: `Streaming/Hls/h264_aac_5s.flv` (ffmpeg 9.0.2,
+  x264 1 s GOPs with B-frames + AAC); the `EGGENCODER_FFMPEG_ORACLE=1`-gated test runs `ffprobe` and
+  `ffmpeg -f null` on the written playlists.
 - `Streaming.Hls.M3u8MasterPlaylistWriter`/`HlsRenditionDescriptor` (`Streaming/Hls/`) -- a
   top-level playlist listing multiple audio-bitrate renditions, each a complete, independent
   audio rendition (not an `EXT-X-MEDIA:TYPE=AUDIO` alternate-track-alongside-video grouping, a
