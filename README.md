@@ -317,7 +317,34 @@ server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
 await server.StartAsync(); // OBS: Server rtmp://this-host/live, Stream Key secretKey
 ```
 
-**Planned:** the rest of live ingest and restream — RTMP/RTMPS push to YouTube/Twitch/any server, video passthrough into HLS playlists (fMP4 and MPEG-TS segments with video are done, above), and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
+### RTMP publish (push)
+
+`RtmpPublishClient` pushes a packet stream to YouTube, Twitch, Facebook or any RTMP server, over `rtmp://` or `rtmps://` (TLS with the system's certificate validation), the way OBS does: you give it the server URL and the stream key separately. It is an `IMediaPacketSink`, so packets from an FLV file or an `RtmpServer` ingest go out without decoding: H.264, H.265/AV1/VP9 (Enhanced RTMP, announced in `connect`'s `fourCcList`), AAC and MP3. It sends ffmpeg's command order, the sequence headers before the first frame and again after `UpdateTracks` reports a configuration change, and on `CompleteAsync` an `FCUnpublish`/`deleteStream` and a clean close. Every step has a timeout; a failure closes the socket and throws `RtmpClientException`, whose `Reason` (`ConnectFailed`, `TlsFailed`, `Rejected`, `Timeout`, `ConnectionLost`, `ProtocolError`) and `StatusCode` (such as `NetStream.Publish.BadName`) tell a caller whether retrying can help. The stream key never appears in an exception message. There is no reconnect and no real-time pacing in the client (those belong to the coming restream hub and live sources). Verified against this library's `RtmpServer` (plain and RTMPS) and a real `ffmpeg -listen 1` receiver.
+
+```csharp
+using EggEncoder.Containers.Flv;
+using EggEncoder.Live.Rtmp;
+using EggEncoder.Media;
+
+await using var client = new RtmpPublishClient(new Uri("rtmp://a.rtmp.youtube.com/live2"), streamKey);
+await using var source = new FlvFileSource(File.OpenRead("show.flv"));
+MediaTrackSet? tracks = null;
+await foreach (var packet in source.ReadPacketsAsync())
+{
+    if (!ReferenceEquals(tracks, source.Tracks))
+    {
+        if (tracks is null) await client.OpenAsync(source.Tracks!);
+        else client.UpdateTracks(source.Tracks!); // a new sequence header mid-stream
+        tracks = source.Tracks;
+    }
+
+    await client.WriteAsync(packet); // no pacing: a file goes out as fast as the server takes it
+}
+
+await client.CompleteAsync();
+```
+
+**Planned:** the rest of live ingest and restream — pulling an RTMP stream as a source, file/URL live sources with real-time pacing, and one-input-to-many-outputs restreaming, all pure managed. Not shipped yet; see [docs/live-ingest-restream-plan.md](docs/live-ingest-restream-plan.md) for the plan and its status.
 
 ## Supported Formats
 

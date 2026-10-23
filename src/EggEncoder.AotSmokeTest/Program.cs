@@ -263,6 +263,45 @@ try
         }
     });
 
+    await RunCheck("RTMP client: RtmpPublishClient publishes H.264 + AAC to the loopback RtmpServer", async () =>
+    {
+        await using var server = new EggEncoder.Live.Rtmp.RtmpServer(new EggEncoder.Live.Rtmp.RtmpServerOptions
+        {
+            EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0),
+            AuthorizePublishAsync = (request, _) => ValueTask.FromResult(request.StreamKey == "key")
+        });
+        var received = new TaskCompletionSource<List<EggEncoder.Media.MediaPacket>>();
+        server.PublishStarted += (_, stream) => _ = Task.Run(async () =>
+        {
+            var packets = new List<EggEncoder.Media.MediaPacket>();
+            await foreach (var packet in stream.ReadPacketsAsync())
+            {
+                packets.Add(packet);
+            }
+
+            received.SetResult(packets);
+        });
+        await server.StartAsync();
+
+        var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
+        var tracks = new EggEncoder.Media.MediaTrackSet(
+        [
+            new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, avcC, 0, width: 64, height: 64),
+            new EggEncoder.Media.MediaTrackInfo(1, EggEncoder.Media.MediaKind.Audio, EggEncoder.Media.MediaCodec.Aac, 1000, new byte[] { 0x12, 0x08 }, 0, sampleRate: 44100, channels: 1)
+        ]);
+        await using var client = new EggEncoder.Live.Rtmp.RtmpPublishClient(new Uri($"rtmp://127.0.0.1:{server.LocalEndPoint!.Port}/live"), "key");
+        await client.OpenAsync(tracks);
+        await client.WriteAsync(new EggEncoder.Media.MediaPacket(0, 80, 0, true, 0, new byte[] { 0, 0, 0, 1, 0x65 }));
+        await client.WriteAsync(new EggEncoder.Media.MediaPacket(1, 23, 23, true, 0, new byte[] { 0x21 }));
+        await client.CompleteAsync();
+
+        var packets = await received.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        if (packets.Count != 2 || packets[0].CompositionOffset != 80 || packets[1].Dts != 23 || client.TcUrl != $"rtmp://127.0.0.1:{server.LocalEndPoint.Port}/live")
+        {
+            throw new InvalidOperationException("RTMP client check produced unexpected results");
+        }
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }

@@ -119,7 +119,8 @@ dimensions (unreadable SPS leaves them 0, not fatal), unwraps 32-bit timestamps,
 header-declared track is configured, and is strict about the container (signature, DataOffset,
 `PreviousTagSize`, truncation) but skips-and-counts unusable tags. `FlvFileSource` is the async
 `IAsyncEnumerable<MediaPacket>` wrapper over any `Stream`. `FlvWriter` implements `IMediaPacketSink`
-over a synchronous core, forward-only (no `CanSeek`; `onMetaData` duration stays 0), legacy tags for
+over a synchronous core (its tag-level half, track validation and the sequence-header/frame tag
+bodies, is the internal `FlvTagMuxer`, shared with `RtmpPublishClient`), forward-only (no `CanSeek`; `onMetaData` duration stays 0), legacy tags for
 H.264/AAC/MP3 and Enhanced FourCC tags for HEVC/AV1/VP9, CodedFramesX for HEVC frames with no
 composition offset as ffmpeg does. `FlvMetadata` wraps `onMetaData`. The AMF0 codec
 (`Amf0Reader`/`Amf0Writer`/`Amf0Value`) lives where RTMP item 3 will reuse it; the reader's bounds
@@ -190,6 +191,30 @@ self-signed certificate, auth, duplicates, bounds, malformed input, fake-clock t
 test-only `Microsoft.Extensions.TimeProvider.Testing` package), `RtmpServerOptionsTest`, and the
 `EGGENCODER_FFMPEG_ORACLE=1`-gated `RtmpServerFfmpegOracleTest` (a live `ffmpeg -re` publish).
 
+### RTMP publish client (`src/EggEncoder/Live/Rtmp/RtmpPublishClient*.cs`)
+
+`docs/live-ingest-restream-plan.md` item 6a (the play client is 6b). `RtmpPublishClient :
+IMediaPacketSink`, built as `new RtmpPublishClient(serverUrl, streamKey, options)` (server URL and key
+separate, OBS style, decided by research in PR #153: app = the URL path trimmed of `/`, `tcUrl` keeps
+the port only when the URL names one, a URL with user info/query/fragment is refused, the key is sent
+verbatim). `OpenAsync` validates tracks through `FlvTagMuxer` before connecting, then TCP (dual-mode
+`Socket`, `NoDelay`), TLS for `rtmps://` (default validation unless
+`RtmpPublishClientOptions.RemoteCertificateValidation`), the handshake, and ffmpeg's order: `connect`
+(`fourCcList` only for H.265/AV1/VP9), Set Chunk Size, `releaseStream`, `FCPublish`, `createStream`,
+`publish` on chunk stream 8, wait for `NetStream.Publish.Start`, `@setDataFrame`. Media goes on chunk
+streams 4 (audio) / 6 (video), data on 5. After open a receive loop answers pings, Set Peer
+Bandwidth and acknowledgement windows and fails the client on an `onStatus` at level `error`, EOF or
+a protocol error; it shares one `SemaphoreSlim` with writes. `UpdateTracks` forwards a mid-stream
+configuration change. `CompleteAsync`: `FCUnpublish` + `deleteStream`, TLS close_notify,
+`Shutdown(Send)`, waits up to `CloseTimeout` for the server to close (avoids an RST dropping the
+tail; the close_notify write is inside that bound, since `SslStream.ShutdownAsync` takes no token),
+and throws a refusal or protocol error the server sends before it closes. Failures close the socket and are typed `RtmpClientException` (`RtmpClientFailureReason`,
+`StatusCode`), rethrown by every later call; no message carries the key or the server's description.
+No reconnect and no pacing (items 7/8). Tests: `RtmpPublishClientTest` (loopback to `RtmpServer`:
+plain, RTMPS, IPv6, HEVC, MP3, config change; `RtmpScriptedServer`, a test-only one-connection
+server, for every failure path) and the `EGGENCODER_FFMPEG_ORACLE=1`-gated
+`RtmpPublishClientFfmpegOracleTest` (`ffmpeg -listen 1` records, `ffprobe` checks).
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
@@ -200,7 +225,7 @@ ordered plan, acceptance criteria per item, and what's merged versus still open.
 
 **Planned, not yet implemented**: the rest of live ingest and restream (the packet model, FLV
 demux/mux, the RTMP protocol core, the RTMP ingest server, video tracks in the fMP4 writers and the MPEG-TS
-muxer, and packet-driven HLS with mid-stream config changes are done; still open: RTMP client incl. RTMPS push, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
+muxer, and packet-driven HLS with mid-stream config changes are done; the RTMP publish client incl. RTMPS is done; still open: the RTMP play client, file/URL/HLS live sources with `-re` pacing, restream fan-out, later SRT) -- see
 `docs/live-ingest-restream-plan.md`, which also records the decided async API shape for network I/O
 (an explicit exception to this surface's synchronous-callback idiom) and the listener security
 defaults every network-facing item must meet.

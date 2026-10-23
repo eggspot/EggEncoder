@@ -1186,6 +1186,63 @@ server.PublishStarted += (_, stream) =&gt; _ = Task.Run(async () =&gt;
     if (tracks is not null) await recording.CompleteAsync();
 });
 await server.StartAsync(); // OBS: Server rtmp://this-host/live, Stream Key secretKey</code></pre>
+
+      <h2 id="rtmp-publish-client">RTMP Publish Client (Push)</h2>
+      <p>Namespace: <code>EggEncoder.Live.Rtmp</code>. Pushes a <a href="#media-packet-model">packet</a> stream to YouTube, Twitch, Facebook, any RTMP ingest or this library's own <a href="#rtmp-server"><code>RtmpServer</code></a>, over <code>rtmp://</code> or <code>rtmps://</code>, without decoding: what OBS or <code>ffmpeg -c copy -f flv rtmp://...</code> does. It is an <code>IMediaPacketSink</code>, so an <a href="#flv">FLV file</a> or an RTMP ingest can be forwarded packet by packet. This is item 6a of <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/live-ingest-restream-plan.md">the live ingest &amp; restream plan</a>; pulling a stream (<code>play</code>) is item 6b.</p>
+      <pre><code class="language-csharp">public sealed class RtmpPublishClient : IMediaPacketSink
+{
+    public const int DefaultRtmpPort = 1935;
+    public const int DefaultRtmpsPort = 443;
+    public RtmpPublishClient(Uri serverUrl, string streamKey, RtmpPublishClientOptions? options = null);
+    public string AppName { get; }                         // the URL's path, without leading and trailing '/'
+    public string TcUrl { get; }                           // scheme://host[:port]/app, never the stream key
+    public ValueTask OpenAsync(MediaTrackSet tracks, CancellationToken cancellationToken = default);
+    public ValueTask WriteAsync(MediaPacket packet, CancellationToken cancellationToken = default);
+    public void UpdateTracks(MediaTrackSet tracks);        // a mid-stream configuration change
+    public ValueTask CompleteAsync(CancellationToken cancellationToken = default);
+    public ValueTask DisposeAsync();
+}
+
+public sealed class RtmpPublishClientOptions
+{
+    public RemoteCertificateValidationCallback? RemoteCertificateValidation { get; init; } // null: the system's validation
+    public FlvMetadata? Metadata { get; init; }            // null: FlvMetadata.FromTracks(tracks)
+    public RtmpChunkReaderOptions ChunkReader { get; init; }
+    public TimeProvider TimeProvider { get; init; }
+    public int OutboundChunkSize { get; init; }            // default 4,096
+    public TimeSpan ConnectTimeout { get; init; }          // default 10 s (TCP + TLS + RTMP handshake)
+    public TimeSpan PublishTimeout { get; init; }          // default 10 s (handshake done to publish accepted)
+    public TimeSpan WriteTimeout { get; init; }            // default 30 s (one write or the unpublish)
+    public TimeSpan CloseTimeout { get; init; }            // default 2 s (waiting for the server to close)
+}
+
+public sealed class RtmpClientException : IOException
+{
+    public RtmpClientFailureReason Reason { get; }         // ConnectFailed, TlsFailed, Rejected, Timeout, ConnectionLost, ProtocolError
+    public string? StatusCode { get; }                     // the server's code when Rejected, e.g. NetStream.Publish.BadName
+}</code></pre>
+      <p><strong>URLs and keys.</strong> The server URL and the stream key are separate, as ingest services hand them out (<code>rtmp://a.rtmp.youtube.com/live2</code> plus the key). The application is the URL's path, which may contain <code>/</code> (<code>rtmp://host/app/instance</code>); the port defaults to 1935 for <code>rtmp://</code> and 443 for <code>rtmps://</code>, and <code>tcUrl</code> keeps the port only when the URL names one. A URL with user info, a query or a fragment is refused, so secrets stay in the key, which is sent exactly as given (a Twitch <code>key?bandwidthtest=true</code> included). The key never appears in an exception message.</p>
+      <p><strong>The publish flow.</strong> <code>OpenAsync</code> checks the tracks first (what <a href="#flv"><code>FlvWriter</code></a> accepts: at most one audio track, AAC or MP3, and one video track, H.264 or H.265/AV1/VP9), so an unsupported set throws before any connection. It then connects, runs TLS for <code>rtmps://</code> (the system's certificate validation unless <code>RemoteCertificateValidation</code> is set), the handshake, and the commands in ffmpeg's order: <code>connect</code> (with <code>fourCcList</code> only when a video track needs Enhanced RTMP), Set Chunk Size, <code>releaseStream</code>, <code>FCPublish</code>, <code>createStream</code> and <code>publish</code>. It returns once the server answers <code>NetStream.Publish.Start</code> and <code>@setDataFrame</code>/<code>onMetaData</code> is sent. <code>WriteAsync</code> sends each packet as an FLV tag body, preceded by its track's sequence header the first time and after <code>UpdateTracks</code> changes its <code>ConfigVersion</code>; a packet the muxer rejects throws <code>ArgumentException</code> and the publish carries on. <code>CompleteAsync</code> sends <code>FCUnpublish</code> and <code>deleteStream</code>, closes the sending side (TLS close_notify first) and waits up to <code>CloseTimeout</code> for the server to close, so no reset can drop the last bytes; the close_notify write counts against that timeout too, and a refusal or protocol error the server sends before closing is thrown from <code>CompleteAsync</code>. Packets go out as fast as the server takes them, with no real-time pacing.</p>
+      <p><strong>Failures.</strong> Every step has a timeout. A failure closes the socket and throws <code>RtmpClientException</code>, and every later call throws the same exception again; there is no reconnect, so a caller (such as the coming restream hub) decides from <code>Reason</code> whether to try again: <code>Rejected</code> (an <code>_error</code> reply, or an <code>onStatus</code> at level <code>error</code> before or during the publish, with its <code>StatusCode</code>) won't succeed with the same settings, while <code>ConnectionLost</code> or <code>Timeout</code> might. The server's free-text description is not exposed, since a server may echo the key into it. Cancelling a call through its token throws <code>OperationCanceledException</code>; a write cancelled part-way through leaves the stream unusable, so the client is failed and closed. Pings, Set Peer Bandwidth and acknowledgement windows are answered while publishing.</p>
+      <pre><code class="language-csharp">// Forward an RTMP ingest (OBS publishing to this machine) to YouTube, without decoding.
+server.PublishStarted += (_, stream) =&gt; _ = Task.Run(async () =&gt;
+{
+    await using var youtube = new RtmpPublishClient(new Uri("rtmp://a.rtmp.youtube.com/live2"), youtubeKey);
+    MediaTrackSet? tracks = null;
+    await foreach (var packet in stream.ReadPacketsAsync())
+    {
+        if (!ReferenceEquals(tracks, stream.Tracks))
+        {
+            if (tracks is null) await youtube.OpenAsync(stream.Tracks!);
+            else youtube.UpdateTracks(stream.Tracks!);
+            tracks = stream.Tracks;
+        }
+
+        await youtube.WriteAsync(packet);
+    }
+
+    if (tracks is not null) await youtube.CompleteAsync();
+});</code></pre>
     </div>
   </main>
 </div>
