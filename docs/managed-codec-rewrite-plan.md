@@ -9,7 +9,7 @@ tracing to one of these three DLLs — see the per-item sections below for the e
 Every replacement is clean-room managed C#, implemented from the public format specs (RFC 9639 for
 FLAC, ISO/IEC 11172-3 for MP3, the WavPack 4/5 bitstream format) — no code derived from
 LAME/libFLAC/libwavpack sources, no GPL/LGPL *dependency* (nothing linked, vendored, or shipped),
-matching this project's existing MIT license and its own established pattern for AAC/ALAC/TTA/WMA
+matching this project's MIT OR Apache-2.0 license and its own established pattern for AAC/ALAC/TTA/WMA
 (all already pure managed, built from scratch). Permissively licensed (MIT/BSD/Apache) NuGet
 packages or reference implementations are allowed as a dependency or study reference if
 independently verified — see each item below for specific candidates already checked.

@@ -1191,7 +1191,7 @@ double? integratedLoudnessLufs = calculator.GetIntegratedLoudness();
 
 ## License
 
-MIT (see LICENSE). EggEncoder bundles no native binaries of any kind -- see THIRD-PARTY-NOTICES.md for the licenses of its pure managed codec dependencies. MP3 decode (via NLayer), Opus (via Concentus), Vorbis decode (via NVorbis), and Vorbis encode (via OggVorbisEncoder) are all permissively-licensed, pure managed NuGet dependencies.
+MIT OR Apache-2.0 (see LICENSE-MIT and LICENSE-APACHE). EggEncoder bundles no native binaries of any kind -- see THIRD-PARTY-NOTICES.md for the licenses of its pure managed codec dependencies. MP3 decode (via NLayer), Opus (via Concentus), Vorbis decode (via NVorbis), and Vorbis encode (via OggVorbisEncoder) are all permissively-licensed, pure managed NuGet dependencies.
 
 ## Links
 

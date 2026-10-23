@@ -6,7 +6,7 @@ Sponsored by [eggspot.app](https://eggspot.app)
 
 [![CI](https://github.com/eggspot/EggEncoder/actions/workflows/ci.yml/badge.svg)](https://github.com/eggspot/EggEncoder/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/EggEncoder.svg)](https://www.nuget.org/packages/EggEncoder)
-[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE-MIT)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/eggspot)](https://github.com/sponsors/eggspot)
 
 📖 **[Full documentation →](https://eggspot.github.io/EggEncoder/)**
@@ -35,7 +35,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - 🛑 **`CancellationToken` support** — `ConvertFile`/`CutFile` (and `Probe`) each have a `CancellationToken`-accepting overload; `ConvertFile`/`CutFile` check it once per decoded block for real, sub-second cancellation, not just once up front
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
 - 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and a handful of pure managed codec NuGet packages (NLayer, Concentus, NVorbis, OggVorbisEncoder)
-- 📖 **MIT licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of the pure managed codec dependencies above
+- 📖 **MIT OR Apache-2.0 licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of the pure managed codec dependencies above
 
 ## Installation
 
@@ -365,6 +365,6 @@ WAV supports 8-bit unsigned, 16/24/32-bit signed integer, and 32-bit IEEE float 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). EggEncoder bundles no native binaries of any kind; see
+MIT OR Apache-2.0, at your option — see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE). EggEncoder bundles no native binaries of any kind; see
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of its pure managed codec
 dependencies.
