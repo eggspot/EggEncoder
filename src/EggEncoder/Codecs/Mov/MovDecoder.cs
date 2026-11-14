@@ -82,7 +82,15 @@ namespace EggEncoder.Codecs.Mov
                 stream.ReadExactly(sampleBuffer.AsSpan(0, size));
 
                 var reader = new BitReader(sampleBuffer, 0, size);
-                var outputFrame = frameDecoder.DecodeFrame(reader);
+                int[] outputFrame;
+                try
+                {
+                    outputFrame = frameDecoder.DecodeFrame(reader);
+                }
+                catch (EndOfStreamException e)
+                {
+                    throw new InvalidDataException("AAC: an MP4 sample is truncated", e);
+                }
 
                 onBlockDecoded(outputFrame, audioConfig.Channels, audioConfig.SampleRate, 16, totalSamplesPerChannel);
             }

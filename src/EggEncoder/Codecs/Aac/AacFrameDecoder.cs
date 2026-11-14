@@ -33,6 +33,7 @@ namespace EggEncoder.Codecs.Aac
         private readonly AacChannelState[] _states;
         private readonly double[][] _longWindows;
         private readonly double[][] _shortWindows;
+        private readonly Random _noise = new(12345);
 
         public AacFrameDecoder(int sampleRate, int channels)
         {
@@ -406,7 +407,7 @@ namespace EggEncoder.Codecs.Aac
             return lpc;
         }
 
-        private static double[][] ReadSpectrum(BitReader reader, AacIcsInfo info, int[] bandTypes, int[] scalefactors, AacPulse? pulse)
+        private double[][] ReadSpectrum(BitReader reader, AacIcsInfo info, int[] bandTypes, int[] scalefactors, AacPulse? pulse)
         {
             var windowLength = info.IsShort ? ShortCoefficientCount : FrameSamples;
             var quantized = new int[info.WindowCount][];
@@ -456,7 +457,6 @@ namespace EggEncoder.Codecs.Aac
             }
 
             var spectrum = new double[info.WindowCount][];
-            var noise = new Random(12345);
             window = 0;
             for (var group = 0; group < info.GroupCount; group++)
             {
@@ -476,7 +476,7 @@ namespace EggEncoder.Codecs.Aac
                             case IntensityInPhaseBandType:
                                 break;
                             case NoiseBandType:
-                                FillNoise(coefficients, start, end, Math.Pow(2, scalefactors[index] / 4.0), noise);
+                                FillNoise(coefficients, start, end, Math.Pow(2, scalefactors[index] / 4.0), _noise);
                                 break;
                             default:
                                 var gain = Math.Pow(2, scalefactors[index] / 4.0);
@@ -581,6 +581,12 @@ namespace EggEncoder.Codecs.Aac
                 for (var band = 0; band < info.MaxSfb; band++)
                 {
                     var index = (group * info.MaxSfb) + band;
+                    if (msUsed[index] && left.BandTypes[index] == NoiseBandType && right.BandTypes[index] == NoiseBandType)
+                    {
+                        CopyNoise(left, right, info, group, window, band, index);
+                        continue;
+                    }
+
                     if (!msUsed[index] || right.BandTypes[index] >= NoiseBandType || left.BandTypes[index] == NoiseBandType)
                     {
                         continue;
@@ -601,6 +607,20 @@ namespace EggEncoder.Codecs.Aac
                 }
 
                 window += info.GroupLengths[group];
+            }
+        }
+
+        private static void CopyNoise(AacIcs left, AacIcs right, AacIcsInfo info, int group, int window, int band, int index)
+        {
+            var ratio = Math.Pow(2, (right.Scalefactors[index] - left.Scalefactors[index]) / 4.0);
+            for (var w = 0; w < info.GroupLengths[group]; w++)
+            {
+                var l = left.Spectrum[window + w];
+                var r = right.Spectrum[window + w];
+                for (int k = info.Offsets[band]; k < info.Offsets[band + 1]; k++)
+                {
+                    r[k] = l[k] * ratio;
+                }
             }
         }
 

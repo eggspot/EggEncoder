@@ -4,7 +4,7 @@ namespace EggEncoder.Codecs.Aac
 {
     internal static class AacProgramConfig
     {
-        public static int Skip(BitReader reader)
+        public static void Skip(BitReader reader)
         {
             reader.SkipBits(4 + 2 + 4);
             var front = (int)reader.ReadBits(4);
@@ -21,21 +21,12 @@ namespace EggEncoder.Codecs.Aac
                 }
             }
 
-            var channels = 0;
-            foreach (var count in new[] { front, side, back })
-            {
-                for (var i = 0; i < count; i++)
-                {
-                    channels += reader.ReadBits(1) != 0 ? 2 : 1;
-                    reader.SkipBits(4);
-                }
-            }
+            reader.SkipBits((front + side + back) * 5);
 
             reader.SkipBits((lfe * 4) + (associated * 4) + (coupling * 5));
             reader.ByteAlign();
             var commentBytes = (int)reader.ReadBits(8);
             reader.SkipBits(commentBytes * 8);
-            return channels;
         }
     }
 }

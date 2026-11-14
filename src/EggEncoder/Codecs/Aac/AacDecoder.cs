@@ -34,10 +34,24 @@ namespace EggEncoder.Codecs.Aac
 
         private static AacStreamInfo Decode(byte[] fileBytes, AudioBlockDecodedCallback onBlockDecoded)
         {
+            try
+            {
+                return DecodeCore(fileBytes, onBlockDecoded);
+            }
+            catch (EndOfStreamException e)
+            {
+                throw new InvalidDataException("AAC: the stream is truncated", e);
+            }
+        }
+
+        private static AacStreamInfo DecodeCore(byte[] fileBytes, AudioBlockDecodedCallback onBlockDecoded)
+        {
             var totalSamples = CountTotalSamples(fileBytes);
 
             var reader = new BitReader(fileBytes);
             AacFrameDecoder? frameDecoder = null;
+            var frameDecoderSampleRate = 0;
+            var frameDecoderChannels = 0;
 
             var channels = 0;
             var sampleRate = 0;
@@ -51,7 +65,22 @@ namespace EggEncoder.Codecs.Aac
                 var frameEndBitPosition = header.FrameStartBitPosition + (header.FrameLength * 8);
 
                 frameDecoder ??= new AacFrameDecoder(sampleRate, channels);
-                var outputFrame = frameDecoder.DecodeFrame(reader);
+                if ((frameDecoderSampleRate != 0 && header.SampleRate != frameDecoderSampleRate) || (frameDecoderChannels != 0 && header.Channels != frameDecoderChannels))
+                {
+                    throw new InvalidDataException("AAC: an ADTS header changes the sample rate or channel count mid-stream");
+                }
+
+                frameDecoderSampleRate = header.SampleRate;
+                frameDecoderChannels = header.Channels;
+                int[] outputFrame;
+                try
+                {
+                    outputFrame = frameDecoder.DecodeFrame(reader);
+                }
+                catch (EndOfStreamException e)
+                {
+                    throw new InvalidDataException("AAC: a frame is truncated", e);
+                }
                 if (reader.BitPosition > frameEndBitPosition)
                 {
                     throw new InvalidDataException("AAC: the raw_data_block runs past the ADTS frame_length");

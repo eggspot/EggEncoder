@@ -67,14 +67,29 @@ namespace EggEncoder.Codecs.Aac
 
         public static AacBandTables ForSampleRate(int sampleRate)
         {
-            var index = Array.IndexOf(AacTables.SampleRates, sampleRate);
-            if (index < 0)
+            if (sampleRate <= 0)
             {
-                throw new NotSupportedException($"AAC sample rate {sampleRate} Hz has no standard scalefactor band table");
+                throw new NotSupportedException($"AAC sample rate {sampleRate} Hz is not valid");
             }
 
-            return ForIndex(index);
+            return ForIndex(NearestIndex(sampleRate));
         }
+
+        internal static int NearestIndex(int sampleRate) => sampleRate switch
+        {
+            >= 92017 => 0,
+            >= 75132 => 1,
+            >= 55426 => 2,
+            >= 46009 => 3,
+            >= 37566 => 4,
+            >= 27713 => 5,
+            >= 23004 => 6,
+            >= 18783 => 7,
+            >= 13856 => 8,
+            >= 11502 => 9,
+            >= 9391 => 10,
+            _ => 11
+        };
 
         public static AacBandTables ForIndex(int samplingFrequencyIndex)
         {

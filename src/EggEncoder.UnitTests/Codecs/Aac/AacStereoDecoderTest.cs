@@ -102,6 +102,67 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         }
 
         [Fact]
+        public void DecodeFrame_IntensityStereoWithMsUsed_Should_Invert_The_Copied_Left_Channel()
+        {
+            var output = new AacFrameDecoder(44100, 2).DecodeFrame(new BitReader(Cpe(msMaskPresent: 1, msUsed: true, rightBandType: 15)));
+
+            var left = output.Where((_, i) => i % 2 == 0).ToArray();
+            var right = output.Where((_, i) => i % 2 == 1).ToArray();
+            left.Should().Contain(s => s != 0);
+            right.Should().Equal(left.Select(s => -s));
+        }
+
+        [Fact]
+        public void DecodeFrame_IntensityStereoWithoutMsUsed_Should_Copy_The_Left_Channel()
+        {
+            var output = new AacFrameDecoder(44100, 2).DecodeFrame(new BitReader(Cpe(msMaskPresent: 1, msUsed: false, rightBandType: 15)));
+
+            output.Where((_, i) => i % 2 == 1).Should().Equal(output.Where((_, i) => i % 2 == 0));
+        }
+
+        [Fact]
+        public void DecodeFrame_MidSideOnEveryBand_Should_Put_Mid_Plus_Side_Left_And_Mid_Minus_Side_Right()
+        {
+            var output = new AacFrameDecoder(44100, 2).DecodeFrame(new BitReader(Cpe(msMaskPresent: 2, msUsed: false, rightBandType: 1)));
+            var mono = Decode(Sce(pulse: false, tupleIndex: 67));
+
+            output.Where((_, i) => i % 2 == 1).Should().OnlyContain(s => s == 0);
+            output.Where((_, i) => i % 2 == 0).Zip(mono).Should().OnlyContain(pair => Math.Abs(pair.First - (2 * pair.Second)) <= 1);
+        }
+
+        [Fact]
+        public void DecodeFrame_NoiseInBothChannels_Should_Be_Independent_Unless_MsUsed()
+        {
+            var independent = new AacFrameDecoder(44100, 2).DecodeFrame(new BitReader(Cpe(msMaskPresent: 0, msUsed: false, rightBandType: 13, leftBandType: 13)));
+            var shared = new AacFrameDecoder(44100, 2).DecodeFrame(new BitReader(Cpe(msMaskPresent: 2, msUsed: false, rightBandType: 13, leftBandType: 13)));
+
+            independent.Where((_, i) => i % 2 == 1).Should().NotEqual(independent.Where((_, i) => i % 2 == 0));
+            independent.Should().Contain(s => s != 0);
+            shared.Where((_, i) => i % 2 == 1).Should().Equal(shared.Where((_, i) => i % 2 == 0));
+        }
+
+        [Fact]
+        public void DecodeFrame_TruncatedAdtsFrame_Should_Throw_InvalidData()
+        {
+            var bytes = File.ReadAllBytes(Fixture("stereo_44100.aac"))[..200];
+
+            var act = () => AacDecoder.Decode(new MemoryStream(bytes), (_, _, _, _, _) => { });
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Theory]
+        [InlineData(44100, 4)]
+        [InlineData(44000, 4)]
+        [InlineData(100000, 0)]
+        [InlineData(7350, 11)]
+        [InlineData(10000, 10)]
+        public void NearestIndex_Should_Map_Explicit_Rates_To_The_Nearest_Table(int sampleRate, int expected)
+        {
+            AacBandTables.NearestIndex(sampleRate).Should().Be(expected);
+        }
+
+        [Fact]
         public void ToLpc_Should_Step_Up_Reflection_Coefficients()
         {
             AacFrameDecoder.ToLpc([0.5]).Should().Equal(0.5);
@@ -271,7 +332,7 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         public void Constructor_Should_Refuse_More_Than_Two_Channels_And_Unknown_Rates()
         {
             ((Action)(() => new AacFrameDecoder(44100, 6))).Should().Throw<NotSupportedException>();
-            ((Action)(() => new AacFrameDecoder(7000, 2))).Should().Throw<NotSupportedException>();
+            ((Action)(() => new AacFrameDecoder(0, 2))).Should().Throw<NotSupportedException>();
         }
 
         private static int[] Decode(byte[] stream) => new AacFrameDecoder(44100, 1).DecodeFrame(new BitReader(stream));
@@ -319,6 +380,53 @@ namespace EggEncoder.UnitTests.Codecs.Aac
             writer.WriteBits(7, 3);
             writer.WriteBits(0, 32);
             return writer.ToArray();
+        }
+
+        private static byte[] Cpe(int msMaskPresent, bool msUsed, int rightBandType, int leftBandType = 1)
+        {
+            var writer = new BitWriter();
+            writer.WriteBits(1, 3);
+            writer.WriteBits(0, 4);
+            writer.WriteBits(1, 1);
+            writer.WriteBits(0, 1);
+            writer.WriteBits(0, 2);
+            writer.WriteBits(0, 1);
+            writer.WriteBits(1, 6);
+            writer.WriteBits(0, 1);
+            writer.WriteBits((uint)msMaskPresent, 2);
+            if (msMaskPresent == 1)
+            {
+                writer.WriteBits(msUsed ? 1u : 0u, 1);
+            }
+
+            WriteSingleBandIcs(writer, leftBandType);
+            WriteSingleBandIcs(writer, rightBandType);
+            writer.WriteBits(7, 3);
+            writer.WriteBits(0, 32);
+            return writer.ToArray();
+        }
+
+        private static void WriteSingleBandIcs(BitWriter writer, int bandType)
+        {
+            writer.WriteBits(150, 8);
+            writer.WriteBits((uint)bandType, 4);
+            writer.WriteBits(1, 5);
+            if (bandType == 13)
+            {
+                writer.WriteBits(246, 9);
+            }
+            else
+            {
+                var (scaleCode, scaleLength) = AacTables.ScalefactorHuffman.GetCode(AacTables.ScaleDiffZero);
+                writer.WriteBits(scaleCode, scaleLength);
+            }
+
+            writer.WriteBits(0, 3);
+            if (bandType == 1)
+            {
+                var (code, length) = AacTables.SpectralCodebooks[0].Huffman.GetCode(67);
+                writer.WriteBits(code, length);
+            }
         }
 
         private static void WriteSilentIcs(BitWriter writer)
