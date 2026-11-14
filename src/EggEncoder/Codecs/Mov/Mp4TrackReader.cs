@@ -164,13 +164,13 @@ namespace EggEncoder.Codecs.Mov
             return new Mp4SampleTiming(decodeTimes, durations, compositionOffsets, time);
         }
 
-        public static long ReadEditShift(Stream stream, MovAtom trak, uint movieTimescale, int mediaTimescale)
+        public static Mp4Edit ReadEdit(Stream stream, MovAtom trak, uint movieTimescale, int mediaTimescale)
         {
             var edts = MovAtomReader.FindAtom(stream, "edts", trak.ContentStart, trak.ContentEnd);
             var elst = edts is null ? null : MovAtomReader.FindAtom(stream, "elst", edts.Value.ContentStart, edts.Value.ContentEnd);
             if (elst is null)
             {
-                return 0;
+                return new Mp4Edit(0, null);
             }
 
             var version = ReadContent(stream, elst.Value, 4)[0];
@@ -202,10 +202,22 @@ namespace EggEncoder.Codecs.Mov
                     continue;
                 }
 
-                return CheckedAdd(emptyTicks, () => checked(-mediaTime));
+                var shift = CheckedAdd(emptyTicks, () => checked(-mediaTime));
+                var isOnlyMediaEdit = true;
+                for (var j = i + 1; j < count; j++)
+                {
+                    var later = buffer.AsSpan(j * entryBytes, entryBytes);
+                    var laterMediaTime = version == 1 ? BinaryPrimitives.ReadInt64BigEndian(later[8..16]) : BinaryPrimitives.ReadInt32BigEndian(later[4..8]);
+                    isOnlyMediaEdit &= laterMediaTime == -1;
+                }
+
+                long? end = isOnlyMediaEdit && movieTimescale > 0 && segmentDuration > 0
+                    ? CheckedAdd(emptyTicks, () => Media.MediaTimestamp.Rescale(segmentDuration, (int)Math.Min(movieTimescale, int.MaxValue), mediaTimescale))
+                    : null;
+                return new Mp4Edit(shift, end);
             }
 
-            return emptyTicks;
+            return new Mp4Edit(emptyTicks, null);
         }
 
         private static long CheckedAdd(long value, Func<long> term)
@@ -262,6 +274,8 @@ namespace EggEncoder.Codecs.Mov
     }
 
     internal sealed record Mp4TrackHeader(MovAtom Trak, MovAtom Stbl, int TrackId, string HandlerType, int Timescale, int Rotation, int Width, int Height);
+
+    internal readonly record struct Mp4Edit(long Shift, long? End);
 
     internal readonly record struct Mp4SampleEntry(string FourCc, long FieldsStart, long End);
 

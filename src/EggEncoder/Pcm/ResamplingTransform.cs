@@ -142,7 +142,7 @@ public sealed class ResamplingTransform : IPcmTransform
             }
 
             _kernelLength = 2 * _halfWidth;
-            _polyphaseTable = BuildPolyphaseTable(_halfWidth, cutoff, ComputeKaiserBeta(TargetStopbandAttenuationDb));
+            _polyphaseTable = WindowedSincKernel.BuildPolyphaseTable(_halfWidth, cutoff, WindowedSincKernel.KaiserBeta(TargetStopbandAttenuationDb), PhaseCount);
         }
     }
 
@@ -266,87 +266,5 @@ public sealed class ResamplingTransform : IPcmTransform
         _history = trimmed;
         _historyStartFrame += dropFrames;
         _historyFrameCount = remaining;
-    }
-
-    private static double[][] BuildPolyphaseTable(int halfWidth, double cutoff, double kaiserBeta)
-    {
-        var kernelLength = 2 * halfWidth;
-        var table = new double[PhaseCount][];
-
-        for (var phase = 0; phase < PhaseCount; phase++)
-        {
-            var frac = (double)phase / PhaseCount;
-            var row = new double[kernelLength];
-            var sum = 0.0;
-
-            for (var k = 0; k < kernelLength; k++)
-            {
-                var offset = k - halfWidth + 1;
-                var x = offset - frac;
-                var weight = Kernel(x, cutoff, halfWidth, kaiserBeta);
-                row[k] = weight;
-                sum += weight;
-            }
-
-            // Rescale to exact unity DC gain: corrects the small ripple that a finite-length window
-            // otherwise leaves in the passband.
-            if (Math.Abs(sum) > 1e-12)
-            {
-                for (var k = 0; k < kernelLength; k++) row[k] /= sum;
-            }
-
-            table[phase] = row;
-        }
-
-        return table;
-    }
-
-    // Windowed-sinc lowpass kernel: h(x) = cutoff * sinc(cutoff * x), the discrete-time lowpass filter
-    // with cutoff frequency (cutoff / 2) cycles/sample, windowed by a Kaiser window over [-halfWidth, halfWidth].
-    private static double Kernel(double x, double cutoff, int halfWidth, double kaiserBeta)
-    {
-        var window = KaiserWindow(x / halfWidth, kaiserBeta);
-        if (window == 0.0) return 0.0;
-
-        if (Math.Abs(x) < 1e-9) return cutoff * window;
-
-        var piX = Math.PI * x;
-        var sinc = Math.Sin(piX * cutoff) / piX;
-        return sinc * window;
-    }
-
-    private static double KaiserWindow(double xNormalized, double beta)
-    {
-        if (xNormalized <= -1.0 || xNormalized >= 1.0) return 0.0;
-
-        var arg = beta * Math.Sqrt(1.0 - (xNormalized * xNormalized));
-        return BesselI0(arg) / BesselI0(beta);
-    }
-
-    // Modified Bessel function of the first kind, order 0, via its power series -- sufficient precision
-    // for filter-design purposes (the series converges rapidly for the beta values Kaiser windows use).
-    private static double BesselI0(double x)
-    {
-        var sum = 1.0;
-        var term = 1.0;
-        var quarterXSquared = x * x / 4.0;
-
-        for (var k = 1; k <= 50; k++)
-        {
-            term *= quarterXSquared / (k * k);
-            sum += term;
-            if (term < sum * 1e-16) break;
-        }
-
-        return sum;
-    }
-
-    // Kaiser's empirical design formula relating a target stopband attenuation to the window's beta
-    // parameter (Oppenheim & Schafer, "Discrete-Time Signal Processing").
-    private static double ComputeKaiserBeta(double stopbandAttenuationDb)
-    {
-        if (stopbandAttenuationDb > 50.0) return 0.1102 * (stopbandAttenuationDb - 8.7);
-        if (stopbandAttenuationDb >= 21.0) return (0.5842 * Math.Pow(stopbandAttenuationDb - 21.0, 0.4)) + (0.07886 * (stopbandAttenuationDb - 21.0));
-        return 0.0;
     }
 }

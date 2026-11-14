@@ -254,7 +254,7 @@ Rules for every Phase 5 item, on top of the ones above:
     `encoded_stereo_48000_192k.aac` is a checked-in encoder output with its ffmpeg decode; ffprobe
     reads it as AAC LC 48 kHz stereo. Two bugs of the previous mono encoder are fixed: its
     spectrum was half the decoder's scale (output 6 dB too quiet) and its sign bits were inverted.
-- [ ] **18. Mixing and loudness** — `Pcm/PcmMixer`: N inputs with per-input gain, start offsets,
+- [x] **18. Mixing and loudness** — `Pcm/PcmMixer`: N inputs with per-input gain, start offsets,
   looping, a first/longest/shortest duration rule and no normalization (ffmpeg `amix`
   `normalize=0`); a silence source; integrated loudness (ITU-R BS.1770, gated, stereo) read from an
   MP4; loudness normalization as measure → gain → true-peak limiter at a ceiling (the consumer uses
@@ -262,7 +262,20 @@ Rules for every Phase 5 item, on top of the ones above:
   buffers the mixed audio (duration × 48000 × 2 × 4 bytes, stated in the API docs); mono 16 kHz
   downmix for speech recognition input.
   - **Depends on**: 15, 16.
-  - Status: not started.
+  - Status: done. `PcmAudio` holds interleaved float PCM (mono or stereo, unclipped):
+    `Decode(path)` reads any audio file `AudioCutter` reads plus the first AAC track of an
+    MP4/M4A/MOV through `Mp4FileSource`, so the edit list drops the encoder priming, a leading empty
+    edit becomes silence and the media edit's end trims the last frame (within 3 of ffmpeg's decode);
+    `Silence`, `ConvertTo` (resampling without clipping), `DownmixForSpeech` (mono 16 kHz) and
+    `ToInt16` for the encoder. `PcmMixer.Mix` sums `PcmMixInput`s (gain, start offset, loop) under a
+    `PcmMixLength` rule or a fixed length, converting each input to the mix format, with no
+    normalization or clipping. `LoudnessMeter` measures integrated loudness (the gating
+    `WaveformCalculator` uses, now shared through one accumulator) and true peak (4x windowed-sinc
+    oversampling); both match ffmpeg `ebur128` within 0.15 LU and 0.1 dB on the test signals.
+    `LoudnessNormalizer.Normalize` applies the gain to the target, then a look-ahead true-peak
+    limiter that never lets the true peak pass the ceiling (-1.5 dBTP by default); it lands within
+    1 LU of ffmpeg's two-pass linear `loudnorm` (gated oracle). Audio shorter than 400 ms is only
+    limited, silence is left as it is.
 - [ ] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
   block-aligned), not an `IPcmTransform`: ffmpeg `sidechaincompress`'s threshold, ratio, attack and
   release, its default knee, makeup and detection mapped onto `CompressorTransform`'s envelope

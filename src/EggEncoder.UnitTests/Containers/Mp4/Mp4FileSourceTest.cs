@@ -294,44 +294,69 @@ namespace EggEncoder.UnitTests.Containers.Mp4
         }
 
         [Fact]
-        public void ReadEditShift_EmptyEditThenMediaEdit_Should_Delay_By_The_Empty_Edit()
+        public void ReadEdit_EmptyEditThenMediaEdit_Should_Delay_By_The_Empty_Edit()
         {
             var elst = Concat(new byte[4], U32(2), U32(500), U32(uint.MaxValue), U32(0x10000), U32(400), U32(256), U32(0x10000));
             var trak = Box("trak", Box("edts", Box("elst", elst)));
 
-            var shift = Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 12800);
+            var edit = Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 12800);
 
-            shift.Should().Be(6400 - 256);
+            edit.Shift.Should().Be(6400 - 256);
+            edit.End.Should().Be(6400 + 5120);
         }
 
         [Fact]
-        public void ReadEditShift_Version1_OnlyEmptyEdit_Should_Return_The_Delay()
+        public void ReadEdit_TwoMediaEdits_Should_Leave_The_End_Open()
+        {
+            var elst = Concat(new byte[4], U32(2), U32(400), U32(256), U32(0x10000), U32(400), U32(0), U32(0x10000));
+            var trak = Box("trak", Box("edts", Box("elst", elst)));
+
+            var edit = Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 12800);
+
+            edit.Shift.Should().Be(-256);
+            edit.End.Should().BeNull();
+        }
+
+        [Fact]
+        public void ReadEdit_ZeroMovieTimescale_Should_Leave_The_End_Open()
+        {
+            var elst = Concat(new byte[4], U32(1), U32(400), U32(1024), U32(0x10000));
+            var trak = Box("trak", Box("edts", Box("elst", elst)));
+
+            var edit = Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 0, 48000);
+
+            edit.Shift.Should().Be(-1024);
+            edit.End.Should().BeNull();
+        }
+
+        [Fact]
+        public void ReadEdit_Version1_OnlyEmptyEdit_Should_Return_The_Delay()
         {
             var elst = Concat([1, 0, 0, 0], U32(1), U64(1000), U64(ulong.MaxValue), U32(0x10000));
             var trak = Box("trak", Box("edts", Box("elst", elst)));
 
-            var shift = Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 44100);
+            var edit = Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 44100);
 
-            shift.Should().Be(44100);
+            edit.Should().Be(new Mp4Edit(44100, null));
         }
 
         [Fact]
-        public void ReadEditShift_EntryCountPastBox_Should_Throw_InvalidData()
+        public void ReadEdit_EntryCountPastBox_Should_Throw_InvalidData()
         {
             var trak = Box("trak", Box("edts", Box("elst", Concat(new byte[4], U32(5)))));
 
-            var act = () => Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 1000);
+            var act = () => Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 1000);
 
             act.Should().Throw<InvalidDataException>();
         }
 
         [Fact]
-        public void ReadEditShift_HugeEmptyEdit_Should_Throw_InvalidData()
+        public void ReadEdit_HugeEmptyEdit_Should_Throw_InvalidData()
         {
             var elst = Concat([1, 0, 0, 0], U32(1), U64(long.MaxValue), U64(ulong.MaxValue), U32(0x10000));
             var trak = Box("trak", Box("edts", Box("elst", elst)));
 
-            var act = () => Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1, 90000);
+            var act = () => Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1, 90000);
 
             act.Should().Throw<InvalidDataException>();
         }
@@ -384,11 +409,11 @@ namespace EggEncoder.UnitTests.Containers.Mp4
         }
 
         [Fact]
-        public void ReadEditShift_WithoutEditList_Should_Be_Zero()
+        public void ReadEdit_WithoutEditList_Should_Be_Zero()
         {
             var trak = Box("trak", Box("tkhd", new byte[84]));
 
-            Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 1000).Should().Be(0);
+            Mp4TrackReader.ReadEdit(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 1000).Should().Be(new Mp4Edit(0, null));
         }
 
         [Fact]

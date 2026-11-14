@@ -12,7 +12,7 @@ namespace EggEncoder.Containers.Mp4
         private const int Mpeg1AudioObjectType = 0x6B;
         private const int Mpeg2AudioObjectType = 0x69;
 
-        private Mp4SourceTrack(MediaTrackInfo info, List<(long Offset, int Size)> samples, Mp4SampleTiming timing, HashSet<int>? syncSamples, long editShift, int nalLengthSize)
+        private Mp4SourceTrack(MediaTrackInfo info, List<(long Offset, int Size)> samples, Mp4SampleTiming timing, HashSet<int>? syncSamples, Mp4Edit edit, int nalLengthSize)
         {
             Info = info;
             Offsets = samples.Select(s => s.Offset).ToArray();
@@ -22,7 +22,8 @@ namespace EggEncoder.Containers.Mp4
             CompositionOffsets = timing.CompositionOffsets;
             TotalDuration = timing.TotalDuration;
             SyncSamples = syncSamples;
-            EditShift = editShift;
+            EditShift = edit.Shift;
+            EditEnd = edit.End;
             NalLengthSize = nalLengthSize;
         }
 
@@ -43,6 +44,8 @@ namespace EggEncoder.Containers.Mp4
         public HashSet<int>? SyncSamples { get; }
 
         public long EditShift { get; }
+
+        public long? EditEnd { get; }
 
         public int NalLengthSize { get; }
 
@@ -100,8 +103,8 @@ namespace EggEncoder.Containers.Mp4
             var samples = Mp4SampleTable.ReadSamples(stream, header.Stbl);
             var timing = Mp4TrackReader.ReadTiming(stream, header.Stbl, samples.Count);
             var syncSamples = Mp4SampleTable.ReadSyncSamples(stream, header.Stbl);
-            var editShift = Mp4TrackReader.ReadEditShift(stream, header.Trak, movieTimescale, header.Timescale);
-            return new Mp4SourceTrack(description.Value.Info, samples, timing, syncSamples, editShift, description.Value.NalLengthSize);
+            var edit = Mp4TrackReader.ReadEdit(stream, header.Trak, movieTimescale, header.Timescale);
+            return new Mp4SourceTrack(description.Value.Info, samples, timing, syncSamples, edit, description.Value.NalLengthSize);
         }
 
         private static (MediaTrackInfo Info, int NalLengthSize)? ReadVideoDescription(Stream stream, Mp4TrackHeader header, Mp4SampleEntry entry)

@@ -342,6 +342,30 @@ try
         }
     });
 
+    await RunCheck("Mixing and loudness: PcmMixer, LoudnessMeter, LoudnessNormalizer and PcmAudio conversion", () =>
+    {
+        var tone = new float[48000 * 2];
+        for (var n = 0; n < 48000; n++)
+        {
+            tone[2 * n] = tone[(2 * n) + 1] = (float)(0.9 * Math.Sin(2 * Math.PI * 1000 * n / 48000));
+        }
+
+        var mix = EggEncoder.Pcm.PcmMixer.Mix(
+            [new EggEncoder.Pcm.PcmMixInput(new EggEncoder.Pcm.PcmAudio(tone, 2, 48000)), new EggEncoder.Pcm.PcmMixInput(EggEncoder.Pcm.PcmAudio.Silence(1, 44100, TimeSpan.FromSeconds(0.5)), 0.5, TimeSpan.FromSeconds(0.2))],
+            EggEncoder.Pcm.PcmMixLength.Longest);
+        var normalized = EggEncoder.Pcm.LoudnessNormalizer.Normalize(mix, -16);
+        var loudness = EggEncoder.Pcm.LoudnessMeter.MeasureIntegratedLoudness(normalized);
+        var speech = normalized.DownmixForSpeech();
+        if (mix.FrameCount != 48000 || loudness is null || Math.Abs(loudness.Value + 16) > 0.5
+            || EggEncoder.Pcm.LoudnessMeter.MeasureTruePeakDb(normalized) > EggEncoder.Pcm.LoudnessNormalizer.DefaultTruePeakCeilingDb
+            || speech.SampleRate != 16000 || speech.ToInt16().Length != 16000)
+        {
+            throw new InvalidOperationException("Mixing and loudness check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
