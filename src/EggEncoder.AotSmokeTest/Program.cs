@@ -86,6 +86,33 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("MP4 writer: remux the H.265 fixture with Mp4Writer, split and join it back", () =>
+    {
+        using var input = EggEncoder.Containers.Mp4.Mp4FileSource.Open(Path.Combine(AppContext.BaseDirectory, "hevc.mp4"));
+        var written = new MemoryStream();
+        using (var mp4Writer = new EggEncoder.Containers.Mp4.Mp4Writer(written, leaveOpen: true, new MemoryStream()))
+        {
+            mp4Writer.Open(input.Tracks);
+            foreach (var packet in input.ReadPackets())
+            {
+                mp4Writer.Write(packet);
+            }
+
+            mp4Writer.Complete();
+        }
+
+        var joined = new MemoryStream();
+        EggEncoder.Containers.Mp4.Mp4Joiner.Join([new MemoryStream(written.ToArray()), new MemoryStream(written.ToArray())], joined, new MemoryStream());
+        var parts = EggEncoder.Containers.Mp4.Mp4Splitter.Split(new MemoryStream(joined.ToArray()), [TimeSpan.FromSeconds(0.1)], _ => new MemoryStream());
+        using var check = new EggEncoder.Containers.Mp4.Mp4FileSource(new MemoryStream(joined.ToArray()));
+        if (check.ReadPackets().Count() != 6 || parts.Count != 2)
+        {
+            throw new InvalidOperationException("MP4 writer check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     await RunCheck("fMP4: multi-track H.264 + AAC init segment and a packet media segment", () =>
     {
         var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");

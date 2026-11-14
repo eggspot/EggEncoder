@@ -221,6 +221,8 @@ await writer.CompleteAsync();
 
 `EggEncoder.Containers.Mp4.Mp4FileSource` reads a progressive MP4/MOV (any seekable `Stream`, or `Mp4FileSource.Open(path)`) as a `MediaTrackSet` plus `MediaPacket`s, without decoding: H.264, H.265, AAC and MP3 tracks (others are skipped and counted). Timestamps come from `stts`/`ctts` and the edit list, so B-frame delay and AAC priming show up as negative DTS/PTS exactly as ffprobe reports them; packets of all tracks are interleaved by decode time. `ReadPackets(startAt)` (or `ReadPacketsAsync`) starts each track at its last keyframe at or before `startAt`. A video track's `MediaTrackInfo.Rotation` carries the `tkhd` display rotation (0/90/180/270, clockwise). Fragmented MP4 is refused with `NotSupportedException`. `Probe` on a `.mp4`/`.mov` also reports `FrameCount`, `FrameRate`, `Rotation` and `HasAudio`.
 
+`Mp4Writer` (an `IMediaPacketSink`) writes packets back out as a progressive, faststart MP4 (H.264, H.265, AAC; edit lists for B-frame delay and AAC priming, the rotation matrix, half-second interleaved chunks), holding payloads in a scratch stream (a temp file by default) so the destination needs no seeking. `Mp4Joiner.Join` concatenates files with identical tracks and `Mp4Splitter.Split` cuts one at keyframes, both without re-encoding.
+
 ```csharp
 using EggEncoder.Containers.Mp4;
 
@@ -229,6 +231,8 @@ foreach (var packet in source.ReadPackets(TimeSpan.FromSeconds(3)))
 {
     var track = source.Tracks.FindTrack(packet.TrackId)!;   // codec, timescale, avcC/AudioSpecificConfig
 }
+
+Mp4Joiner.Join(["intro.mp4", "clip.mp4"], "joined.mp4");   // stream copy
 ```
 
 ### Fragmented MP4 (fMP4/CMAF) with video

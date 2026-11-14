@@ -294,7 +294,7 @@ namespace EggEncoder.Streaming.Mp4
                 ? (uint)delta
                 : throw new ArgumentException($"Track {track.Info.TrackId} has a sample duration ({delta}) past 32 bits.", parameterName);
 
-        private static uint DefaultSampleDuration(FmpInitSegmentWriter.InitTrack track)
+        internal static uint DefaultSampleDuration(FmpInitSegmentWriter.InitTrack track)
         {
             var duration = track.Kind == MediaKind.Audio
                 ? MediaTimestamp.Rescale(DefaultAacFrameSamples, track.SampleRate, track.Timescale)

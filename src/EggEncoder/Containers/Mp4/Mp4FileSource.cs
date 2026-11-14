@@ -183,6 +183,8 @@ namespace EggEncoder.Containers.Mp4
             return aDts < bDts;
         }
 
+        internal IReadOnlyList<Mp4SourceTrack> SourceTracks => _tracks;
+
         private Mp4SourceTrack FindTrack(int trackId) =>
             _tracks.FirstOrDefault(t => t.Info.TrackId == trackId)
                 ?? throw new ArgumentException($"No track has id {trackId}", nameof(trackId));

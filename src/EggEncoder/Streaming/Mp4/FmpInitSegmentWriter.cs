@@ -276,7 +276,7 @@ namespace EggEncoder.Streaming.Mp4
         // ISO 639-2/T packs 3 lowercase letters into 15 bits (5 bits each, letter - 0x60), with a
         // zero pad bit on top -- confirmed against the real fixture's own "und" (undefined) value,
         // 0x55C4.
-        private static ushort PackIso639Language(string threeLetterCode)
+        internal static ushort PackIso639Language(string threeLetterCode)
         {
             var packed = 0;
             foreach (var c in threeLetterCode)
@@ -287,7 +287,7 @@ namespace EggEncoder.Streaming.Mp4
             return (ushort)packed;
         }
 
-        private static byte[] BuildHdlr(MediaKind kind)
+        internal static byte[] BuildHdlr(MediaKind kind)
         {
             var isAudio = kind == MediaKind.Audio;
             var name = System.Text.Encoding.ASCII.GetBytes(isAudio ? "SoundHandler\0" : "VideoHandler\0");
@@ -316,7 +316,7 @@ namespace EggEncoder.Streaming.Mp4
             minf.WriteBox("stbl", b => BuildStbl(b, track));
         }
 
-        private static byte[] BuildSmhd()
+        internal static byte[] BuildSmhd()
         {
             return new Mp4BoxBuilder()
                 .WriteUInt32(0) // version(0) + flags
@@ -325,7 +325,7 @@ namespace EggEncoder.Streaming.Mp4
                 .ToArray();
         }
 
-        private static byte[] BuildVmhd()
+        internal static byte[] BuildVmhd()
         {
             return new Mp4BoxBuilder()
                 .WriteUInt32(1) // version(0) + flags(1), the value ISO/IEC 14496-12 requires
@@ -334,7 +334,7 @@ namespace EggEncoder.Streaming.Mp4
                 .ToArray();
         }
 
-        private static byte[] BuildDref()
+        internal static byte[] BuildDref()
         {
             const uint selfContained = 0x000001;
 
@@ -359,7 +359,7 @@ namespace EggEncoder.Streaming.Mp4
         private static byte[] EmptyTableWithEntryCount() =>
             new Mp4BoxBuilder().WriteUInt32(0).WriteUInt32(0).ToArray();
 
-        private static void BuildStsd(Mp4BoxBuilder stsd, InitTrack track)
+        internal static void BuildStsd(Mp4BoxBuilder stsd, InitTrack track)
         {
             stsd.WriteUInt32(0); // version(0) + flags
             stsd.WriteUInt32(1); // entry_count
