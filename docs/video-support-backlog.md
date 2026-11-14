@@ -26,6 +26,7 @@ created this file. Here is everything you need:
    continue that instead of starting something new. If an item here is checked off but you can't
    find a merged PR for it, something is inconsistent — investigate before trusting the checkbox.
 4. **Pick the first unchecked item** whose "Depends on" line (if any) is already checked off.
+   Phase 5 (below) comes before items 3-11.
    Items are pre-ordered by priority/dependency/value — you shouldn't need to reorder them, only
    skip one if it's genuinely blocked (see step 8).
 5. **Read the "Architecture notes" section below** for where the existing pieces you'll build on
@@ -179,7 +180,7 @@ trusting a "confirmed" verdict, the same discipline already established for the 
 
 Ordered by priority/dependency/value. An item's "Depends on" line names a prerequisite by number.
 Phase 5 comes first: pick its first unchecked item whose "Depends on" items are all checked off
-before any item of Phases 1-3.
+before any of items 3-11.
 
 ### Phase 5 — Video rendering (takes priority over items 3-11)
 
@@ -236,7 +237,7 @@ Rules for every Phase 5 item, on top of the ones above:
   -1.5 dBTP), documented as close to but not identical with ffmpeg `loudnorm`; normalization
   buffers the mixed audio (duration × 48000 × 2 × 4 bytes, stated in the API docs); mono 16 kHz
   downmix for speech recognition input.
-  - **Depends on**: 16.
+  - **Depends on**: 15, 16.
   - Status: not started.
 - [ ] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
   block-aligned), not an `IPcmTransform`: ffmpeg `sidechaincompress`'s threshold, ratio, attack and
@@ -304,7 +305,7 @@ Rules for every Phase 5 item, on top of the ones above:
   Targets, measured in `EggEncoder.Benchmarks` plus an environment-gated test: at least real time
   for 1080x1920 at 30 fps on 4 vCPU, and size within 15% of x264 `veryfast crf 20` at equal PSNR on
   a 10 s 1080p clip measured locally.
-  - **Depends on**: 28.
+  - **Depends on**: 26, 27, 28.
   - Status: not started.
 - [ ] **30. JPEG frame grab** — a baseline JPEG encoder (full range, quality mapped from ffmpeg's
   `-q:v` scale and stated), tested with a small decoder in the test project. A scene-change score
@@ -317,7 +318,7 @@ Rules for every Phase 5 item, on top of the ones above:
   a file extension are recognized by sniffing; the JPEG thumbnail comes from its own frames; the
   result carries has-audio, size, duration and integrated loudness. Targets: a 60 s 1080x1920
   render in at most twice real time on 4 vCPU, peak memory at most 1.5 GB.
-  - **Depends on**: 2, 18, 19, 21, 23, 27, 29, 30.
+  - **Depends on**: 2, 17, 18, 19, 21, 23, 27, 29, 30.
   - Status: not started.
 
 
@@ -519,10 +520,11 @@ to its own binaries downloaded separately by the end user, and only to uses that
 remuneration, so bundling its binary would not have inherited that coverage for a commercial user
 anyway (checked against openh264.org's `BINARY_LICENSE.txt` and FAQ that day). HEVC (item 14)
 stays gated; writing already-encoded H.265 samples into a container (backlog item 2) is
-passthrough, not codec work, and stays allowed.
+passthrough, not codec work, and stays allowed. An in-house implementation isn't covered by
+Cisco's grant; it rests on the owner's own legal advice.
 
-- [ ] **12. H.264/AVC decode via `openh264`** — **GATED, needs explicit owner sign-off before
-  starting.**
+- [ ] **12. H.264/AVC decode via `openh264`** — was gated on owner sign-off; approved 2026-11-14
+  for an in-house build (see the sign-off above), so `openh264` itself isn't used.
   - **Licensing, the critical nuance**: the H.264 patent pool (MPEG LA, consolidated into Via
     Licensing Alliance in 2023) is actively, commercially enforced — this is not a dormant or
     symbolic royalty regime. Cisco's `openh264` is BSD-licensed *source*, and Cisco has paid the
@@ -538,7 +540,7 @@ passthrough, not codec work, and stays allowed.
   - Status: approved 2026-11-14 (see the sign-off above); built in pure C# as Phase 5 items 24-27
     instead of through `openh264`.
 
-- [ ] **13. H.264/AVC encode via `openh264`** — **GATED**, same sign-off requirement as item 12.
+- [ ] **13. H.264/AVC encode via `openh264`** — was gated like item 12; approved the same day.
   Do not use `x264` for this even if sign-off is given — `x264` is GPL-licensed, which is
   copyleft and incompatible with bundling into this MIT-licensed project's binary distribution
   the way every other native dependency here is bundled.
