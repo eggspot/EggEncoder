@@ -52,6 +52,27 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Normalize_ShortLoudSpikes_Should_Be_Limited_Not_Turned_Down_With_The_Whole_Signal()
+        {
+            var samples = new float[48000 * 3];
+            for (var n = 0; n < samples.Length; n++)
+            {
+                var spike = n % 24000 < 240 ? 0.9 : 0.1;
+                samples[n] = (float)(spike * Math.Sin(2 * Math.PI * 1000 * n / 48000));
+            }
+
+            var audio = new PcmAudio(samples, 1, 48000);
+            var gain = Math.Pow(10, (-14 - LoudnessMeter.MeasureIntegratedLoudness(audio)!.Value) / 20);
+            var peakAfterGain = LoudnessMeter.MeasureTruePeakDb(audio) + (20 * Math.Log10(gain));
+            var constantGainLoudness = -14 + Math.Min(0, -1.5 - peakAfterGain);
+
+            var result = LoudnessNormalizer.Normalize(audio, -14, -1.5);
+
+            LoudnessMeter.MeasureTruePeakDb(result).Should().BeLessThanOrEqualTo(-1.5);
+            LoudnessMeter.MeasureIntegratedLoudness(result)!.Value.Should().BeGreaterThan(constantGainLoudness + 3).And.BeLessThanOrEqualTo(-13.9);
+        }
+
+        [Fact]
         public void Normalize_TooShortToMeasure_Should_Only_Limit()
         {
             var shortLoud = PcmAudioTest.Tone(48000, 1, 1000, 1.5, 4800);
@@ -85,6 +106,7 @@ namespace EggEncoder.UnitTests.Pcm
         [InlineData(-71, -1.5)]
         [InlineData(1, -1.5)]
         [InlineData(-14, 0.5)]
+        [InlineData(-14, -71)]
         [InlineData(-14, double.NegativeInfinity)]
         public void Normalize_OutOfRangeArguments_Should_Throw(double target, double ceiling)
         {

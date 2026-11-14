@@ -2,10 +2,11 @@ namespace EggEncoder.Pcm;
 
 /// <summary>
 /// Brings audio to a target integrated loudness without its true peak passing a ceiling: one gain from the measured
-/// loudness, then a true-peak limiter with a 5 ms lookahead and a 100 ms release. Close to ffmpeg's two-pass
-/// <c>loudnorm</c> in linear mode, not identical: when the limiter has to work, the result can come out quieter than the
-/// target. The whole audio is held in memory: the input, the output and per-frame working arrays, about
-/// 2 MB per second of 48 kHz stereo.
+/// loudness, then a true-peak limiter with a 5 ms lookahead and a 100 ms release. The ceiling holds as
+/// <see cref="LoudnessMeter.MeasureTruePeakDb"/> measures it (4× oversampling); a meter that oversamples more can read a
+/// few tenths of a dB higher. Close to ffmpeg's two-pass <c>loudnorm</c> in linear mode, not identical: when the limiter
+/// has to work, the result can come out quieter than the target. The whole audio is held in memory: the input, the
+/// output and per-frame working arrays, about 2 MB per second of 48 kHz stereo. Loudness is meaningful from 8 kHz up.
 /// </summary>
 public static class LoudnessNormalizer
 {
@@ -18,7 +19,7 @@ public static class LoudnessNormalizer
     /// </summary>
     /// <param name="audio">The audio to normalize.</param>
     /// <param name="targetLufs">Target integrated loudness, from -70 to 0 LUFS (e.g. -16 or -14 for streaming).</param>
-    /// <param name="truePeakCeilingDb">The highest true peak allowed in the result, in dBTP, at most 0.</param>
+    /// <param name="truePeakCeilingDb">The highest true peak allowed in the result, from -70 to 0 dBTP.</param>
     /// <exception cref="ArgumentNullException"><paramref name="audio"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The target or the ceiling is out of range.</exception>
     /// <exception cref="ArgumentException">The audio holds a NaN or infinite sample.</exception>
@@ -30,9 +31,9 @@ public static class LoudnessNormalizer
             throw new ArgumentOutOfRangeException(nameof(targetLufs), targetLufs, "The target must be from -70 to 0 LUFS");
         }
 
-        if (!double.IsFinite(truePeakCeilingDb) || truePeakCeilingDb > 0.0)
+        if (!double.IsFinite(truePeakCeilingDb) || truePeakCeilingDb is < -70.0 or > 0.0)
         {
-            throw new ArgumentOutOfRangeException(nameof(truePeakCeilingDb), truePeakCeilingDb, "The ceiling must be a finite number at most 0 dBTP");
+            throw new ArgumentOutOfRangeException(nameof(truePeakCeilingDb), truePeakCeilingDb, "The ceiling must be from -70 to 0 dBTP");
         }
 
         var measured = LoudnessMeter.MeasureIntegratedLoudness(audio);

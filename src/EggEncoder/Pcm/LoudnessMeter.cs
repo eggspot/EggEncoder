@@ -2,7 +2,7 @@ using EggEncoder.Waveform;
 
 namespace EggEncoder.Pcm;
 
-/// <summary>Loudness measurements of in-memory audio (ITU-R BS.1770-4 / EBU R128).</summary>
+/// <summary>Loudness measurements of in-memory audio (ITU-R BS.1770-4 / EBU R128), meaningful from 8 kHz up.</summary>
 public static class LoudnessMeter
 {
     /// <summary>

@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace EggEncoder.Pcm;
 
 internal static class TruePeakOversampler
@@ -5,15 +7,23 @@ internal static class TruePeakOversampler
     public const int Reach = HalfWidth;
 
     private const int HalfWidth = 24;
+    private const int Taps = 2 * HalfWidth;
     private const int Phases = 4;
     private const double StopbandAttenuationDb = 80.0;
+    private const double GainMargin = 1e-4;
 
-    private static readonly double[][] Table = WindowedSincKernel.BuildPolyphaseTable(HalfWidth, 1.0, WindowedSincKernel.KaiserBeta(StopbandAttenuationDb), Phases);
-    private static readonly double Gain = Table.Skip(1).Max(row => row.Sum(Math.Abs));
+    private static readonly float[][] Rows = WindowedSincKernel
+        .BuildPolyphaseTable(HalfWidth, 1.0, WindowedSincKernel.KaiserBeta(StopbandAttenuationDb), Phases)
+        .Skip(1)
+        .Select(row => row.Select(weight => (float)weight).ToArray())
+        .ToArray();
+
+    private static readonly double Gain = Rows.Max(row => row.Sum(weight => Math.Abs((double)weight))) * (1.0 + GainMargin);
 
     public static double Peak(float[] samples, int channels)
     {
         var frames = samples.Length / channels;
+        var padded = Deinterleave(samples, channels, frames);
         var framePeaks = SamplePeaks(samples, channels);
         var reachMax = new float[frames];
         SlidingWindow.Max(framePeaks, frames, HalfWidth - 1, HalfWidth, reachMax);
@@ -28,22 +38,44 @@ internal static class TruePeakOversampler
         {
             if (reachMax[frame] * Gain > peak)
             {
-                peak = Math.Max(peak, FramePeak(samples, channels, frames, frame));
+                peak = Math.Max(peak, FramePeak(padded, frame));
             }
         }
 
         return peak;
     }
 
-    public static void FramePeaksAbove(float[] samples, int channels, double threshold, float[] peaks)
+    public static float FramePeaksAbove(float[] samples, int channels, double threshold, float[] peaks)
     {
         var frames = samples.Length / channels;
+        var padded = Deinterleave(samples, channels, frames);
         var framePeaks = SamplePeaks(samples, channels);
         SlidingWindow.Max(framePeaks, frames, HalfWidth - 1, HalfWidth, peaks);
+        var largest = 0f;
         for (var frame = 0; frame < frames; frame++)
         {
-            peaks[frame] = peaks[frame] * Gain > threshold ? (float)FramePeak(samples, channels, frames, frame) : 0f;
+            peaks[frame] = peaks[frame] * Gain > threshold ? FramePeak(padded, frame) : 0f;
+            largest = Math.Max(largest, peaks[frame]);
         }
+
+        return largest;
+    }
+
+    private static float[][] Deinterleave(float[] samples, int channels, int frames)
+    {
+        var padded = new float[channels][];
+        for (var channel = 0; channel < channels; channel++)
+        {
+            var values = new float[frames + Taps];
+            for (var frame = 0; frame < frames; frame++)
+            {
+                values[frame + HalfWidth] = samples[(frame * channels) + channel];
+            }
+
+            padded[channel] = values;
+        }
+
+        return padded;
     }
 
     private static float[] SamplePeaks(float[] samples, int channels)
@@ -63,29 +95,37 @@ internal static class TruePeakOversampler
         return peaks;
     }
 
-    private static double FramePeak(float[] samples, int channels, int frames, int frame)
+    private static float FramePeak(float[][] padded, int frame)
     {
-        var peak = 0.0;
-        for (var channel = 0; channel < channels; channel++)
+        var peak = 0f;
+        foreach (var values in padded)
         {
-            peak = Math.Max(peak, Math.Abs(samples[(frame * channels) + channel]));
-            for (var phase = 1; phase < Phases; phase++)
+            peak = Math.Max(peak, Math.Abs(values[frame + HalfWidth]));
+            var window = values.AsSpan(frame + 1, Taps);
+            foreach (var row in Rows)
             {
-                var row = Table[phase];
-                var sum = 0.0;
-                for (var k = 0; k < row.Length; k++)
-                {
-                    var source = frame + k - HalfWidth + 1;
-                    if (source >= 0 && source < frames)
-                    {
-                        sum += samples[(source * channels) + channel] * row[k];
-                    }
-                }
-
-                peak = Math.Max(peak, Math.Abs(sum));
+                peak = Math.Max(peak, Math.Abs(Dot(window, row)));
             }
         }
 
         return peak;
+    }
+
+    private static float Dot(ReadOnlySpan<float> values, float[] weights)
+    {
+        var sum = Vector<float>.Zero;
+        var i = 0;
+        for (; i <= values.Length - Vector<float>.Count; i += Vector<float>.Count)
+        {
+            sum += new Vector<float>(values[i..]) * new Vector<float>(weights, i);
+        }
+
+        var total = Vector.Dot(sum, Vector<float>.One);
+        for (; i < values.Length; i++)
+        {
+            total += values[i] * weights[i];
+        }
+
+        return total;
     }
 }

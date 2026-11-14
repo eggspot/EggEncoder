@@ -51,11 +51,14 @@ public sealed class PcmAudio
     public TimeSpan Duration => TimeSpan.FromSeconds(FrameCount / (double)SampleRate);
 
     /// <summary>
-    /// Decodes the audio of a file. An MP4, M4A or MOV file gives its first AAC audio track, with the encoder's priming
-    /// removed and the end trimmed as the file's edit list says (an empty edit at the start becomes leading silence);
-    /// any other extension is decoded by the same decoders <c>AudioCutter</c> uses. Integer samples are divided by
-    /// 2^(bits-1) - 1, the <see cref="FloatSampleConverter"/> scale, so 16-bit audio round-trips through <see cref="ToInt16"/>.
+    /// Decodes the audio of a file. An MP4, M4A or MOV file gives its first AAC audio track: the first frame is placed at
+    /// its time from the edit list and the rest follow it without gaps, so the encoder's priming is removed and an empty
+    /// edit at the start becomes leading silence (as long as the file declares it), and the end is trimmed to the edit
+    /// list or the track's duration, never extended. Any other extension is decoded by the same decoders
+    /// <c>AudioCutter</c> uses. Integer samples are divided by 2^(bits-1) - 1, the <see cref="FloatSampleConverter"/>
+    /// scale, so 16-bit audio round-trips through <see cref="ToInt16"/>.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
     /// <exception cref="NotSupportedException">The format, the MP4 audio codec (only AAC-LC), or a channel count above 2 is not supported.</exception>
     /// <exception cref="InvalidDataException">The file is damaged, has no audio track, or is too long to hold in one array.</exception>
     public static PcmAudio Decode(string path)
@@ -67,6 +70,7 @@ public sealed class PcmAudio
 
     /// <summary>Digital silence of the given length.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The duration is negative, or the format is invalid.</exception>
+    /// <exception cref="ArgumentException">The duration is too long to hold in one array.</exception>
     /// <exception cref="NotSupportedException"><paramref name="channels"/> is more than 2.</exception>
     public static PcmAudio Silence(int channels, int sampleRate, TimeSpan duration)
     {
@@ -83,7 +87,8 @@ public sealed class PcmAudio
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The format is invalid.</exception>
     /// <exception cref="NotSupportedException"><paramref name="channels"/> is more than 2.</exception>
-    public PcmAudio ConvertTo(int sampleRate, int channels)
+    /// <exception cref="ArgumentException">The converted audio is too long to hold in one array.</exception>
+    public PcmAudio ConvertTo(int channels, int sampleRate)
     {
         RequireFormat(channels, sampleRate);
         if (sampleRate == SampleRate && channels == Channels)
@@ -107,7 +112,7 @@ public sealed class PcmAudio
     }
 
     /// <summary>Mono 16 kHz, the usual input of speech recognition models.</summary>
-    public PcmAudio DownmixForSpeech() => ConvertTo(16000, 1);
+    public PcmAudio DownmixForSpeech() => ConvertTo(1, 16000);
 
     /// <summary>16-bit samples (× 32767, rounded and clipped; NaN becomes 0), for the AAC encoder or a WAV file.</summary>
     public short[] ToInt16()
@@ -143,7 +148,9 @@ public sealed class PcmAudio
         }
     }
 
-    internal static long FramesOf(TimeSpan duration, int sampleRate) => (long)Math.Round(duration.TotalSeconds * sampleRate);
+    internal static long FramesOf(TimeSpan duration, int sampleRate) => Saturate(Math.Round(duration.TotalSeconds * sampleRate));
+
+    private static long Saturate(double frames) => (long)Math.Clamp(frames, -int.MaxValue, int.MaxValue);
 
     internal static int CheckedLength(long frames, int channels)
     {
@@ -226,10 +233,12 @@ public sealed class PcmAudio
         var info = track.Info;
         RequireFormat(info.Channels, info.SampleRate);
 
-        var endFrames = ToFrames(track.EditEnd ?? track.PresentationEnd(), info);
-        var output = new float[CheckedLength(Math.Max(0, endFrames), info.Channels)];
-        var decoder = new AacFrameDecoder(info.SampleRate, info.Channels);
+        var channels = info.Channels;
+        var endFrame = Math.Max(0, ToFrames(track.EditEnd ?? track.PresentationEnd(), info));
+        var decoder = new AacFrameDecoder(info.SampleRate, channels);
+        var output = Array.Empty<float>();
         long? writeFrame = null;
+        var writtenFrames = 0L;
 
         foreach (var packet in source.ReadTrackPackets(track))
         {
@@ -243,27 +252,48 @@ public sealed class PcmAudio
                 throw new InvalidDataException("AAC: an MP4 sample is truncated", e);
             }
 
-            var frames = decoded.Length / info.Channels;
-            var packetFrame = ToFrames(packet.Pts, info);
-            writeFrame = writeFrame is long next && Math.Abs(packetFrame - next) <= frames ? next : packetFrame;
-            Place(decoded, info.Channels, writeFrame.Value, output);
-            writeFrame += frames;
-        }
-
-        return new PcmAudio(output, info.Channels, info.SampleRate);
-    }
-
-    private static long ToFrames(long ticks, MediaTrackInfo info) => (long)Math.Round(ticks * (double)info.SampleRate / info.Timescale);
-
-    private static void Place(int[] decoded, int channels, long startFrame, float[] output)
-    {
-        for (var i = 0; i < decoded.Length; i++)
-        {
-            var index = (startFrame * channels) + i;
-            if (index >= 0 && index < output.Length)
+            writeFrame ??= ToFrames(packet.Pts, info);
+            var frames = decoded.Length / channels;
+            var firstFrame = Math.Max(0, writeFrame.Value);
+            var lastFrame = Math.Min(endFrame, writeFrame.Value + frames);
+            if (lastFrame > firstFrame)
             {
-                output[index] = decoded[i] / (float)Int16Max;
+                output = EnsureLength(output, lastFrame * channels, path);
+                var skipped = (int)((firstFrame - writeFrame.Value) * channels);
+                for (var i = skipped; i < (lastFrame - writeFrame.Value) * channels; i++)
+                {
+                    output[(writeFrame.Value * channels) + i] = decoded[i] / (float)Int16Max;
+                }
+
+                writtenFrames = Math.Max(writtenFrames, lastFrame);
+            }
+
+            writeFrame += frames;
+            if (writeFrame >= endFrame)
+            {
+                break;
             }
         }
+
+        return new PcmAudio(output.Length == writtenFrames * channels ? output : output[..(int)(writtenFrames * channels)], channels, info.SampleRate);
     }
+
+    private static float[] EnsureLength(float[] buffer, long length, string path)
+    {
+        if (length <= buffer.Length)
+        {
+            return buffer;
+        }
+
+        if (length > Array.MaxLength)
+        {
+            throw new InvalidDataException($"The audio of '{path}' is too long to hold in one array");
+        }
+
+        var grown = new float[(int)Math.Min(Array.MaxLength, Math.Max(length, 2L * buffer.Length))];
+        Array.Copy(buffer, grown, buffer.Length);
+        return grown;
+    }
+
+    private static long ToFrames(long ticks, MediaTrackInfo info) => Saturate(Math.Round(ticks * (double)info.SampleRate / info.Timescale));
 }

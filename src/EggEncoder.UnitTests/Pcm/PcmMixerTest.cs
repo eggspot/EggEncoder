@@ -53,7 +53,7 @@ namespace EggEncoder.UnitTests.Pcm
         [Fact]
         public void Mix_FixedLength_Should_Win_Over_The_Rule_With_A_Loop()
         {
-            var mix = PcmMixer.Mix([new PcmMixInput(Mono(1f, 2f, 3f), Loop: true)], PcmMixLength.Longest, TimeSpan.FromMilliseconds(5), 1000, 1);
+            var mix = PcmMixer.Mix([new PcmMixInput(Mono(1f, 2f, 3f), Loop: true)], PcmMixLength.Longest, TimeSpan.FromMilliseconds(5), 1, 1000);
 
             mix.Samples.Should().Equal(1f, 2f, 3f, 1f, 2f);
         }
@@ -138,6 +138,7 @@ namespace EggEncoder.UnitTests.Pcm
         [Theory]
         [InlineData(double.NaN)]
         [InlineData(double.PositiveInfinity)]
+        [InlineData(1e300)]
         public void Mix_NonFiniteGain_Should_Throw_ArgumentOutOfRange(double gain)
         {
             var act = () => PcmMixer.Mix([new PcmMixInput(Mono(1f), gain)], sampleRate: 1000, channels: 1);

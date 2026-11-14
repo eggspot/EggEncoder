@@ -79,7 +79,7 @@ namespace EggEncoder.UnitTests.Pcm
         {
             var audio = new PcmAudio([0.5f], 1, 8000);
 
-            audio.ConvertTo(8000, 1).Should().BeSameAs(audio);
+            audio.ConvertTo(1, 8000).Should().BeSameAs(audio);
         }
 
         [Fact]
@@ -87,7 +87,7 @@ namespace EggEncoder.UnitTests.Pcm
         {
             var audio = new PcmAudio([1.5f, 0.5f, -0.2f, 0.4f], 2, 8000);
 
-            var mono = audio.ConvertTo(8000, 1);
+            var mono = audio.ConvertTo(1, 8000);
 
             mono.Samples.Should().Equal(1.0f, 0.1f);
         }
@@ -97,7 +97,7 @@ namespace EggEncoder.UnitTests.Pcm
         {
             var audio = new PcmAudio([1.25f, -0.5f], 1, 8000);
 
-            audio.ConvertTo(8000, 2).Samples.Should().Equal(1.25f, 1.25f, -0.5f, -0.5f);
+            audio.ConvertTo(2, 8000).Samples.Should().Equal(1.25f, 1.25f, -0.5f, -0.5f);
         }
 
         [Fact]
@@ -105,7 +105,7 @@ namespace EggEncoder.UnitTests.Pcm
         {
             var audio = Tone(44100, 1, 440, 1.5, 44100);
 
-            var resampled = audio.ConvertTo(48000, 2);
+            var resampled = audio.ConvertTo(2, 48000);
 
             resampled.FrameCount.Should().Be(48000);
             var middle = resampled.Samples.Skip(48000).Take(48000).Max();
@@ -181,6 +181,28 @@ namespace EggEncoder.UnitTests.Pcm
         }
 
         [Fact]
+        public void Decode_Mp4DeclaringAHugeEdit_Should_Stop_At_The_Decoded_Audio()
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"eggencoder-pcm-{Guid.NewGuid():N}.mp4");
+            try
+            {
+                var bytes = File.ReadAllBytes(VideoAacFixture);
+                var audioElst = LastIndexOf(bytes, "elst"u8);
+                BinaryPrimitivesWriteUInt32(bytes, audioElst + 12, uint.MaxValue);
+                File.WriteAllBytes(path, bytes);
+
+                var audio = PcmAudio.Decode(path);
+
+                audio.FrameCount.Should().BeLessThanOrEqualTo(13 * 1024);
+                audio.FrameCount.Should().BeGreaterThanOrEqualTo(12000);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void Decode_Mp4WithoutAudio_Should_Throw_InvalidData()
         {
             var act = () => PcmAudio.Decode(EggEncoder.UnitTests.Containers.Mp4.Mp4FileSourceTest.HevcFixture);
@@ -209,6 +231,11 @@ namespace EggEncoder.UnitTests.Pcm
 
             return new PcmAudio(samples, channels, sampleRate);
         }
+
+        private static int LastIndexOf(byte[] bytes, ReadOnlySpan<byte> value) => bytes.AsSpan().LastIndexOf(value);
+
+        private static void BinaryPrimitivesWriteUInt32(byte[] bytes, int offset, uint value) =>
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(offset, 4), value);
 
         private static short[] ReadPcm(string path)
         {

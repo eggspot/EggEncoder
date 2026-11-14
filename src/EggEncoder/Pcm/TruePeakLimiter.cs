@@ -20,9 +20,13 @@ internal static class TruePeakLimiter
         var first = new float[frames];
         var second = new float[frames];
 
-        for (var pass = 0; pass < MaxPasses && TruePeakOversampler.Peak(samples, channels) > ceiling; pass++)
+        for (var pass = 0; pass < MaxPasses; pass++)
         {
-            TruePeakOversampler.FramePeaksAbove(samples, channels, ceiling, first);
+            if (TruePeakOversampler.FramePeaksAbove(samples, channels, ceiling, first) <= ceiling)
+            {
+                return;
+            }
+
             for (var frame = 0; frame < frames; frame++)
             {
                 first[frame] = first[frame] > ceiling ? (float)(ceiling / first[frame]) : 1f;

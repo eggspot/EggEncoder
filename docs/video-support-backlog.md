@@ -264,8 +264,9 @@ Rules for every Phase 5 item, on top of the ones above:
   - **Depends on**: 15, 16.
   - Status: done. `PcmAudio` holds interleaved float PCM (mono or stereo, unclipped):
     `Decode(path)` reads any audio file `AudioCutter` reads plus the first AAC track of an
-    MP4/M4A/MOV through `Mp4FileSource`, so the edit list drops the encoder priming, a leading empty
-    edit becomes silence and the media edit's end trims the last frame (within 3 of ffmpeg's decode);
+    MP4/M4A/MOV through `Mp4FileSource`: the first frame sits at its edit-list time and the rest follow
+    without gaps, so the priming is dropped, a leading empty edit becomes silence and the end is trimmed,
+    never extended, to the edit list (within 3 of ffmpeg's decode);
     `Silence`, `ConvertTo` (resampling without clipping), `DownmixForSpeech` (mono 16 kHz) and
     `ToInt16` for the encoder. `PcmMixer.Mix` sums `PcmMixInput`s (gain, start offset, loop) under a
     `PcmMixLength` rule or a fixed length, converting each input to the mix format, with no
@@ -273,9 +274,10 @@ Rules for every Phase 5 item, on top of the ones above:
     `WaveformCalculator` uses, now shared through one accumulator) and true peak (4x windowed-sinc
     oversampling); both match ffmpeg `ebur128` within 0.15 LU and 0.1 dB on the test signals.
     `LoudnessNormalizer.Normalize` applies the gain to the target, then a look-ahead true-peak
-    limiter that never lets the true peak pass the ceiling (-1.5 dBTP by default); it lands within
-    1 LU of ffmpeg's two-pass linear `loudnorm` (gated oracle). Audio shorter than 400 ms is only
-    limited, silence is left as it is.
+    limiter that never lets the true peak, as `LoudnessMeter` measures it, pass the ceiling (-70 to
+    0 dBTP, -1.5 by default); it lands within 1 LU of ffmpeg's two-pass linear `loudnorm` (gated
+    oracle) and takes about a second for a minute of heavily limited 48 kHz stereo. Audio shorter than
+    400 ms is only limited, silence is left as it is.
 - [ ] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
   block-aligned), not an `IPcmTransform`: ffmpeg `sidechaincompress`'s threshold, ratio, attack and
   release, its default knee, makeup and detection mapped onto `CompressorTransform`'s envelope

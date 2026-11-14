@@ -13,15 +13,15 @@ public static class PcmMixer
     /// are then fine with any rule), otherwise as <paramref name="lengthRule"/> says.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="inputs"/> or an input's audio is null.</exception>
-    /// <exception cref="ArgumentException">There are no inputs, or the length rule meets a looping input and so never ends.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A gain is not finite, an offset or the fixed length is negative, or the format is invalid.</exception>
+    /// <exception cref="ArgumentException">There are no inputs, the length rule meets a looping input and so never ends, or the mix is too long to hold in one array.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A gain is not a finite float, an offset or the fixed length is negative, or the format is invalid.</exception>
     /// <exception cref="NotSupportedException"><paramref name="channels"/> is more than 2.</exception>
     public static PcmAudio Mix(
         IReadOnlyList<PcmMixInput> inputs,
         PcmMixLength lengthRule = PcmMixLength.Longest,
         TimeSpan? fixedLength = null,
-        int sampleRate = 48000,
-        int channels = 2)
+        int channels = 2,
+        int sampleRate = 48000)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         PcmAudio.RequireFormat(channels, sampleRate);
@@ -39,9 +39,9 @@ public static class PcmMixer
         foreach (var input in inputs)
         {
             ArgumentNullException.ThrowIfNull(input.Audio, nameof(inputs));
-            if (!double.IsFinite(input.Gain))
+            if (!double.IsFinite(input.Gain) || Math.Abs(input.Gain) > float.MaxValue)
             {
-                throw new ArgumentOutOfRangeException(nameof(inputs), input.Gain, "A gain must be a finite number");
+                throw new ArgumentOutOfRangeException(nameof(inputs), input.Gain, "A gain must be a finite number within the float range");
             }
 
             if (input.StartOffset < TimeSpan.Zero)
@@ -49,7 +49,7 @@ public static class PcmMixer
                 throw new ArgumentOutOfRangeException(nameof(inputs), input.StartOffset, "A start offset must not be negative");
             }
 
-            var audio = input.Audio.ConvertTo(sampleRate, channels);
+            var audio = input.Audio.ConvertTo(channels, sampleRate);
             tracks.Add(new MixTrack(audio.Samples, input.Gain, PcmAudio.FramesOf(input.StartOffset, sampleRate), input.Loop && audio.Samples.Length > 0));
         }
 
