@@ -18,7 +18,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 ### Why EggEncoder?
 
 - 🚀 **100% pure managed, fully in-process** — no native binary, no P/Invoke, anywhere in this project; no subprocess/shell-out overhead anywhere
-- 🌍 **Truly cross-platform** — runs anywhere .NET 8/9/10 runs (Windows, Linux, macOS); CI builds and tests on all three
+- 🌍 **Truly cross-platform** — runs anywhere .NET 8/9/10/11 runs (Windows, Linux, macOS); CI builds and tests on all three
 - ❄️ **Native AOT compatible** — no reflection, no dynamic code; publish with `PublishAot=true` and it just works
 - 🎼 **Broad format coverage** — AAC, AIFF (incl. AIFC), ALAC, AU, FLAC, MP3, Opus, TTA, Vorbis, WAV, WavPack, WMA decode/encode; MOV/MP4 metadata probing + mono/stereo AAC-LC audio decode; AAC-LC encode in mono or stereo at a target bit rate (`AacEncoderSession.OpenSession(stream, channels, sampleRate, bitsPerSample, bitRate)`)
 - 📊 **Built-in waveform generation** — normalized peak windows for any decoded stream

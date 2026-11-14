@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-        dotnet-version: ['8.0.x', '9.0.x', '10.0.x']
+        dotnet-version: ['8.0.x', '9.0.x', '10.0.x', '11.0.x']
 
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +32,7 @@ jobs:
             8.0.x
             9.0.x
             10.0.x
+            11.0.x
           cache: true
           cache-dependency-path: '**/*.csproj'
 
@@ -42,18 +43,18 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       - name: Test (.NET ${{ matrix.dotnet-version }})
-        if: ${{ !(matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '10.0.x') }}
+        if: ${{ !(matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '11.0.x') }}
         shell: bash
         run: |
           MAJOR=$(echo "${{ matrix.dotnet-version }}" | cut -d. -f1)
           dotnet test --configuration Release --no-build --framework "net${MAJOR}.0" --verbosity normal
 
       - name: Test every target framework in parallel, as Publish NuGet does
-        if: matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '10.0.x'
+        if: matrix.os == 'ubuntu-latest' && matrix.dotnet-version == '11.0.x'
         run: dotnet test --configuration Release --no-build --verbosity normal
 
       - name: Determine AOT RID and executable name
-        if: matrix.dotnet-version == '10.0.x'
+        if: matrix.dotnet-version == '11.0.x'
         id: aot
         shell: bash
         run: |
@@ -63,11 +64,11 @@ jobs:
             macOS)   echo "rid=osx-arm64" >> "$GITHUB_OUTPUT"; echo "exe=EggEncoder.AotSmokeTest" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Publish Native AOT smoke test (.NET 10)
-        if: matrix.dotnet-version == '10.0.x'
+      - name: Publish Native AOT smoke test (.NET 11)
+        if: matrix.dotnet-version == '11.0.x'
         run: dotnet publish src/EggEncoder.AotSmokeTest/EggEncoder.AotSmokeTest.csproj --configuration Release --runtime ${{ steps.aot.outputs.rid }}
 
-      - name: Run Native AOT smoke test (.NET 10)
-        if: matrix.dotnet-version == '10.0.x'
+      - name: Run Native AOT smoke test (.NET 11)
+        if: matrix.dotnet-version == '11.0.x'
         shell: bash
-        run: ./src/EggEncoder.AotSmokeTest/bin/Release/net10.0/${{ steps.aot.outputs.rid }}/publish/${{ steps.aot.outputs.exe }}
+        run: ./src/EggEncoder.AotSmokeTest/bin/Release/net11.0/${{ steps.aot.outputs.rid }}/publish/${{ steps.aot.outputs.exe }}
