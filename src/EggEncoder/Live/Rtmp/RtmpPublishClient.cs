@@ -339,15 +339,16 @@ namespace EggEncoder.Live.Rtmp
         private async Task HandshakeAsync(CancellationToken cancellationToken)
         {
             var handshake = RtmpHandshake.CreateClient();
-            await _stream!.WriteAsync(handshake.Start(), cancellationToken).ConfigureAwait(false);
+            var stream = RequireStream(cancellationToken);
+            await stream.WriteAsync(handshake.Start(), cancellationToken).ConfigureAwait(false);
             while (!handshake.IsComplete)
             {
                 var peer = new byte[handshake.BytesExpected];
-                await _stream.ReadExactlyAsync(peer, cancellationToken).ConfigureAwait(false);
+                await stream.ReadExactlyAsync(peer, cancellationToken).ConfigureAwait(false);
                 var reply = handshake.Process(peer);
                 if (reply.Length > 0)
                 {
-                    await _stream.WriteAsync(reply, cancellationToken).ConfigureAwait(false);
+                    await stream.WriteAsync(reply, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -454,7 +455,7 @@ namespace EggEncoder.Live.Rtmp
                 }
 
                 await FlushAsync(cancellationToken).ConfigureAwait(false);
-                var read = await _stream!.ReadAsync(_readBuffer, cancellationToken).ConfigureAwait(false);
+                var read = await RequireStream(cancellationToken).ReadAsync(_readBuffer, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                 {
                     throw new EndOfStreamException("The server closed the connection");
@@ -596,9 +597,20 @@ namespace EggEncoder.Live.Rtmp
                 return;
             }
 
-            var stream = _stream ?? throw new ObjectDisposedException(nameof(RtmpPublishClient));
-            await stream.WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
+            await RequireStream(cancellationToken).WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
             _output.ResetWrittenCount();
+        }
+
+        private Stream RequireStream(CancellationToken cancellationToken)
+        {
+            var stream = _stream;
+            if (stream is null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new ObjectDisposedException(nameof(RtmpPublishClient));
+            }
+
+            return stream;
         }
 
         private async ValueTask SendBufferedAsync(CancellationToken cancellationToken)
