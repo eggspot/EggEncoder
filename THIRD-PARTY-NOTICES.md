@@ -52,6 +52,14 @@ by this project itself rather than by consulting any encoder implementation.
   bit-for-bit comparison, not by inspection) fed back into the encoder's own, separately-written
   code.
 
+## AAC-LC stereo decode — clean-room acknowledgment (no code copied)
+
+`Codecs/Aac/AacFrameDecoder.cs`, `AacBandTables.cs` and `AacProgramConfig.cs` were written from the
+ISO/IEC 14496-3 syntax and decoding process (channel pair elements, M/S and intensity stereo, TNS,
+pulse data, window sequences and shapes, the scalefactor band and TNS band tables, which are the
+standard's own normative values). No decoder source was copied. ffmpeg was used only as a black-box
+reference decoder to produce the ground-truth PCM the tests compare against.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke

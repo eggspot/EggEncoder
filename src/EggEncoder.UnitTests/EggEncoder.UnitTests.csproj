@@ -62,6 +62,24 @@
     <None Include="Codecs\Flac\sample_24bit_stereo_ffmpeg.flac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mov" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\stereo_44100.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\stereo_44100_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\pns_48000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\pns_48000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_8000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_8000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_16000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_16000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_24000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_24000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_32000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_32000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_64000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_64000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_96000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\mono_96000_groundtruth.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mov\stereo_48000.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mov\stereo_48000_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\h264_aac_rotated.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\hevc.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\vp9_aac.mp4" CopyToOutputDirectory="Always" />

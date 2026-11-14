@@ -38,6 +38,7 @@ namespace EggEncoder.Codecs.Aac
         private const int TargetMaxQuantizedMagnitude = 8;
 
         private const uint SingleChannelElementSyntaxId = 0;
+        private const uint EndSyntaxId = 7;
         private const uint DefaultGlobalGain = 100;
         private const uint OnlyLongSequence = 0;
         private const uint SineWindowShape = 0;
@@ -222,6 +223,7 @@ namespace EggEncoder.Codecs.Aac
 
             WriteSpectrum(writer, bandTypes, quantizedBands);
 
+            writer.WriteBits(EndSyntaxId, 3);
             writer.ByteAlign();
 
             return writer.ToArray();

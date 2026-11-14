@@ -184,7 +184,7 @@ namespace EggEncoder.UnitTests.Codecs.Aac
             writer.WriteBits(0, 32);  // padding so the read can't stop at end of data first
             var reader = new BitReader(writer.ToArray());
 
-            var act = () => new AacFrameDecoder().DecodeFrame(reader, channels: 1);
+            var act = () => new AacFrameDecoder(44100, 1).DecodeFrame(reader);
 
             act.Should().ThrowExactly<InvalidDataException>().WithMessage("*section data runs past max_sfb*");
         }
