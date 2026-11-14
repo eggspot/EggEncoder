@@ -561,7 +561,7 @@ Fully automatic tag-based versioning — every push to `main` triggers a release
 4. Creates git tag `v<version>` + GitHub Release with artifacts
 5. Concurrency group serializes publish runs to prevent tag race conditions
 
-Publishing uses NuGet trusted publishing: `NuGet/login@v1` exchanges the workflow's GitHub OIDC token for a short-lived API key, for the nuget.org account in the repo variable `NUGET_USER` (the owner of the "GitHub Publish EggEncoder" policy, repository `eggspot/EggEncoder`, workflow `publish.yml`). The `NUGET_API_KEY` secret is only a fallback when that login fails. Only pushes that change `src/**` publish, so workflow and docs changes release nothing.
+Publishing uses NuGet trusted publishing: `NuGet/login@v1` exchanges the workflow's GitHub OIDC token for a short-lived API key, for the nuget.org account in the repo variable `NUGET_USER` (the owner of the "GitHub Publish EggEncoder" policy, repository `eggspot/EggEncoder`, workflow `publish.yml`). There is no stored NuGet API key: if that login fails, the release fails. Only pushes that change `src/**` publish, so workflow and docs changes release nothing.
 
 No manual version editing needed. No commits pushed back to main. Just use conventional commit prefixes.
 
