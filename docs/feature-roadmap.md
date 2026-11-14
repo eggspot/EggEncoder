@@ -252,6 +252,14 @@ normalizing against a wrong, block-local value. `null` or `double.NegativeInfini
 own "measured, but entirely below the absolute silence gate" sentinel) both pass samples through
 unchanged, since no finite gain reaches a finite target from either starting point.
 
+**True peak and limiting (video backlog item 18).** For whole clips held in memory, the float
+`Pcm.PcmAudio` type has `LoudnessMeter.MeasureIntegratedLoudness` (the same gating, shared with
+`WaveformCalculator` through one accumulator), `LoudnessMeter.MeasureTruePeakDb` (4x
+windowed-sinc oversampling, matching ffmpeg `ebur128` within 0.1 dB on the test signals) and
+`LoudnessNormalizer.Normalize(audio, targetLufs, truePeakCeilingDb)`: the gain to the target, then
+a look-ahead limiter that keeps the true peak at or under the ceiling. It is close to, not
+identical with, ffmpeg `loudnorm` (within 1 LU of its two-pass linear mode on the oracle test).
+
 ## 4. Encoder delay/padding metadata
 
 **Status: done for MP3.** Opus already has an explicit `pre_skip` field; Vorbis still has no

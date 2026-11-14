@@ -133,7 +133,7 @@ public class MediaService(IMediaEncoder mediaEncoder)
         <div class="feature-card">
           <div class="feature-icon">&#128266;</div>
           <div class="feature-title">EBU R128 Loudness Measurement</div>
-          <p class="feature-desc"><code>Probe</code> surfaces real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) as <code>ProbeResult.IntegratedLoudness</code> — K-weighted, gated block averaging per the standard, not just a sample-level RMS. See <a href="Advanced-Features.html#loudness-measurement">Advanced Features</a>.</p>
+          <p class="feature-desc"><code>Probe</code> surfaces real ITU-R BS.1770-4 / EBU R128 integrated loudness (in LUFS) as <code>ProbeResult.IntegratedLoudness</code> — K-weighted, gated block averaging per the standard, not just a sample-level RMS. <code>LoudnessMeter</code> also measures true peak (dBTP), and <code>LoudnessNormalizer</code> reaches a target LUFS with a look-ahead true-peak limiter; <code>PcmMixer</code> mixes float tracks with gain, offsets and looping. See <a href="Advanced-Features.html#loudness-measurement">Advanced Features</a> and <a href="Advanced-Features.html#mixing-and-true-peak-normalization">mixing and true-peak normalization</a>.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#127754;</div>

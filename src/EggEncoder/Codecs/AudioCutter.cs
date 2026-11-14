@@ -97,7 +97,7 @@ namespace EggEncoder.Codecs
             return Cut(sourceFilePath, destFilePath, startInSeconds, endInSeconds, new CutOptions(), cancellationToken);
         }
 
-        private static void DecodeSource(string sourceFilePath, string sourceExtension, AudioBlockDecodedCallback onBlockDecoded)
+        internal static void DecodeSource(string sourceFilePath, string sourceExtension, AudioBlockDecodedCallback onBlockDecoded)
         {
             switch (sourceExtension)
             {

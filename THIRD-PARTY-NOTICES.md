@@ -68,6 +68,15 @@ hearing uses Terhardt's published formula). No encoder source (ffmpeg, FAAC, FDK
 read or copied; ffmpeg was used only as a black-box decoder and as a reference encoder for comparing
 SNR.
 
+## Loudness, true peak and mixing — clean-room acknowledgment (no code copied)
+
+`Pcm/LoudnessMeter.cs`, `Pcm/LoudnessNormalizer.cs`, `Pcm/TruePeakOversampler.cs`,
+`Pcm/TruePeakLimiter.cs`, `Pcm/PcmMixer.cs` and `Pcm/PcmAudio.cs` were written from ITU-R
+BS.1770-4 (gating and true-peak measurement) and this project's own derivations; the oversampling
+filter is a Kaiser-windowed sinc, not the standard's example filter. No source of ffmpeg's
+`ebur128`, `loudnorm` or `amix` filters or of libebur128 was copied; ffmpeg was used only as a
+black-box reference to produce the loudness, true-peak and decode values the tests compare against.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke

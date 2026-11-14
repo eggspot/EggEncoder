@@ -121,6 +121,19 @@ namespace EggEncoder.Containers.Mp4
             }
         }
 
+        internal IEnumerable<MediaPacket> ReadTrackPackets(Mp4SourceTrack track)
+        {
+            for (var index = 0; index < track.Offsets.Length; index++)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                CheckSampleRange(track, index);
+                var payload = new byte[track.Sizes[index]];
+                _source.Position = track.Offsets[index];
+                _source.ReadExactly(payload);
+                yield return CreatePacket(track, index, payload);
+            }
+        }
+
         private void CheckSampleRange(Mp4SourceTrack track, int index)
         {
             var offset = track.Offsets[index];

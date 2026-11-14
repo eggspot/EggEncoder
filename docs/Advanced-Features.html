@@ -118,6 +118,19 @@ double? integratedLoudnessLufs = probeResult.IntegratedLoudness;</code></pre>
       <p>Internally, each sample is run through <code>Waveform.KWeightingFilter</code> — two cascaded biquads using ITU-R BS.1770-4's own tan-prewarped bilinear-transform coefficients, a different parameterization from <code>Pcm.BiquadTransform</code>'s RBJ-cookbook formulas, so it isn't reused from that type — before 400ms/100ms-step gated block energies are accumulated (absolute gate at -70 LUFS, relative gate 10 LU below the mean energy of the absolute-gated blocks). The whole pipeline (filter and gating together, not just the coefficients in isolation) was verified against the standard's own published conformance signal: a 997Hz sine wave at -23dBFS peak must measure -23.0 LUFS.</p>
       <p><code>Pcm.LoudnessTransform</code> normalizes to a target LUFS using this same measurement, the way <code>PeakNormalizationTransform</code> normalizes to a target peak dBFS — see <a href="#pcm-transform-pipeline">PCM Transform Pipeline</a> below for the two-pass measure-then-apply usage, and <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/feature-roadmap.md">feature-roadmap.md</a> item 3 for status (done, both halves).</p>
 
+      <h3 id="mixing-and-true-peak-normalization">Mixing and true-peak normalization</h3>
+      <p>For whole clips held in memory, <code>Pcm.PcmAudio</code> holds interleaved float samples (mono or stereo, never clipped). <code>PcmAudio.Decode</code> reads any supported file, or the first AAC track of an MP4/M4A/MOV with its edit list applied (priming removed, leading empty edit as silence, end trimmed). <code>PcmMixer.Mix</code> sums inputs, each with a linear gain, a start offset and optional looping, for the longest, shortest or first input or a fixed length, with no normalization or clipping. <code>LoudnessMeter</code> measures integrated loudness and true peak (4x oversampled), and <code>LoudnessNormalizer.Normalize</code> applies the gain to a target LUFS, then a look-ahead limiter that keeps the true peak, as <code>LoudnessMeter</code> measures it, at or under a ceiling (-70 to 0 dBTP, -1.5 by default).</p>
+      <pre><code class="language-csharp">using EggEncoder.Pcm;
+
+var voice = PcmAudio.Decode("voice.m4a");
+var music = PcmAudio.Decode("music.mp3");
+var mix = PcmMixer.Mix(
+    [new PcmMixInput(voice), new PcmMixInput(music, Gain: 0.3, Loop: true)],
+    PcmMixLength.First);
+var normalized = LoudnessNormalizer.Normalize(mix, targetLufs: -16);
+short[] forTheAacEncoder = normalized.ToInt16();</code></pre>
+      <p>Everything is held in memory: about 384 KB per second of 48 kHz stereo for the audio itself, about 2 MB per second while normalizing. The result is close to, not identical with, ffmpeg's two-pass <code>loudnorm</code> in linear mode. <code>DownmixForSpeech()</code> gives mono 16 kHz for speech recognition.</p>
+
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>
       <pre><code class="language-csharp">using var response = await httpClient.GetStreamAsync(audioUrl);
