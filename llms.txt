@@ -314,7 +314,7 @@ lookahead isn't fixed at one project-wide value the way AAC-LC's is), and every 
 (item 8's MP3 sub-item), same scope as `Codecs.Mp3.Mp3EncoderSession`
 (mono/stereo, 32000/44100/48000Hz, CBR only), reusing `Mp3FrameEncoder`'s own encode internals.
 Writes no LAME-tag header frame or ID3v2 tag (both are container/file-level conventions with no
-equivalent for a raw frame stream); `Mp3Encoder.EncoderDelaySamples` (`1680`) remains the right
+equivalent for a raw frame stream); `Mp3Encoder.EncoderDelaySamples` (`528`, audio frames only) remains the right
 value for a muxer to use. Unlike `OpusStreamingEncoder`, reports each frame's own *real* sample
 count (like `AacStreamingEncoder`) rather than always the nominal `1152` -- except `Complete()`'s
 own mandatory flush frame (draining the one-granule MDCT history), which is purely synthetic and
@@ -524,10 +524,13 @@ even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
 
 ## MP3 Gapless-Playback Metadata (Encoder Delay/Padding)
 
-Every MP3 `Mp3Encoder.Encode`/`OpenSession` writes now starts with a dedicated "Info" header frame
+Conversions to MP3 through `AudioCutter`/`NativeEncoder` accept any input sample rate: rates
+MPEG-1 can't take are resampled to 44.1 kHz (multiples of 11025 Hz) or 48 kHz first;
+`Mp3Encoder.OpenSession` itself takes 32/44.1/48 kHz only.
+ with a dedicated "Info" header frame
 carrying the MP3 ecosystem's own de-facto-standard "LAME tag" -- an Xing-style VBR-header
 extension (no official spec of its own) real-world encoders and players use for gapless-playback
-encoder-delay/padding metadata. `Mp3Encoder.EncoderDelaySamples` (a fixed `1680`, this encoder's
+encoder-delay/padding metadata. `Mp3Encoder.EncoderDelaySamples` (a fixed `528`, counted over audio frames only, this encoder's
 own structural constant -- see its own doc comment) plus a per-file padding value are written in;
 `Mp3Probe`/`ProbeResult` surface them back as `EncoderDelaySamples`/`EncoderPaddingSamples`
 (parsed from any LAME-tagged file, not just this project's own -- unlike FFmpeg's own demuxer,

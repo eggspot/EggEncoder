@@ -8,18 +8,6 @@ namespace EggEncoder.Codecs.Mp3
     // own, differently-indexed analysis direction), shifted into the front of a 1024-element
     // sliding history V (newest 64 at the front), reduced to a 512-element vector U, windowed by D
     // (Mp3Tables.WindowCoefficients again), and summed down to 32 output samples.
-    //
-    // This synthesis filter applies no extra scaling at all -- the standard decoder-side formula
-    // is unity gain on its own, unlike the encoder's own analysis filter (Mp3PolyphaseFilter),
-    // which needs its own /32.0 to compensate for a real inherent 32x gain in its window-multiply
-    // /partial-sum/matrix steps. See Mp3PolyphaseFilter's own doc comment for the full derivation.
-    //
-    // RESOLVED (was tracked as a known open issue in docs/external-dependency-removal-plan.md
-    // Phase 1 sub-item 1a; see Mp3HybridAndSynthesisRoundTripTest's own doc comment for the full
-    // story). This type's own U-vector construction (U[64i+j]=V[128i+j], U[64i+32+j]=V[128i+96+j])
-    // and matrixing were independently confirmed correct, value-for-value, against a from-scratch
-    // reference computation of the same spec formulas -- the real bug turned out to be entirely on
-    // the encoder side (Mp3PolyphaseFilter.Analyze's own gain), not here.
     internal sealed class Mp3SynthesisFilter
     {
         private const int SubbandCount = 32;

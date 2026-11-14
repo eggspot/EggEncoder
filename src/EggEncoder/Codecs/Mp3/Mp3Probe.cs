@@ -339,30 +339,18 @@ namespace EggEncoder.Codecs.Mp3
         public required bool IsVariableBitRate { get; init; }
 
         /// <summary>
-        /// This file's own de-facto "LAME tag" encoder delay, in samples -- how much of the
-        /// frame-count-derived total (every frame, including the Xing/Info header frame itself,
-        /// contributing 1152 samples -- the standard LAME-tag convention this value, and
-        /// <see cref="DurationSeconds"/>, both assume) is leading lookahead/warm-up silence rather
-        /// than real audio. Null if the file carries no Xing/Info header, or one with no LAME-style
-        /// extension (a real, valid case on its own). See
-        /// <c>Mp3FrameEncoder.BuildInfoTagFrame</c>'s own doc comment for where this project's own
-        /// encoder sets it.
-        ///
-        /// A real decoder's own raw decode doesn't always match that "every frame contributes 1152
-        /// samples" assumption: some decoders (including this project's own <c>Mp3Decoder.Decode</c>,
-        /// via NLayer) recognize and silently exclude the Xing/Info header frame from their own
-        /// decoded output entirely, so skipping this many samples from the front of such a decoder's
-        /// own raw output skips 1152 samples too many. This property reports the tag's own standard
-        /// value, not an adjustment for any specific decoder's own behavior.
+        /// The "LAME tag" encoder delay, in samples: how many leading samples of the decoded audio frames
+        /// are not source audio. The tag counts audio frames only; decoders skip the Xing/Info frame itself,
+        /// and a gapless decoder skips this delay plus its own 529-sample decoder delay. Null for every
+        /// non-MP3 format and for an MP3 without a Xing/Info header or LAME extension.
+        /// <see cref="DurationSeconds"/> already accounts for it.
         /// </summary>
         public int? EncoderDelaySamples { get; init; }
 
         /// <summary>
-        /// This file's own de-facto "LAME tag" encoder padding, in samples -- how much trailing
-        /// flush silence should be discarded from the end of a raw decode, under the same "every
-        /// frame contributes 1152 samples" convention <see cref="EncoderDelaySamples"/>'s own doc
-        /// comment explains (including its caveat about decoders that exclude the header frame from
-        /// their own raw output). Null under the same conditions <see cref="EncoderDelaySamples"/> is.
+        /// The "LAME tag" encoder padding, in samples: how many trailing samples of the decoded audio
+        /// frames are not source audio, so that frame count * 1152 - delay - padding is the source length.
+        /// Null under the same conditions as <see cref="EncoderDelaySamples"/>.
         /// </summary>
         public int? EncoderPaddingSamples { get; init; }
 

@@ -50,33 +50,9 @@ namespace EggEncoder.Codecs.Mp3
 
                 var timeDomain = Mdct.Inverse(coefficients);
 
-                // Transform.Mdct.Inverse divides its own cosine sum by CoefficientsPerSubband (18)
-                // -- a normalization convention a real decoder's own IMDCT does NOT apply (this
-                // exact fact, and the exact factor, is already independently confirmed and
-                // documented in Mp3FrameEncoder.ComputeGranuleCoefficients' own comment, which
-                // compensates for it on the ENCODE side by pre-dividing its own forward-MDCT
-                // output by this same 18 before quantizing -- so a real/this-project's-own decoder
-                // reconstructing that encoded data is expected to apply an UN-normalized IMDCT).
-                // Multiplying back here makes Mdct.Inverse behave like that real decoder's own
-                // IMDCT instead of its own default (AAC/WMA-tailored) normalization.
-                //
-                // The further *2 corrects a second, independently confirmed factor: applying this
-                // same sine window on BOTH the forward (encode) and inverse (here) sides of the
-                // TDAC overlap-add halves the reconstructed amplitude relative to the original
-                // signal, verified directly via a minimal from-scratch Python harness reproducing
-                // Transform.Mdct's exact formula and this window (a constant input reconstructs to
-                // exactly 0.5x with only the *18 compensation, and exactly 1.0x -- bit-exact -- once
-                // this *2 is included). This is an inherent property of this "n+0.5+K/2"-basis
-                // TDAC-MDCT convention when the same window is applied on both the forward and
-                // inverse sides, not something specific to MP3 -- it just has no reason to show up
-                // in Transform.Mdct's own existing AAC/WMA usage, where an arbitrary constant gain
-                // is absorbed into those formats' own adaptive, self-consistent scalefactor
-                // quantization rather than needing to match an external, independently-specified
-                // decoder's exact amplitude the way MP3 (a format this decoder must also decode
-                // real-world, non-self-produced files for) does.
                 for (var n = 0; n < BlockSize; n++)
                 {
-                    timeDomain[n] *= CoefficientsPerSubband * 2.0;
+                    timeDomain[n] *= CoefficientsPerSubband;
                 }
 
                 for (var n = 0; n < BlockSize; n++)
