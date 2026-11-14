@@ -7,9 +7,9 @@ namespace EggEncoder.Streaming.Aac
     /// <see cref="AacEncoderSession"/>, emitting each encoded access unit (no ADTS framing) via a
     /// callback instead of writing ADTS-framed bytes to one destination <see cref="Stream"/>.
     /// Internally reuses <see cref="AacFrameEncoder"/>'s own MDCT/quantization logic unchanged --
-    /// only how each encoded frame is delivered differs from <see cref="AacEncoderSession"/>. Scoped
-    /// to mono AAC-LC, 44100Hz/48000Hz only, the exact same scope <see cref="AacEncoderSession"/>
-    /// already has. See docs/streaming-plan.md item 1.
+    /// only how each encoded frame is delivered differs from <see cref="AacEncoderSession"/>. Mono or
+    /// stereo AAC-LC at any standard sample rate and a target bit rate, the same scope
+    /// <see cref="AacEncoderSession"/> has. See docs/streaming-plan.md item 1.
     /// </summary>
     public sealed class AacStreamingEncoder : IStreamingEncoder
     {
