@@ -12,7 +12,7 @@ EggEncoder gives you a single `IMediaEncoder` abstraction for probing, convertin
 dotnet add package EggEncoder
 ```
 
-Targets `net8.0`, `net9.0`, `net10.0`. No native binaries, no extra install steps — just the package. EggEncoder runs anywhere .NET 8/9/10 runs.
+Targets `net8.0`, `net9.0`, `net10.0`, `net11.0`. No native binaries, no extra install steps — just the package. EggEncoder runs anywhere .NET 8/9/10/11 runs.
 
 ## Core Interface
 
