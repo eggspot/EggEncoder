@@ -60,6 +60,14 @@ pulse data, window sequences and shapes, the scalefactor band and TNS band table
 standard's own normative values). No decoder source was copied. ffmpeg was used only as a black-box
 reference decoder to produce the ground-truth PCM the tests compare against.
 
+## AAC-LC encode — clean-room acknowledgment (no code copied)
+
+`Codecs/Aac/AacFrameEncoder.cs` (stereo, rate control, M/S, noise substitution) was written from the
+ISO/IEC 14496-3 bitstream syntax and this project's own derivations (the absolute threshold of
+hearing uses Terhardt's published formula). No encoder source (ffmpeg, FAAC, FDK or any other) was
+read or copied; ffmpeg was used only as a black-box decoder and as a reference encoder for comparing
+SNR.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke

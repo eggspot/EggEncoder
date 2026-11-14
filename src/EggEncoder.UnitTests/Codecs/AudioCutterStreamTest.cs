@@ -470,20 +470,19 @@ namespace EggEncoder.UnitTests.Codecs
         }
 
         [Fact]
-        public void Convert_Stream_WavStereoSourceToAacDest_Should_Throw()
+        public void Convert_Stream_WavStereoSourceToAacDest_Should_Write_Stereo_Aac()
         {
-            // AacEncoderSession only supports mono -- confirmed through the full AudioCutter.Convert
-            // call, not just OpenSession in isolation, so the channel count genuinely propagates
-            // from the decoded source through to the destination sink's own validation.
             var (sourcePath, _) = CreateRampWavFile(totalFrames: 10, sampleRate: 44100);
             try
             {
                 using var sourceStream = File.OpenRead(sourcePath);
                 using var destStream = new MemoryStream();
 
-                var act = () => AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aac);
+                AudioCutter.Convert(sourceStream, AudioFormat.Wav, destStream, AudioFormat.Aac);
 
-                act.Should().ThrowExactly<NotSupportedException>();
+                destStream.Position = 0;
+                var info = AacDecoder.Decode(destStream, (_, _, _, _, _) => { });
+                info.Channels.Should().Be(2);
             }
             finally
             {

@@ -44,7 +44,7 @@ namespace EggEncoder
         /// <summary>WavPack (.wv).</summary>
         WavPack,
 
-        /// <summary>QuickTime / MOV or MP4 (.mov/.mp4) -- metadata and, when present, a decodable mono AAC-LC audio track.</summary>
+        /// <summary>QuickTime / MOV or MP4 (.mov/.mp4) -- metadata and, when present, a decodable mono or stereo AAC-LC audio track.</summary>
         Mov
     }
 }

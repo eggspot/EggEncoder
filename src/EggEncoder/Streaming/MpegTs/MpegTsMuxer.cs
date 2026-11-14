@@ -34,8 +34,8 @@ namespace EggEncoder.Streaming.MpegTs
 
         private long _cumulativeSampleCount;
 
-        /// <summary>Frame mode: one mono AAC-LC track, fed by <see cref="BuildSegment(IReadOnlyList{Mp4EncodedFrame})"/>.</summary>
-        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <summary>Frame mode: one mono or stereo AAC-LC track, fed by <see cref="BuildSegment(IReadOnlyList{Mp4EncodedFrame})"/>.</summary>
+        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1 or 2, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         public MpegTsMuxer(int channels, int sampleRate)
         {
             _sampleRateIndex = AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);

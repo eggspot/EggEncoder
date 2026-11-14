@@ -65,6 +65,8 @@
     <None Include="Codecs\Aac\stereo_44100.aac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\stereo_44100_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\pns_48000.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\encoded_stereo_48000_192k.aac" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Aac\encoded_stereo_48000_192k_ffmpeg.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\pns_48000_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\mono_8000.aac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aac\mono_8000_groundtruth.pcm" CopyToOutputDirectory="Always" />
