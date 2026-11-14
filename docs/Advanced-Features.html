@@ -294,6 +294,19 @@ Console.WriteLine($"{result.Width}x{result.Height}, {result.DurationInSeconds}s,
 });</code></pre>
       <p><code>NativeEncoder.Probe</code> routes <code>.mov</code>/<code>.mp4</code> files through both: <code>ProbeResult.Width</code>/<code>Height</code>/duration always come from <code>MovProbe</code>, and if <code>MovDecoder</code> successfully finds a decodable audio track, <code>SampleRate</code>/<code>Channels</code>/<code>BitsPerSample</code>/<code>Waveform</code> get populated too. If there's no audio track, or it's not mono AAC-LC, those fields stay null and the video metadata is still returned — audio decode failure never fails the whole probe. <code>AudioCutter.Convert</code>/<code>Cut</code> can also use a <code>.mov</code>/<code>.mp4</code> file with a decodable audio track as a source, the same as any other format.</p>
 
+      <h2 id="video-frames">Video Frames and Filters</h2>
+      <p>Video rendering is being built in pure C# (see <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/video-support-backlog.md">video-support-backlog.md</a>, Phase 5). Its picture type is <code>Video.VideoFrame</code>: planar Y'CbCr 4:2:0 with 8 bits per sample, odd sizes allowed, carrying its colour range, matrix (BT.601/BT.709), timestamp and duration. Frames are rented from a <code>VideoFramePool</code> that keeps a bounded number of exact-size buffers; disposing a frame returns its buffer.</p>
+      <p>Filters in <code>Video.Filters</code> implement <code>IVideoFrameTransform</code> and chain through <code>VideoFrameTransformPipeline</code>: <code>ScaleTransform</code> (bilinear, bicubic or Lanczos, optionally from a source rectangle), <code>FitTransform</code> (contain with padding, or cover), <code>CropTransform</code>, <code>PadTransform</code>, <code>RotateTransform</code>, <code>FrameRateTransform</code> (drops and repeats frames by timestamp like ffmpeg's <code>fps</code>), <code>BoxBlurTransform</code>, <code>FillBoxTransform</code>, <code>OverlayTransform</code> (RGBA images) and <code>VideoFadeTransform</code>. <code>VideoDraw</code> draws rectangles and coverage masks; <code>VideoBlend</code> crossfades two frames or places one on another.</p>
+      <pre><code class="language-csharp">using EggEncoder.Video;
+using EggEncoder.Video.Filters;
+
+var pipeline = new VideoFrameTransformPipeline(
+    new FitTransform(1080, 1920, FitMode.Cover),
+    new OverlayTransform(logo, x: 40, y: 1700),
+    new VideoFadeTransform(VideoFadeDirection.In, TimeSpan.Zero, TimeSpan.FromSeconds(0.5), new YuvColor(16, 128, 128)));
+pipeline.Apply(frame, edited => { /* encode, then edited.Dispose() */ });</code></pre>
+      <p>Results stay within 35 dB PSNR of ffmpeg's <code>scale</code> (bicubic, Lanczos) and 40 dB of <code>boxblur</code> on the test pictures; rotation by 90 degrees is identical to ffmpeg's <code>transpose</code>. Chroma is sited like H.264 and ffmpeg's 4:2:0 default. One 1080x1920 frame takes about 11 ms to cover-scale from 1920x1080 and 7 ms for a radius-20 blur on one core (see <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/benchmarks.md">benchmarks</a>).</p>
+
       <h2 id="cross-platform">Cross-Platform, No Native Binaries</h2>
       <p>EggEncoder is 100% pure managed C# — every codec, including MP3, FLAC, and WavPack, is implemented directly in this project or via a pure managed NuGet dependency, with no native binary or P/Invoke binding anywhere. There's nothing to bundle, locate, or fail to find at runtime.</p>
       <p>It runs anywhere .NET 8/9/10 runs — Windows, Linux, and macOS — and CI builds and tests on all three to prove it.</p>

@@ -41,6 +41,8 @@ public sealed class RgbaImage
     /// <summary>The pixels, R, G, B, A for each, row by row.</summary>
     public Span<byte> Pixels => _pixels;
 
+    internal byte[] PixelArray => _pixels;
+
     /// <summary>The pixel at (<paramref name="x"/>, <paramref name="y"/>).</summary>
     /// <exception cref="ArgumentOutOfRangeException">The position is outside the image.</exception>
     public RgbaColor GetPixel(int x, int y)
@@ -129,6 +131,8 @@ public sealed class AlphaMask
 
     /// <summary>The coverage values, row by row.</summary>
     public Span<byte> Coverage => _coverage;
+
+    internal byte[] CoverageArray => _coverage;
 
     private static long CheckedLength(int width, int height)
     {

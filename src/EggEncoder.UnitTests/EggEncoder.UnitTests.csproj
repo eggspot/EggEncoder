@@ -22,6 +22,7 @@
   <ItemGroup>
     <None Include="Pcm\video_aac.mp4" CopyToOutputDirectory="Always" />
     <None Include="Pcm\video_aac_ffmpeg.pcm" CopyToOutputDirectory="Always" />
+    <None Include="Video\Filters\*.yuv" CopyToOutputDirectory="Always" />
     <None Include="Pcm\delayed_aac.mp4" CopyToOutputDirectory="Always" />
     <None Include="Pcm\delayed_aac_ffmpeg.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_none_mono.aifc" CopyToOutputDirectory="Always" />

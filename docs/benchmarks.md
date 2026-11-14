@@ -34,6 +34,7 @@ inside each iteration instead.
 | `WavIoBenchmarks` | `WavReader`/`WavWriter` read/write throughput — the common I/O path every other codec's own `Probe`/`ConvertFile`/`CutFile` bottlenecks through |
 | `AudioCutterBenchmarks` | End-to-end `AudioCutter.Convert` (decode block → encode block) throughput for WAV→MP3 and WAV→FLAC — the path a real transcode call actually runs, encode and decode together |
 | `AacStreamingBenchmarks` | `AacEncoderSession`'s own incremental push throughput (1024-sample blocks, 5s mono) and allocation behavior — the encoder most directly used in a real-time/streaming pipeline (see `docs/streaming-plan.md`) |
+| `VideoFilterBenchmarks` | One 1080x1920 frame through `FitTransform` (Cover, bicubic, from 1920x1080), `BoxBlurTransform` (radius 20/10) and `OverlayTransform` (a 400x200 logo), one thread each — the per-frame cost of the filters a video render spends most of its time in (video backlog item 21). Each iteration includes cloning the input frame |
 | `CodecDecodeBenchmarks` | Pure decode throughput, isolated from encoding, for `FlacDecoder`/`Mp3Decoder`/`WavPackDecoder`/`TtaDecoder`/`AlacDecoder`/`WmaDecoder`/`AacDecoder` — FLAC/WavPack/TTA are `docs/managed-codec-rewrite-plan.md`'s own from-scratch managed rewrites; MP3 decode is still NLayer-backed, pending `docs/external-dependency-removal-plan.md` Phase 1, so its number is the baseline the in-house decoder will be compared against. AAC is a mono fixture (`AacEncoder` is mono-only), so its number is per mono stream |
 
 ## What's not covered
@@ -49,6 +50,23 @@ pre-emptively covering everything.
 
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
+
+### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
+
+Budgets from the video backlog's item 21 plan: the composition (item 31) needs about 15 frames a
+second end to end on 4 vCPU, so one 1080x1920 frame gets at most 15 ms for the scale and 10 ms for
+a large blur on one core. First version: 20.0 ms / 12.3 ms (and 12 MB allocated per blurred frame);
+after removing bounds checks from the horizontal pass, accumulating the vertical taps in registers,
+narrowing with vectors, and reusing the blur's row sums:
+
+| Benchmark | Mean | Allocated |
+|-----------|-----:|----------:|
+| `FitTransform` Cover bicubic 1920x1080 -> 1080x1920 | 11.4 ms | 9.6 KB |
+| `BoxBlurTransform` radius 20/10 on 1080x1920 | 7.2 ms | 9.5 KB |
+| `OverlayTransform` 400x200 logo on 1080x1920 | 1.1 ms | 0.2 KB |
+
+The local SDK has no .NET 11, so BenchmarkDotNet's generated project can't build the library's
+net11 target here; `--inProcess` runs the benchmarks in the host process instead.
 
 ### Fast MDCT (Apple M4, .NET 10.0.12, default job)
 

@@ -399,6 +399,37 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("Video filters: fit, overlay, blur, fade, frame rate", () =>
+    {
+        var logo = new EggEncoder.Video.RgbaImage(8, 8);
+        logo.Pixels.Fill(255);
+        var pipeline = new EggEncoder.Video.VideoFrameTransformPipeline(
+            new EggEncoder.Video.Filters.FitTransform(36, 64, EggEncoder.Video.Filters.FitMode.Cover),
+            new EggEncoder.Video.Filters.OverlayTransform(logo, 3, 5),
+            new EggEncoder.Video.Filters.BoxBlurTransform(2, 1),
+            new EggEncoder.Video.Filters.VideoFadeTransform(EggEncoder.Video.Filters.VideoFadeDirection.In, TimeSpan.Zero, TimeSpan.FromSeconds(1), new EggEncoder.Video.YuvColor(16, 128, 128)),
+            new EggEncoder.Video.Filters.FrameRateTransform(new EggEncoder.Video.VideoFrameRate(50)));
+        var outputs = new List<EggEncoder.Video.VideoFrame>();
+        for (var n = 0; n < 3; n++)
+        {
+            var frame = EggEncoder.Video.VideoFrame.Create(64, 36);
+            frame.Fill(new EggEncoder.Video.YuvColor(200, 100, 150));
+            frame.Timestamp = TimeSpan.FromMilliseconds(40 * n);
+            frame.Duration = TimeSpan.FromMilliseconds(40);
+            pipeline.Apply(frame, outputs.Add);
+        }
+
+        pipeline.Flush(outputs.Add);
+        var size = (outputs[0].Width, outputs[0].Height);
+        outputs.ForEach(f => f.Dispose());
+        if (outputs.Count != 6 || size != (36, 64) || pipeline.GetOutputSize(64, 36) != (36, 64))
+        {
+            throw new InvalidOperationException("Video filter check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
