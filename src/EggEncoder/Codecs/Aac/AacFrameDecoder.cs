@@ -49,12 +49,20 @@ namespace EggEncoder.Codecs.Aac
             _shortWindows = [BuildSineWindow(ShortBlockSize), BuildKbdWindow(ShortKbdAlpha, ShortCoefficientCount)];
         }
 
-        public int[] DecodeFrame(BitReader reader)
+        public int[] DecodeFrame(BitReader reader) => DecodeFrame(reader, reader.BitPosition + reader.RemainingBits);
+
+        public int[] DecodeFrame(BitReader reader, int endBitPosition)
         {
             var produced = 0;
             var timeDomain = new double[_outputChannels][];
             while (true)
             {
+                var bitsLeft = endBitPosition - reader.BitPosition;
+                if (produced > 0 && bitsLeft < 8 && (bitsLeft <= 0 || reader.PeekBits(bitsLeft) == 0))
+                {
+                    return Interleave(timeDomain, produced);
+                }
+
                 var elementId = (int)reader.ReadBits(3);
                 switch (elementId)
                 {

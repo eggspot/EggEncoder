@@ -75,7 +75,7 @@ namespace EggEncoder.Codecs.Aac
                 int[] outputFrame;
                 try
                 {
-                    outputFrame = frameDecoder.DecodeFrame(reader);
+                    outputFrame = frameDecoder.DecodeFrame(reader, frameEndBitPosition);
                 }
                 catch (EndOfStreamException e)
                 {

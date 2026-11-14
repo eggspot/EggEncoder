@@ -142,6 +142,16 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         }
 
         [Fact]
+        public void DecodeFrame_FrameEndingWithoutIdEnd_Should_Decode_Like_One_With_It()
+        {
+            var withEnd = Decode(Sce(pulse: false, tupleIndex: 67));
+            var reader = new BitReader(Sce(pulse: false, tupleIndex: 67, writeEnd: false));
+            var withoutEnd = new AacFrameDecoder(44100, 1).DecodeFrame(reader, SceBitLength() + 5);
+
+            withoutEnd.Should().Equal(withEnd);
+        }
+
+        [Fact]
         public void DecodeFrame_TruncatedAdtsFrame_Should_Throw_InvalidData()
         {
             var bytes = File.ReadAllBytes(Fixture("stereo_44100.aac"))[..200];
@@ -337,7 +347,7 @@ namespace EggEncoder.UnitTests.Codecs.Aac
 
         private static int[] Decode(byte[] stream) => new AacFrameDecoder(44100, 1).DecodeFrame(new BitReader(stream));
 
-        private static byte[] Sce(bool pulse, int tupleIndex, int? tnsCoefficient = null, Action<BitWriter>? prefix = null)
+        private static byte[] Sce(bool pulse, int tupleIndex, int? tnsCoefficient = null, Action<BitWriter>? prefix = null, bool writeEnd = true)
         {
             var writer = new BitWriter();
             prefix?.Invoke(writer);
@@ -377,7 +387,11 @@ namespace EggEncoder.UnitTests.Codecs.Aac
             writer.WriteBits(0, 1);
             var (code, length) = AacTables.SpectralCodebooks[0].Huffman.GetCode(tupleIndex);
             writer.WriteBits(code, length);
-            writer.WriteBits(7, 3);
+            if (writeEnd)
+            {
+                writer.WriteBits(7, 3);
+            }
+
             writer.WriteBits(0, 32);
             return writer.ToArray();
         }
@@ -427,6 +441,20 @@ namespace EggEncoder.UnitTests.Codecs.Aac
                 var (code, length) = AacTables.SpectralCodebooks[0].Huffman.GetCode(67);
                 writer.WriteBits(code, length);
             }
+        }
+
+        private static int SceBitLength()
+        {
+            var writer = new BitWriter();
+            writer.WriteBits(0, 3);
+            writer.WriteBits(0, 4);
+            writer.WriteBits(150, 8);
+            writer.WriteBits(0, 11);
+            writer.WriteBits(1, 4);
+            writer.WriteBits(1, 5);
+            var (_, scaleLength) = AacTables.ScalefactorHuffman.GetCode(AacTables.ScaleDiffZero);
+            var (_, codeLength) = AacTables.SpectralCodebooks[0].Huffman.GetCode(67);
+            return writer.BitPosition + scaleLength + 3 + codeLength;
         }
 
         private static void WriteSilentIcs(BitWriter writer)
