@@ -294,12 +294,25 @@ Rules for every Phase 5 item, on top of the ones above:
     points for three settings (baked literals); the gated oracle bounds the whole-output RMS error
     at 0.002. `Duck(target, key, settings)` converts the key's rate and keeps the target's length
     (the key counts as silence after it ends; ffmpeg ends its output with the key).
-- [ ] **20. Video frames** — top-level `Video/`: planar YUV 4:2:0 8-bit `VideoFrame`, odd sizes
+- [x] **20. Video frames** — top-level `Video/`: planar YUV 4:2:0 8-bit `VideoFrame`, odd sizes
   allowed (chroma `(w+1)/2`), per-plane stride, pooled buffers, colour range (limited/full) and
   matrix (BT.601/BT.709) carried on the frame, `RgbaImage` for overlay sources only;
   `IVideoFrameTransform`, mirroring `Pcm/IPcmTransform`.
   - **Depends on**: nothing.
-  - Status: not started.
+  - Status: done. `VideoFrame` (1..16384 per side, 64-byte-aligned strides, `PlaneY/U/V` and
+    `GetRow`, `Range`, `Matrix`, `Timestamp`, `Duration`, `Fill`, `Clone`, `CopyTo`; one owner,
+    `Dispose` returns the buffer and is idempotent) rented from `VideoFramePool` (exact-size buffers
+    per frame size, at most `MaxRetainedPerSize` free ones kept, `RetainedBytes` observable,
+    thread-safe; `VideoFrame.Create` uses `VideoFramePool.Shared`). An internal padded rent puts a
+    32/16-pixel border around the planes for the H.264 decoder's reference pictures, with the
+    visible planes starting inside it, so decoded frames need no copy. `YuvColor`/`RgbaColor`
+    convert with the BT.601/BT.709 coefficients in limited or full range; an unspecified matrix
+    is BT.601 below 720 lines and BT.709 from 720 up. `VideoFrameRate` is an exact fraction
+    (frame times computed from the index with Int128). `RgbaImage` (straight alpha) and
+    `AlphaMask` (coverage, for text) are the overlay sources. `IVideoFrameTransform` has
+    `GetOutputSize` (so rotation can swap sides), `CanChangeFrameCount`, `Apply(frame, emit)`
+    taking ownership of the frame, and a default `Flush`; `VideoFrameTransformPipeline` chains them
+    like `PcmTransformPipeline`.
 - [ ] **21. Frame operations** — `Video/Filters/`: scale (bicubic, Lanczos; separable, SIMD), fit
   and pad to a canvas, crop, rotate/transpose by 90/180/270, frame-rate change by PTS
   (drop/duplicate), box blur, alpha-blended box, RGBA overlay, fade to/from a colour, crossfade —

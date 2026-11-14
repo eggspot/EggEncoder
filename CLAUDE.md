@@ -89,6 +89,22 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 **Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O; `float.NaN` maps to 0 (silence) rather than the unspecified result of a raw `(int)double.NaN` cast, and `float.PositiveInfinity`/`NegativeInfinity` clamp to ±1.0. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. A float WAV *source* has always decoded transparently into int PCM through `Convert`/`Cut`/`Mix`/`Concatenate` (`WavReader.IsFloatFormat` handles this on read); for a float WAV *destination*, `WavSampleFormat.Float32` (`Codecs/WavSampleFormat.cs`) can be passed to those same entry points (`Convert`/`Cut` via `CutOptions.DestinationWavFormat`/`Mix`/`Concatenate`) — it requires the destination's bit depth to already be 32 and throws `NotSupportedException` against a non-WAV destination. The default, `WavSampleFormat.Integer`, is unchanged from before this option existed.
 
+### Video frames (`src/EggEncoder/Video/`)
+
+Backlog item 20, the picture type every Phase 5 video item shares. `VideoFrame`: planar Y'CbCr 4:2:0,
+8-bit, odd sizes allowed (chroma `(w+1)/2 × (h+1)/2`), strides a multiple of 64, `Range`
+(`VideoColorRange`) and `Matrix` (`VideoColorMatrix`, BT.601/BT.709; unspecified = BT.601 below 720
+lines) carried on the frame with `Timestamp`/`Duration`. Rented from `VideoFramePool` (exact-size
+buffers, at most `MaxRetainedPerSize` free per size, thread-safe, `RetainedBytes` for memory
+budgets); `Dispose` returns the buffer (idempotent), planes are not cleared on rent. An internal
+`Rent(..., padding)` puts a border around each plane (the H.264 decoder's reference pictures) with
+`PlaneY/U/V` still starting at the visible top-left. `YuvColor`/`RgbaColor` convert colours,
+`VideoFrameRate` is an exact fraction (Int128 maths, halves away from zero), `RgbaImage` (straight
+alpha) and `AlphaMask` (coverage) are overlay sources. `IVideoFrameTransform` mirrors
+`IPcmTransform`: `GetOutputSize`, `CanChangeFrameCount`, `Apply(frame, emit)` (takes ownership; emits
+the frame or disposes it and emits others; disposes it before throwing), default `Flush(emit)`;
+`VideoFrameTransformPipeline` chains them, a flushed frame running through the later transforms.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`
