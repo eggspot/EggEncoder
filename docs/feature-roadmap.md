@@ -260,6 +260,12 @@ windowed-sinc oversampling, matching ffmpeg `ebur128` within 0.1 dB on the test 
 a look-ahead limiter that keeps the true peak at or under the ceiling. It is close to, not
 identical with, ffmpeg `loudnorm` (within 1 LU of its two-pass linear mode on the oracle test).
 
+**Ducking (video backlog item 19).** `Pcm.SidechainCompressor` lowers a float target while a key is
+loud, with ffmpeg `sidechaincompress`'s parameters, ranges, defaults and attack/release timing; its
+gain stays within 0.005 of ffmpeg's on the test signals (baked literals, plus an
+`EGGENCODER_FFMPEG_ORACLE=1` whole-signal RMS-error check). `Duck` keeps the target's length where
+ffmpeg ends with the key.
+
 ## 4. Encoder delay/padding metadata
 
 **Status: done for MP3.** Opus already has an explicit `pre_skip` field; Vorbis still has no
