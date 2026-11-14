@@ -175,9 +175,9 @@ namespace EggEncoder.Containers.Mp4
 
         private static byte[] BuildTkhd(Mp4WriterTrack track, long duration)
         {
-            const uint trackEnabledInMovieInPreview = 0x3;
+            const uint trackEnabledAndInMovie = 0x3;
             var version1 = duration > uint.MaxValue;
-            var builder = new Mp4BoxBuilder().WriteUInt32((version1 ? 1u << 24 : 0) | trackEnabledInMovieInPreview);
+            var builder = new Mp4BoxBuilder().WriteUInt32((version1 ? 1u << 24 : 0) | trackEnabledAndInMovie);
             if (version1)
             {
                 builder.WriteUInt64(0).WriteUInt64(0).WriteUInt32((uint)track.InitTrack.Mp4TrackId).WriteUInt32(0).WriteUInt64((ulong)duration);

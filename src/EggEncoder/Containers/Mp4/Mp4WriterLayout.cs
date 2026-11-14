@@ -115,12 +115,17 @@ namespace EggEncoder.Containers.Mp4
             }
 
             var presentationStart = Math.Max(0, minPts);
+            if (presentationStart < firstDts)
+            {
+                throw new ArgumentException($"Track {track.Info.TrackId} shows a sample at {presentationStart}, before its first decode time {firstDts}; an MP4 edit list can't express that.");
+            }
+
             return new Mp4WriterTrackLayout
             {
                 Durations = durations,
                 MediaDuration = mediaDuration,
                 EmptyEditTicks = presentationStart,
-                MediaTime = Math.Max(0, presentationStart - firstDts),
+                MediaTime = presentationStart - firstDts,
                 SegmentTicks = Math.Max(0, presentationEnd - presentationStart)
             };
         }

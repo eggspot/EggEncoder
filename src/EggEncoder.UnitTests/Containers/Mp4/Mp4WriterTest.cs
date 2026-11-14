@@ -233,8 +233,8 @@ namespace EggEncoder.UnitTests.Containers.Mp4
         [Fact]
         public void Join_DifferentTracks_Should_Throw()
         {
-            var act = () => Mp4Joiner.Join([File.OpenRead(Mp4FileSourceTest.H264AacFixture), File.OpenRead(Mp4FileSourceTest.HevcFixture)], new MemoryStream(), new MemoryStream());
-            var sameCountDifferentCodec = () => Mp4Joiner.Join([File.OpenRead(Mp4FileSourceTest.HevcFixture), File.OpenRead(Path.GetFullPath("Codecs/Mov/test.mp4"))], new MemoryStream(), new MemoryStream());
+            var act = () => Mp4Joiner.Join([new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.H264AacFixture)), new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.HevcFixture))], new MemoryStream(), new MemoryStream());
+            var sameCountDifferentCodec = () => Mp4Joiner.Join([new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.HevcFixture)), new MemoryStream(File.ReadAllBytes(Path.GetFullPath("Codecs/Mov/test.mp4")))], new MemoryStream(), new MemoryStream());
             var none = () => Mp4Joiner.Join(Array.Empty<Stream>(), new MemoryStream());
 
             act.Should().Throw<ArgumentException>();
@@ -247,7 +247,7 @@ namespace EggEncoder.UnitTests.Containers.Mp4
         {
             var parts = new List<MemoryStream>();
 
-            var starts = Mp4Splitter.Split(File.OpenRead(Mp4FileSourceTest.H264AacFixture), [TimeSpan.FromSeconds(0.1), TimeSpan.FromSeconds(0.15)], _ =>
+            var starts = Mp4Splitter.Split(new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.H264AacFixture)), [TimeSpan.FromSeconds(0.1), TimeSpan.FromSeconds(0.15)], _ =>
             {
                 var part = new MemoryStream();
                 parts.Add(part);
@@ -269,12 +269,59 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             second.Count(p => p.TrackId == 2).Should().Be(9);
         }
 
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(-1.0)]
+        public void Split_AtOrBeforeTheFirstKeyframe_Should_Write_One_Part(double seconds)
+        {
+            var parts = 0;
+            using var input = File.OpenRead(Mp4FileSourceTest.H264AacFixture);
+
+            var starts = Mp4Splitter.Split(input, [TimeSpan.FromSeconds(seconds)], _ =>
+            {
+                parts++;
+                return new MemoryStream();
+            });
+
+            starts.Should().Equal(TimeSpan.Zero);
+            parts.Should().Be(1);
+        }
+
+        [Fact]
+        public void Complete_SampleShownBeforeTheFirstDecodeTime_Should_Throw()
+        {
+            using var writer = new Mp4Writer(new MemoryStream(), scratch: new MemoryStream());
+            writer.Open(VideoTrackSet());
+            writer.Write(new MediaPacket(1, 1000, 1000, true, 0, NalUnit(1)));
+            writer.Write(new MediaPacket(1, 500, 1512, false, 0, NalUnit(2)));
+
+            var act = () => writer.Complete();
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Join_InputStartingBeforeThePreviousEnd_Should_Push_Decode_Times_Later()
+        {
+            var tracks = VideoTrackSet();
+            var first = WriteAll(tracks, [new MediaPacket(1, 0, 0, true, 0, NalUnit(1)), new MediaPacket(1, 1536, 512, false, 0, NalUnit(2))]);
+            var second = WriteAll(tracks, [new MediaPacket(1, 0, -2048, true, 0, NalUnit(3)), new MediaPacket(1, 512, -1536, false, 0, NalUnit(4))]);
+            var destination = new MemoryStream();
+
+            Mp4Joiner.Join([new MemoryStream(first), new MemoryStream(second)], destination, new MemoryStream());
+
+            var (_, packets) = ReadAll(destination.ToArray());
+            packets.Select(p => p.Dts).Should().BeInAscendingOrder();
+            packets[2].Dts.Should().Be(513);
+            packets[2].Pts.Should().Be(2561);
+        }
+
         [Fact]
         public void Split_PastTheLastKeyframe_Should_Write_One_Part()
         {
             var parts = 0;
 
-            var starts = Mp4Splitter.Split(File.OpenRead(Mp4FileSourceTest.H264AacFixture), [TimeSpan.FromSeconds(0.35)], _ =>
+            var starts = Mp4Splitter.Split(new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.H264AacFixture)), [TimeSpan.FromSeconds(0.35)], _ =>
             {
                 parts++;
                 return new MemoryStream();
@@ -289,7 +336,7 @@ namespace EggEncoder.UnitTests.Containers.Mp4
         {
             var parts = new List<MemoryStream>();
 
-            var starts = Mp4Splitter.Split(File.OpenRead(Mp4FileSourceTest.Vp9AacFixture), [TimeSpan.FromSeconds(0.1)], _ =>
+            var starts = Mp4Splitter.Split(new MemoryStream(File.ReadAllBytes(Mp4FileSourceTest.Vp9AacFixture)), [TimeSpan.FromSeconds(0.1)], _ =>
             {
                 var part = new MemoryStream();
                 parts.Add(part);

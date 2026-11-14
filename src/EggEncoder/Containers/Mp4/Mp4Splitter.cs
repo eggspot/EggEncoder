@@ -12,8 +12,10 @@ namespace EggEncoder.Containers.Mp4
         /// <summary>
         /// Writes one part per kept cut point plus one for the start. A video packet goes to the part
         /// of the keyframe that precedes it in decode order; any other packet goes to the part whose
-        /// start time is the last one at or before its PTS. Cut points at or after the end, or that
-        /// land on the same keyframe as an earlier one, are dropped. Without a video track, cuts land
+        /// start time is the last one at or before its PTS. Cut points at or before the first
+        /// keyframe, at or after the end, or that land on the same keyframe as an earlier one, are
+        /// dropped. Leading pictures of an open GOP (decoded after a cut keyframe but shown before
+        /// it) go to the later part, hidden by its edit list. Without a video track, cuts land
         /// on the first audio packet at or after the requested time.
         /// </summary>
         /// <param name="input">A readable, seekable MP4/MOV stream; left open.</param>
@@ -37,7 +39,18 @@ namespace EggEncoder.Containers.Mp4
             {
                 for (var p = 0; p <= cuts.Count; p++)
                 {
-                    var writer = new Mp4Writer(openPart(p));
+                    var destination = openPart(p);
+                    Mp4Writer writer;
+                    try
+                    {
+                        writer = new Mp4Writer(destination);
+                    }
+                    catch
+                    {
+                        destination.Dispose();
+                        throw;
+                    }
+
                     writers.Add(writer);
                     writer.Open(tracks);
                 }
@@ -98,11 +111,15 @@ namespace EggEncoder.Containers.Mp4
             foreach (var cutPoint in cutPoints)
             {
                 var target = (long)Math.Round(cutPoint.TotalSeconds * track.Info.Timescale);
-                for (var i = 1; i < track.Offsets.Length; i++)
+                for (var i = 0; i < track.Offsets.Length; i++)
                 {
                     if (track.IsSync(i) && track.PresentationTime(i) >= target)
                     {
-                        cuts.TryAdd(i, track.PresentationTime(i));
+                        if (i > 0)
+                        {
+                            cuts.TryAdd(i, track.PresentationTime(i));
+                        }
+
                         break;
                     }
                 }
