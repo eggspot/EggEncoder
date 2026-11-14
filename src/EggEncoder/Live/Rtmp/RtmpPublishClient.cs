@@ -660,7 +660,13 @@ namespace EggEncoder.Live.Rtmp
         {
             if (_stream is SslStream ssl)
             {
-                await ssl.ShutdownAsync().ConfigureAwait(false);
+                try
+                {
+                    await ssl.ShutdownAsync().ConfigureAwait(false);
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                }
             }
 
             _socket!.Shutdown(SocketShutdown.Send);
