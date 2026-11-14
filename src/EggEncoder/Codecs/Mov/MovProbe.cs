@@ -72,6 +72,9 @@ namespace EggEncoder.Codecs.Mov
             }
 
             var durationSeconds = timescale > 0 ? duration / (double)timescale : 0;
+            var trackHeaders = Mp4TrackReader.ReadTrackHeaders(stream, moov);
+            var videoTrack = trackHeaders.FirstOrDefault(t => t.HandlerType == "vide");
+            var (frameCount, frameRate) = videoTrack is null ? (null, null) : ReadFrameCountAndRate(stream, videoTrack);
 
             return new MovProbeResult
             {
@@ -79,8 +82,22 @@ namespace EggEncoder.Codecs.Mov
                 DurationSeconds = durationSeconds,
                 Width = width,
                 Height = height,
-                CodecFourCc = codecFourCc
+                CodecFourCc = codecFourCc,
+                HasAudio = trackHeaders.Any(t => t.HandlerType == "soun"),
+                FrameCount = frameCount,
+                FrameRate = frameRate,
+                Rotation = videoTrack?.Rotation
             };
+        }
+
+        private static (int? FrameCount, double? FrameRate) ReadFrameCountAndRate(Stream stream, Mp4TrackHeader track)
+        {
+            var sampleCount = Mp4SampleTable.ReadSamples(stream, track.Stbl).Count;
+            var timing = Mp4TrackReader.ReadTiming(stream, track.Stbl, sampleCount);
+            double? frameRate = timing.TotalDuration > 0 && track.Timescale > 0
+                ? sampleCount * (double)track.Timescale / timing.TotalDuration
+                : null;
+            return (sampleCount, frameRate);
         }
 
         private static (uint Timescale, ulong Duration) ReadMvhd(Stream stream, MovAtom mvhd)
@@ -150,5 +167,17 @@ namespace EggEncoder.Codecs.Mov
         public required int? Height { get; init; }
 
         public required string? CodecFourCc { get; init; }
+
+        /// <summary>True when the file has at least one sound track, whatever its codec.</summary>
+        public bool HasAudio { get; init; }
+
+        /// <summary>Samples in the first video track, or <c>null</c> without one.</summary>
+        public int? FrameCount { get; init; }
+
+        /// <summary>The first video track's average frame rate (samples over its <c>stts</c> duration), or <c>null</c>.</summary>
+        public double? FrameRate { get; init; }
+
+        /// <summary>The first video track's display rotation, clockwise degrees (0, 90, 180, 270), or <c>null</c> without one.</summary>
+        public int? Rotation { get; init; }
     }
 }

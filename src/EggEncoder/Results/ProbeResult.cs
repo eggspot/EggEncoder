@@ -36,6 +36,18 @@ namespace EggEncoder.Results
 
         public int? Height { get; init; }
 
+        /// <summary>MOV/MP4 only: video frames in the first video track, or <c>null</c>.</summary>
+        public int? FrameCount { get; init; }
+
+        /// <summary>MOV/MP4 only: the first video track's average frame rate, or <c>null</c>.</summary>
+        public double? FrameRate { get; init; }
+
+        /// <summary>MOV/MP4 only: degrees to turn the video clockwise for display (0, 90, 180, 270), or <c>null</c>.</summary>
+        public int? Rotation { get; init; }
+
+        /// <summary>MOV/MP4 only: whether the file has a sound track (of any codec), or <c>null</c> for other formats.</summary>
+        public bool? HasAudio { get; init; }
+
         public IReadOnlyList<double>? Waveform { get; init; }
 
         /// <summary>

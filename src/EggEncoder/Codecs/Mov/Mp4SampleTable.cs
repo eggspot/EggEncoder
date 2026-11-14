@@ -182,7 +182,7 @@ namespace EggEncoder.Codecs.Mov
         // InvalidDataException convention for malformed input (the same class of bug
         // TtaReader.OpenCore's own totalFramesLong check already guards against). Checked in long
         // arithmetic, which has far more headroom than int32 before precision loss matters here.
-        private static int CheckedEntryCount(uint rawCount, int entryBytes, string atomName)
+        internal static int CheckedEntryCount(uint rawCount, int entryBytes, string atomName)
         {
             var byteLength = (long)rawCount * entryBytes;
             if (byteLength > int.MaxValue)

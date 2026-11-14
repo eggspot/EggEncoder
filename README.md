@@ -217,6 +217,20 @@ await foreach (var packet in source.ReadPacketsAsync())
 await writer.CompleteAsync();
 ```
 
+### MP4 files as packets
+
+`EggEncoder.Containers.Mp4.Mp4FileSource` reads a progressive MP4/MOV (any seekable `Stream`, or `Mp4FileSource.Open(path)`) as a `MediaTrackSet` plus `MediaPacket`s, without decoding: H.264, H.265, AAC and MP3 tracks (others are skipped and counted). Timestamps come from `stts`/`ctts` and the edit list, so B-frame delay and AAC priming show up as negative DTS/PTS exactly as ffprobe reports them; packets of all tracks are interleaved by decode time. `ReadPackets(startAt)` (or `ReadPacketsAsync`) starts each track at its last keyframe at or before `startAt`. A video track's `MediaTrackInfo.Rotation` carries the `tkhd` display rotation (0/90/180/270, clockwise). Fragmented MP4 is refused with `NotSupportedException`. `Probe` on a `.mp4`/`.mov` also reports `FrameCount`, `FrameRate`, `Rotation` and `HasAudio`.
+
+```csharp
+using EggEncoder.Containers.Mp4;
+
+using var source = Mp4FileSource.Open("clip.mp4");
+foreach (var packet in source.ReadPackets(TimeSpan.FromSeconds(3)))
+{
+    var track = source.Tracks.FindTrack(packet.TrackId)!;   // codec, timescale, avcC/AudioSpecificConfig
+}
+```
+
 ### Fragmented MP4 (fMP4/CMAF) with video
 
 `FmpInitSegmentWriter.BuildInitSegment(MediaTrackSet)` and `new FmpMediaSegmentWriter(MediaTrackSet).BuildMediaSegment(packets, nextDecodeTimes)` write fMP4 init and media segments from packets: H.264 (`avc1`) and H.265 (`hvc1`) video passed through without decoding, next to AAC (mono or stereo). Per-sample durations come from the DTS deltas, video samples carry sync flags and signed composition offsets for B-frames, and each `tfdt` is the track's real first DTS. Pass the next DTS of a track in `nextDecodeTimes` when you know it (a segmenter cutting at the next keyframe does) to make that track's last duration exact. Timestamps must be non-negative and strictly increasing per track; nothing is rebased. Checked with `ffprobe` and an `ffmpeg` decode of a real H.264 + AAC stream. `HlsSegmenter` uses it for HLS with video (below).

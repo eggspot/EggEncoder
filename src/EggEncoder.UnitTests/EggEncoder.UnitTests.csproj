@@ -62,6 +62,9 @@
     <None Include="Codecs\Flac\sample_24bit_stereo_ffmpeg.flac" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mov" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mov\test.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Mp4\h264_aac_rotated.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Mp4\hevc.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Mp4\vp9_aac.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\h264_aac.flv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\hevc.flv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\mp3.flv" CopyToOutputDirectory="Always" />

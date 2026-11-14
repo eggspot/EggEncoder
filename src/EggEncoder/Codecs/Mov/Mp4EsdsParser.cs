@@ -69,6 +69,63 @@ namespace EggEncoder.Codecs.Mov
             throw new InvalidDataException("'esds' box does not contain a DecoderSpecificInfo with an AudioSpecificConfig");
         }
 
+        public static Mp4DecoderConfig ReadDecoderConfig(byte[] esdsBoxContent)
+        {
+            var position = 4;
+            if (!TryReadDescriptorHeader(esdsBoxContent, ref position, out var tag, out var size) || tag != EsDescriptorTag)
+            {
+                throw new InvalidDataException("'esds' box does not start with an ES_Descriptor");
+            }
+
+            var esDescriptorEnd = Math.Min(position + size, esdsBoxContent.Length);
+            var flags = ReadByte(esdsBoxContent, position + 2);
+            position += 3;
+            if ((flags & 0x80) != 0)
+            {
+                position += 2;
+            }
+
+            if ((flags & 0x40) != 0)
+            {
+                position += 1 + ReadByte(esdsBoxContent, position);
+            }
+
+            if ((flags & 0x20) != 0)
+            {
+                position += 2;
+            }
+
+            while (position < esDescriptorEnd && TryReadDescriptorHeader(esdsBoxContent, ref position, out var innerTag, out var innerSize))
+            {
+                if (innerTag == DecoderConfigDescriptorTag)
+                {
+                    var objectType = ReadByte(esdsBoxContent, position);
+                    var end = Math.Min(position + innerSize, esdsBoxContent.Length);
+                    var inner = position + 13;
+                    while (inner < end && TryReadDescriptorHeader(esdsBoxContent, ref inner, out var infoTag, out var infoSize))
+                    {
+                        if (infoTag == DecoderSpecificInfoTag)
+                        {
+                            if (inner + infoSize > esdsBoxContent.Length)
+                            {
+                                throw new InvalidDataException("'esds' DecoderSpecificInfo runs past the end of the box");
+                            }
+
+                            return new Mp4DecoderConfig(objectType, esdsBoxContent.AsSpan(inner, infoSize).ToArray());
+                        }
+
+                        inner += infoSize;
+                    }
+
+                    return new Mp4DecoderConfig(objectType, []);
+                }
+
+                position += innerSize;
+            }
+
+            throw new InvalidDataException("'esds' box does not contain a DecoderConfigDescriptor");
+        }
+
         private static Mp4AudioConfig? ParseDecoderConfigDescriptor(byte[] data, int start, int end)
         {
             // objectTypeIndication(1) + streamType/upStream/reserved(1) + bufferSizeDB(3) +
@@ -257,6 +314,8 @@ namespace EggEncoder.Codecs.Mov
             return builder.WriteUInt8((byte)(length & 0x7F));
         }
     }
+
+    internal readonly record struct Mp4DecoderConfig(int ObjectTypeIndication, byte[] DecoderSpecificInfo);
 
     internal sealed class Mp4AudioConfig
     {
