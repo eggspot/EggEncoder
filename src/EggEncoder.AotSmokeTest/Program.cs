@@ -380,6 +380,25 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("Video frames: VideoFramePool, VideoFrame, colours, frame rate, pipeline", () =>
+    {
+        var pool = new EggEncoder.Video.VideoFramePool();
+        var frame = pool.Rent(1081, 1919);
+        frame.Fill(new EggEncoder.Video.RgbaColor(255, 0, 0).ToYuv(EggEncoder.Video.VideoColorMatrix.Bt709, EggEncoder.Video.VideoColorRange.Limited));
+        using var clone = frame.Clone();
+        var size = new EggEncoder.Video.VideoFrameTransformPipeline().GetOutputSize(1081, 1919);
+        EggEncoder.Video.VideoFrame? output = null;
+        new EggEncoder.Video.VideoFrameTransformPipeline().Apply(frame, f => output = f);
+        output!.Dispose();
+        if (clone.GetRow(EggEncoder.Video.VideoPlane.V, 959)[540] != 240 || clone.ChromaWidth != 541 || size != (1081, 1919)
+            || pool.RetainedBufferCount != 1 || new EggEncoder.Video.VideoFrameRate(30000, 1001).TimestampOf(30000) != TimeSpan.FromSeconds(1001))
+        {
+            throw new InvalidOperationException("Video frame check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
