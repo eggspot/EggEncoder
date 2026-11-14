@@ -130,8 +130,8 @@ starting item 1, but both need a stated resolution before the item that actually
 very first emitted frame windows an all-zero `_previousBlock` against the first real 1024 samples
 in `_currentBlock`. That's a real, deterministic **one-frame (1024-sample) encoder delay** — the
 same *kind* of gap `docs/feature-roadmap.md` item 4 already found, measured, and fixed for MP3 (the
-`1680`-sample constant, confirmed empirically via cross-correlation, not derived from the bitstream
-layout alone after a first, wrong attempt at the constant was caught exactly that way). Nothing in
+`528`-sample encoder delay; an earlier `1680` counted the Info-tag frame, which decoders skip,
+and was corrected after measuring with independent decoders). Nothing in
 this codebase currently measures or exposes AAC's own equivalent constant.
 
 This matters here specifically because item 3 (the fMP4/CMAF muxer) needs correct
@@ -841,8 +841,8 @@ lands:
   tag at all -- both are container/file-level conventions with no equivalent for a raw, open-ended
   frame stream, the same reasoning that already excluded fMP4/MPEG-TS-specific framing from
   `AacStreamingEncoder`'s own raw access units and excluded Ogg/`pre_skip` from
-  `OpusStreamingEncoder`'s own raw packets. `Mp3Encoder.EncoderDelaySamples` (the existing, already
-  empirically-measured `1680`) remains the right value for a muxer here to use directly -- no new
+  `OpusStreamingEncoder`'s own raw packets. `Mp3Encoder.EncoderDelaySamples` (`528`; decoded audio lags the source by 528 + 529 = 1057
+  samples) is the encoder delay for a muxer here -- no new
   measurement needed. Unlike `OpusStreamingEncoder`, this encoder reports each frame's own *real*
   sample count rather than always the nominal `1152` -- tracking it costs nothing extra here, the
   same way it doesn't for `AacStreamingEncoder`, since `Mp3EncoderSession.Finish`'s own existing

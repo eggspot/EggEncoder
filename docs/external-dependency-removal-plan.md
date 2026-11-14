@@ -193,6 +193,11 @@ narrower "decodes our own output" scope.
     both decoded by real external decoders, still pass after this fix; one existing absolute-RMS
     non-silence threshold (`AudioCutterTest.Cut_Mp3_Should_Produce_Correct_Duration_And_NonSilent_Output`)
     was lowered to match the now-correct (previously 2x-inflated) absolute amplitude.
+    **Correction (later):** measured with three independent decoders, the encoder's output was
+    still exactly 6 dB too quiet. The 2x actually sat in the encoder's forward MDCT scale (1/18
+    instead of 2/18) and an extra *2 in `Mp3HybridFilter` that hid it from in-house round trips;
+    both are fixed, `Analyze` keeps `sum / 32.0`, the `AudioCutterTest` threshold is back to 1000,
+    and `Mp3EncoderLevelTest` checks the absolute level against NLayer without gain fitting.
     **Frame header + side info parsing is now done** (`Mp3FrameHeaderParser`/`Mp3SideInfoParser`):
     the 32-bit MPEG-1 Layer III header (bitrate/sample-rate index, channel mode, padding, CRC
     presence) and the fixed-size side info block (`main_data_begin`, `private_bits`, `scfsi`, and

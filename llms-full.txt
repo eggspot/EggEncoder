@@ -433,7 +433,7 @@ public static class Mp3Decoder // backed by the NLayer managed decoder -- no nat
 public static class Mp3Encoder // pure managed, clean-room from ISO/IEC 11172-3 -- no native call
 {
     public const int DefaultBitRateKbps = 320;
-    public const int EncoderDelaySamples = 1680; // this encoder's own fixed structural lookahead, written into every output's own "LAME tag"
+    public const int EncoderDelaySamples = 528; // this encoder's own fixed structural lookahead, written into every output's own "LAME tag"
     public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null); // tags: writes a fresh ID3v2.4 tag (UTF-8 text) before the audio frames; see Id3v2Writer
 }
 
@@ -1018,7 +1018,7 @@ The third `IStreamingEncoder` implementation (item 8's own MP3 sub-item), reusin
 is delivered differs. Writes no dedicated "Info tag" (LAME-tag) header frame and no ID3v2 tag at
 all -- both are container/file-level conventions (gapless-playback metadata meant to be read back
 from a complete, seekable file) with no equivalent for a raw, open-ended frame stream.
-`Mp3Encoder.EncoderDelaySamples` (the existing, already empirically-measured `1680`) remains the
+`Mp3Encoder.EncoderDelaySamples` (`528`, counted over audio frames only) remains the
 right value for a muxer here to use directly -- no new measurement needed. Unlike
 `OpusStreamingEncoder`, this encoder reports each frame's own *real* sample count rather than
 always the nominal `1152` -- tracking it costs nothing extra here, the same way it already doesn't

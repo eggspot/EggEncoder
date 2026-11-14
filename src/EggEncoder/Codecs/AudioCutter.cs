@@ -201,7 +201,7 @@ namespace EggEncoder.Codecs
                 ".aiff" or ".aif" or ".aifc" => AiffWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAiffFormat),
                 ".au" => AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAuFormat),
                 ".flac" => FlacEncoder.OpenSession(destFilePath, channels, bitsPerSample, sampleRate),
-                ".mp3" => Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
+                ".mp3" => OpenMp3Sink(destFilePath, channels, sampleRate, bitsPerSample),
                 ".aac" => AacEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".wma" => WmaEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
                 ".caf" => AlacEncoderSession.OpenSession(destFilePath, channels, sampleRate, bitsPerSample),
@@ -240,6 +240,77 @@ namespace EggEncoder.Codecs
             var endSample = Math.Clamp((long)endInSeconds * sampleRate, startSample, totalSamples);
 
             return (startSample, endSample);
+        }
+
+        private static IAudioSink OpenMp3Sink(string destFilePath, int channels, int sampleRate, int bitsPerSample)
+        {
+            var encodedSampleRate = Mp3Encoder.ChooseEncodedSampleRate(sampleRate);
+            var session = Mp3Encoder.OpenSession(destFilePath, channels, encodedSampleRate, bitsPerSample);
+
+            return encodedSampleRate == sampleRate
+                ? session
+                : new ResamplingSink(session, new ResamplingTransform(sampleRate, encodedSampleRate, channels), channels, sampleRate, bitsPerSample);
+        }
+
+        private sealed class ResamplingSink : IAudioSink
+        {
+            private readonly IAudioSink _destination;
+            private readonly ResamplingTransform _resampler;
+            private readonly int _channels;
+            private readonly int _sourceSampleRate;
+            private readonly int _bitsPerSample;
+            private readonly long _minSample;
+            private readonly long _maxSample;
+
+            public ResamplingSink(IAudioSink destination, ResamplingTransform resampler, int channels, int sourceSampleRate, int bitsPerSample)
+            {
+                _destination = destination;
+                _resampler = resampler;
+                _channels = channels;
+                _sourceSampleRate = sourceSampleRate;
+                _bitsPerSample = bitsPerSample;
+                _maxSample = (1L << (bitsPerSample - 1)) - 1;
+                _minSample = -(1L << (bitsPerSample - 1));
+            }
+
+            public void WriteInterleavedSamples(int[] buffer, int frameCount)
+            {
+                if (frameCount <= 0)
+                {
+                    return;
+                }
+
+                var (resampled, resampledFrameCount) = _resampler.Apply(buffer, frameCount, _channels, _sourceSampleRate, _bitsPerSample);
+                WriteClamped(resampled, resampledFrameCount);
+            }
+
+            public void Finish()
+            {
+                var (flushed, flushedFrameCount) = _resampler.Flush();
+                WriteClamped(flushed, flushedFrameCount);
+                _destination.Finish();
+            }
+
+            public void Dispose()
+            {
+                _destination.Dispose();
+            }
+
+            private void WriteClamped(int[] samples, int frameCount)
+            {
+                if (frameCount <= 0)
+                {
+                    return;
+                }
+
+                var sampleCount = frameCount * _channels;
+                for (var i = 0; i < sampleCount; i++)
+                {
+                    samples[i] = (int)Math.Clamp(samples[i], _minSample, _maxSample);
+                }
+
+                _destination.WriteInterleavedSamples(samples, frameCount);
+            }
         }
 
         // Reused, grow-only backing array so repeated block callbacks don't allocate on every invocation.

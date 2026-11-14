@@ -259,7 +259,7 @@ equivalent (a caller has to find the true sample-accurate alignment empirically 
 cross-correlation, the same way `VorbisEncoderSessionTest`'s own round-trip SNR helper already
 does -- that gap is unchanged and still open). MP3 now writes and reads the MP3 ecosystem's own
 de facto standard: an Xing-style "Info" header frame carrying a LAME-style encoder-delay/padding
-extension. `Mp3Encoder.EncoderDelaySamples` (a fixed `1680`) and a per-file padding value
+extension. `Mp3Encoder.EncoderDelaySamples` (a fixed `528`, counted over audio frames only) and a per-file padding value
 `Mp3EncoderSession.Finish()` computes are written into every file this encoder produces;
 `Mp3Probe`/`ProbeResult` surface them back as `EncoderDelaySamples`/`EncoderPaddingSamples`
 (parsed from any LAME-tagged file, not just this project's own output) and `DurationSeconds`/
@@ -275,6 +275,13 @@ bytes) rather than derived from the byte layout alone -- a first attempt at the 
 treating only this encoder's own granule-history warm-up and forgetting the dedicated header
 frame's own 1152-sample contribution) was caught exactly this way, by the empirical check
 disagreeing with the arithmetic, before it shipped.
+
+**Correction:** that first attempt was right. Decoders skip the Info-tag frame itself, so the
+`1680` that shipped counted it twice: a player honouring the tag would have cut 1152 real samples.
+Three independent decoders (ffmpeg float, ffmpeg fixed-point, NLayer) put the decoded lag at
+528 + 529 = 1057. The constant is now `528` and the tag's frame count excludes the Info frame, so
+frame count * 1152 - delay - padding is the source length (`Mp3EncoderGaplessTest`); files written
+with the old values still probe to the right duration, since both changes cancel out.
 
 This work also surfaced and fixed a real, independently-found bug, not something anticipated
 going in: `Mp3EncoderSession.Finish()` previously only silence-padded the final partial frame up

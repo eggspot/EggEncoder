@@ -9,19 +9,6 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         private const int CoefficientsPerSubband = 18;
         private const int BlockSize = 36;
 
-        // Isolates the hybrid filter's own TDAC (time-domain alias cancellation) correctness from
-        // everything else in the decode chain (alias reduction, polyphase synthesis, the real
-        // Mp3FrameEncoder) by replicating Mp3FrameEncoder.ComputeGranuleCoefficients' own windowing/
-        // Mdct.Forward/divide-by-18 steps directly, by hand, for two consecutive granules of a
-        // single subband. This test caught a real bug during development: Mp3HybridFilter's own
-        // IMDCT compensation initially multiplied by CoefficientsPerSubband (18) alone (undoing
-        // only Transform.Mdct.Inverse's own 1/18 normalization, per Mp3FrameEncoder's own doc
-        // comment) but was still off by an exact, reproducible factor of 2 -- confirmed via a
-        // minimal from-scratch Python harness reproducing Transform.Mdct's exact formula: applying
-        // the same sine window on BOTH the forward (encode) and inverse (here) sides of the TDAC
-        // overlap-add inherently halves the reconstructed amplitude for this project's own
-        // "n+0.5+K/2"-basis MDCT convention. Mp3HybridFilter now compensates with *18*2, verified
-        // here to reconstruct losslessly (no quantization is involved in this path at all).
         [Fact]
         public void HybridFilterAlone_Should_ReconstructTheSecondOfTwoWindowedBlocks()
         {
@@ -39,9 +26,6 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
                 block1[i] = Math.Sin(2 * Math.PI * 5 * i / CoefficientsPerSubband) * 100;
             }
 
-            // Mirror Mp3FrameEncoder.ComputeGranuleCoefficients' own windowing + Mdct.Forward +
-            // /18 exactly: granule N's own 36-sample window is [previous granule's raw samples,
-            // current granule's raw samples], each half sine-windowed.
             var windowed0 = new double[BlockSize];
             for (var i = 0; i < CoefficientsPerSubband; i++)
             {
@@ -52,7 +36,7 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var coefficients0 = Mdct.Forward(windowed0);
             for (var k = 0; k < CoefficientsPerSubband; k++)
             {
-                coefficients0[k] /= CoefficientsPerSubband;
+                coefficients0[k] *= 2.0 / CoefficientsPerSubband;
             }
 
             var windowed1 = new double[BlockSize];
@@ -65,7 +49,7 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var coefficients1 = Mdct.Forward(windowed1);
             for (var k = 0; k < CoefficientsPerSubband; k++)
             {
-                coefficients1[k] /= CoefficientsPerSubband;
+                coefficients1[k] *= 2.0 / CoefficientsPerSubband;
             }
 
             // Now decode both granules through a single subband's worth of hybrid filter (xr laid

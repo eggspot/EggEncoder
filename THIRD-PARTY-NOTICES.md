@@ -98,7 +98,8 @@ writing/reading code (`BuildInfoTagFrame`/`TryReadLameTagDelayAndPadding`, both 
 byte-offset based) is this project's own, independently written implementation, not a translation
 or transcription of FFmpeg's C.
 
-This project's own `Mp3Encoder.EncoderDelaySamples` constant (1680) and the corresponding
+This project's own `Mp3Encoder.EncoderDelaySamples` constant (528, counted over audio frames only; an earlier
+1680 also counted the Info-tag frame, which decoders skip) and the corresponding
 encoder-padding formula were **not** read from FFmpeg or LAME source at all — they were derived
 empirically, specific to this project's own encoder design (the dedicated Info-tag header frame
 plus this encoder's own one-granule MDCT history warm-up), by measuring this exact encoder+decoder

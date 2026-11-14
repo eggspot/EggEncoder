@@ -5,7 +5,7 @@ namespace EggEncoder.Codecs.Mp3
 {
     public static class Mp3Decoder
     {
-        private const int BytesPerSample = 2;
+        private const double Int16Scale = 32768.0;
         private const int BitsPerSample = 16;
         private const int FramesPerBlock = 4096;
 
@@ -53,16 +53,15 @@ namespace EggEncoder.Codecs.Mp3
             var sampleRate = mpegFile.SampleRate;
             var totalSamplesPerChannel = (long)(mpegFile.Duration.TotalSeconds * sampleRate);
 
-            var byteBuffer = new byte[FramesPerBlock * channels * BytesPerSample];
+            var floatBuffer = new float[FramesPerBlock * channels];
             var interleavedBuffer = new int[FramesPerBlock * channels];
 
-            int bytesRead;
-            while ((bytesRead = mpegFile.ReadSamplesInt16(byteBuffer, 0, byteBuffer.Length)) > 0)
+            int sampleCount;
+            while ((sampleCount = mpegFile.ReadSamples(floatBuffer, 0, floatBuffer.Length)) > 0)
             {
-                var sampleCount = bytesRead / BytesPerSample;
                 for (var i = 0; i < sampleCount; i++)
                 {
-                    interleavedBuffer[i] = (short)(byteBuffer[i * 2] | (byteBuffer[(i * 2) + 1] << 8));
+                    interleavedBuffer[i] = ToClampedInt16(floatBuffer[i]);
                 }
 
                 onBlockDecoded(new ReadOnlySpan<int>(interleavedBuffer, 0, sampleCount), channels, sampleRate, BitsPerSample, totalSamplesPerChannel);
@@ -76,6 +75,9 @@ namespace EggEncoder.Codecs.Mp3
                 TotalSamples = totalSamplesPerChannel
             };
         }
+
+        private static int ToClampedInt16(float sample)
+            => (int)Math.Clamp(Math.Round(sample * Int16Scale), short.MinValue, short.MaxValue);
     }
 
     public class Mp3StreamInfo

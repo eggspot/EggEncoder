@@ -15,8 +15,8 @@ namespace EggEncoder.Streaming.Mp3
     /// "Info tag" (LAME-tag) header frame and no ID3v2 tag at all -- both are container/file-level
     /// conventions (gapless-playback metadata meant to be read back from a complete, seekable
     /// file) with no equivalent for a raw, open-ended frame stream. <see cref="Mp3Encoder.EncoderDelaySamples"/>
-    /// (the same fixed <c>1680</c>-sample value <see cref="Mp3EncoderSession"/> itself writes into
-    /// that tag) remains the right value for a muxer here to use directly. Unlike
+    /// (<c>528</c>, the value <see cref="Mp3EncoderSession"/> writes into that tag) is the encoder delay
+    /// for a muxer here; a decoder adds its own 529 samples, so decoded audio lags the source by 1057. Unlike
     /// <see cref="Opus.OpusStreamingEncoder"/>, this encoder reports each frame's own *real* sample
     /// count rather than always the nominal <see cref="SamplesPerFrame"/> -- tracking it costs
     /// nothing extra here, the same way it already doesn't for <see cref="Aac.AacStreamingEncoder"/>,

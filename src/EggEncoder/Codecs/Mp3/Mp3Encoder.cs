@@ -22,22 +22,12 @@ namespace EggEncoder.Codecs.Mp3
         private const int FramesPerBlock = 4096;
 
         /// <summary>
-        /// This encoder's own fixed structural lookahead, in samples, as written into the
-        /// de-facto-standard "LAME tag" encoder-delay field every <see cref="OpenSession"/> output
-        /// now carries (see <see cref="Mp3EncoderSession"/>/<see cref="Mp3FrameEncoder"/>'s own doc
-        /// comments for the byte layout, and <c>THIRD-PARTY-NOTICES.md</c>'s MP3 LAME-tag entry for
-        /// where this value was verified). Composed of two pieces, both intrinsic to this encoder's
-        /// own design, not configurable: <c>1152</c> (one full frame) for the dedicated Info-tag
-        /// header frame every output file now starts with, plus <c>528</c> for this encoder's own
-        /// one-granule MDCT history warm-up (<see cref="Mp3FrameEncoder"/>'s own per-channel
-        /// <c>_subbandHistory</c>/<see cref="Mp3PolyphaseFilter"/>'s own 512-sample analysis-filter
-        /// history, both starting all-zero). The combined value (1680) was confirmed, not assumed,
-        /// by empirically measuring this exact encoder+decoder pair's own real round-trip delay via
-        /// normalized cross-correlation, cross-checked against an independent real `ffmpeg` decode
-        /// of the same file (both agreed exactly), rather than derived purely from the two pieces'
-        /// own theoretical values added together.
+        /// The encoder delay, in samples, written into the "LAME tag" encoder-delay field of every
+        /// <see cref="OpenSession"/> output. It counts audio frames only: decoders skip the Info-tag
+        /// frame itself, then skip this delay plus their own 529-sample decoder delay, so a decoded
+        /// file lines up with its source 1057 samples after the first audio frame starts.
         /// </summary>
-        public const int EncoderDelaySamples = 1680;
+        public const int EncoderDelaySamples = 528;
 
         public static void Encode(string sourceWavFilePath, string destMp3FilePath, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null)
         {
@@ -55,6 +45,12 @@ namespace EggEncoder.Codecs.Mp3
             session.Finish();
         }
 
+        /// <summary>
+        /// Opens an MP3 encoding session. MPEG-1 Layer III takes 32000, 44100 or 48000 Hz input only;
+        /// any other rate throws <see cref="NotSupportedException"/>. <see cref="NativeEncoder"/> and
+        /// <see cref="AudioCutter"/> conversions to MP3 resample other rates automatically
+        /// (to 44100 Hz for multiples of 11025 Hz, otherwise to 48000 Hz).
+        /// </summary>
         public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null)
         {
             // Validate (and build) the tag bytes before touching the destination file at all -- an
@@ -68,7 +64,25 @@ namespace EggEncoder.Codecs.Mp3
                 destStream.Write(tagBytes);
             }
 
-            return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, bitRateKbps);
+            try
+            {
+                return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, bitRateKbps);
+            }
+            catch
+            {
+                destStream.Dispose();
+                throw;
+            }
+        }
+
+        internal static int ChooseEncodedSampleRate(int sourceSampleRate)
+        {
+            if (sourceSampleRate is 32000 or 44100 or 48000)
+            {
+                return sourceSampleRate;
+            }
+
+            return sourceSampleRate % 11025 == 0 ? 44100 : 48000;
         }
     }
 
@@ -83,7 +97,7 @@ namespace EggEncoder.Codecs.Mp3
         private readonly List<int> _pendingInterleaved = [];
         private readonly long _infoTagFrameOffset;
 
-        private int _frameCount;
+        private int _audioFrameCount;
         private long _totalByteCount;
         private bool _finished;
         private bool _disposed;
@@ -103,7 +117,6 @@ namespace EggEncoder.Codecs.Mp3
             _infoTagFrameOffset = destStream.Position;
             var placeholderInfoTagFrame = _frameEncoder.BuildInfoTagFrame(frameCount: 0, byteCount: 0, startPadSamples: 0, endPadSamples: 0);
             _destStream.Write(placeholderInfoTagFrame);
-            _frameCount = 1;
             _totalByteCount = placeholderInfoTagFrame.Length;
         }
 
@@ -118,7 +131,7 @@ namespace EggEncoder.Codecs.Mp3
             for (var i = 0; i < sampleCount; i++)
             {
                 var sample = buffer[i];
-                _pendingInterleaved.Add(_bitsPerSampleShift > 0 ? sample >> _bitsPerSampleShift : sample);
+                _pendingInterleaved.Add(_bitsPerSampleShift >= 0 ? sample >> _bitsPerSampleShift : sample << -_bitsPerSampleShift);
             }
 
             while (_pendingInterleaved.Count >= FrameSamples * _channels)
@@ -168,20 +181,10 @@ namespace EggEncoder.Codecs.Mp3
 
             EncodeFrame();
 
-            // Encoder-delay/padding metadata, per the de-facto "LAME tag" convention (see
-            // Mp3FrameEncoder.BuildInfoTagFrame's own doc comment). startPad is this encoder's own
-            // fixed structural lookahead. endPad follows from requiring realSamples ==
-            // totalFrames*FrameSamples - startPad - endPad to hold for every file this encoder
-            // writes (confirmed against a real ffmpeg+libmp3lame reference file's own exact field
-            // values, which satisfy the identical identity): since totalFrames*FrameSamples exceeds
-            // realSamples by exactly naturalPaddingFrames (the partial-frame pad above) plus two
-            // more whole frames (the dedicated Info-tag frame and the mandatory flush frame, both
-            // FrameSamples long), endPad is that same excess minus whatever startPad's own leading
-            // skip already accounts for.
-            const int infoTagAndFlushFrameOverhead = 2 * FrameSamples;
+            const int flushFrameSamples = FrameSamples;
             var startPad = Mp3Encoder.EncoderDelaySamples;
-            var endPad = naturalPaddingFrames + infoTagAndFlushFrameOverhead - startPad;
-            var finalInfoTagFrame = _frameEncoder.BuildInfoTagFrame(_frameCount, (int)_totalByteCount, startPad, endPad);
+            var endPad = naturalPaddingFrames + flushFrameSamples - startPad;
+            var finalInfoTagFrame = _frameEncoder.BuildInfoTagFrame(_audioFrameCount, (int)_totalByteCount, startPad, endPad);
 
             _destStream.Seek(_infoTagFrameOffset, SeekOrigin.Begin);
             _destStream.Write(finalInfoTagFrame);
@@ -204,7 +207,7 @@ namespace EggEncoder.Codecs.Mp3
             var frameBytes = _frameEncoder.EncodeFrame(CollectionsMarshal.AsSpan(_pendingInterleaved)[..(FrameSamples * _channels)]);
             _destStream.Write(frameBytes);
             _pendingInterleaved.RemoveRange(0, FrameSamples * _channels);
-            _frameCount++;
+            _audioFrameCount++;
             _totalByteCount += frameBytes.Length;
         }
     }
