@@ -339,7 +339,7 @@ namespace EggEncoder.Live.Rtmp
         private async Task HandshakeAsync(CancellationToken cancellationToken)
         {
             var handshake = RtmpHandshake.CreateClient();
-            var stream = OpenStream(cancellationToken);
+            var stream = RequireStream(cancellationToken);
             await stream.WriteAsync(handshake.Start(), cancellationToken).ConfigureAwait(false);
             while (!handshake.IsComplete)
             {
@@ -455,7 +455,7 @@ namespace EggEncoder.Live.Rtmp
                 }
 
                 await FlushAsync(cancellationToken).ConfigureAwait(false);
-                var read = await OpenStream(cancellationToken).ReadAsync(_readBuffer, cancellationToken).ConfigureAwait(false);
+                var read = await RequireStream(cancellationToken).ReadAsync(_readBuffer, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                 {
                     throw new EndOfStreamException("The server closed the connection");
@@ -597,11 +597,11 @@ namespace EggEncoder.Live.Rtmp
                 return;
             }
 
-            await OpenStream(cancellationToken).WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
+            await RequireStream(cancellationToken).WriteAsync(_output.WrittenMemory, cancellationToken).ConfigureAwait(false);
             _output.ResetWrittenCount();
         }
 
-        private Stream OpenStream(CancellationToken cancellationToken)
+        private Stream RequireStream(CancellationToken cancellationToken)
         {
             var stream = _stream;
             if (stream is null)
