@@ -666,7 +666,6 @@ namespace EggEncoder.Live.Rtmp
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    return;
                 }
             }
 
