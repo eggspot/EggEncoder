@@ -335,14 +335,29 @@ Rules for every Phase 5 item, on top of the ones above:
     picture checked in as raw YUV with ffmpeg's outputs: scale and cover at least 35 dB PSNR, boxblur
     at least 40 dB, transpose identical. One 1080x1920 frame on one core of an i7-8850H: cover from
     1920x1080 11.4 ms, radius-20 blur 7.2 ms, a 400x200 overlay 1.1 ms (`VideoFilterBenchmarks`).
-- [ ] **22. Text** — TrueType parser (`cmap` 4/12, `glyf` including composite glyphs such as stacked
+- [x] **22. Text** — TrueType parser (`cmap` 4/12, `glyf` including composite glyphs such as stacked
   Vietnamese marks, `hmtx`, `kern` and basic GPOS pair kerning) and an anti-aliased scanline
   rasterizer; text normalized to NFC; the caller supplies the font bytes. Draws text with colour,
   outline, shadow, background box, wrapping and time windows. An OFL font is checked in for the
   tests (with its `THIRD-PARTY-NOTICES.md` entry); tests assert geometry and coverage, not PSNR
   against `drawtext`. CFF/OTF outlines and complex-script shaping are out of scope.
   - **Depends on**: 20.
-  - Status: not started.
+  - Status: done. `Video/Text/`: `TrueTypeFont.Load` (bytes copied; `head`, `hhea`, `maxp`, `OS/2`
+    win metrics, `hmtx`, `loca`, `glyf` simple and composite glyphs with offsets, scales, 2x2
+    transforms, point matching and nesting up to 8 deep, `cmap` 4 and 12, kerning from `GPOS` pair
+    adjustment formats 1 and 2 under the `kern` feature, extension lookups included, else a `kern`
+    format 0 table; every offset bounds-checked, damaged fonts throw `InvalidDataException`, CFF and
+    collections `NotSupportedException`). `TextRenderer` (NFC, '\n' and word wrapping, long words
+    broken between text elements, kerning, quarter-pixel glyph positions, a 4096-glyph cache) and
+    `RenderedText` (fill, outline = the fill dilated by a disc, shadow, background box on one canvas;
+    `DrawOn`, `Place` with nine `TextAnchor`s) using item 21's `VideoDraw.BlendMask`;
+    `TextOverlayTransform` (drawtext-like, time window, wraps to the frame width). The rasterizer
+    flattens curves to 0.025 px and accumulates exact signed areas of line pieces split at pixel
+    boundaries. Tests: metrics, glyph indices, advances, kerning and composite bounds against
+    fontTools on a Noto Sans subset (OFL, test-only) and two fonts made for the tests (kern table;
+    GPOS through extension lookups); exact coverage of squares and a curved glyph's analytic area
+    within 1 %; NFC; layout, wrapping, alignment; styles; truncated and garbled fonts (3,000
+    mutations) only ever throw `InvalidDataException`.
 - [ ] **23. Subtitle burn-in** — takes cues (start, end, text) directly, with styles in libass units
   (font size, vertical margin, outline and alignment in PlayResY=288 units scaled to the frame
   height). Output differs visibly from libass's own font fallback; that's intended.

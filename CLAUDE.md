@@ -119,6 +119,19 @@ by the coverage of its luma pixels; `FillBoxTransform`, `OverlayTransform` and `
 row-band parallelism). Fixtures: `UnitTests/Video/Filters/*.yuv` (a 64x48 input and ffmpeg's
 outputs), PSNR floors in the tests; per-frame cost in `VideoFilterBenchmarks`.
 
+Text (`Video/Text/`, backlog item 22): `TrueTypeFont` reads tables through the bounds-checked
+internal `FontDataReader` (every failure is `InvalidDataException`); `CharacterMap` (cmap 4/12, 3/10
+and 3/1 preferred), `PairKerning` (GPOS PairPos 1/2 under `kern`, extension lookups, cached per pair;
+else a `kern` format 0 table) and `GlyphOutline` (points in font units; composite transforms applied
+while reading; `Segments` walks contours with implied on-curve midpoints and flattens quadratics)
+are internal. `GlyphRasterizer` splits each line at every pixel boundary and accumulates exact signed
+area per cell, then a running sum per row gives coverage (|sum| clamped to 1). `TextRenderer`
+(NFC, wrapping, kerning, quarter-pixel positions, glyph cache, not thread-safe) produces
+`RenderedText` (fill/outline/shadow masks + background box on one canvas), drawn with
+`VideoDraw.BlendMask`; `TextOverlayTransform` is the drawtext-like transform. Test fonts:
+`UnitTests/Video/Text/NotoSans-subset.ttf` (OFL, test-only, notice in THIRD-PARTY-NOTICES.md),
+`synthetic.ttf` and `synthetic-gpos.ttf` (made with fontTools for the tests).
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`

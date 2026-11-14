@@ -307,6 +307,16 @@ var pipeline = new VideoFrameTransformPipeline(
 pipeline.Apply(frame, edited => { /* encode, then edited.Dispose() */ });</code></pre>
       <p>Results stay within 35 dB PSNR of ffmpeg's <code>scale</code> (bicubic, Lanczos) and 40 dB of <code>boxblur</code> on the test pictures; rotation by 90 degrees is identical to ffmpeg's <code>transpose</code>. Chroma is sited like H.264 and ffmpeg's 4:2:0 default. One 1080x1920 frame takes about 11 ms to cover-scale from 1920x1080 and 7 ms for a radius-20 blur on one core (see <a href="https://github.com/eggspot/EggEncoder/blob/main/docs/benchmarks.md">benchmarks</a>).</p>
 
+      <h3 id="video-text">Text</h3>
+      <p><code>Video.Text.TrueTypeFont.Load</code> parses a TrueType font from bytes you supply (no system fonts are looked up): metrics, the Unicode character map (formats 4 and 12), simple and composite glyphs, and pair kerning from <code>GPOS</code> or a legacy <code>kern</code> table. CFF-based .otf fonts and collections are refused. <code>TextRenderer.Render</code> normalizes text to NFC (so Vietnamese letters with stacked marks use the font's composed glyphs), breaks lines at <code>\n</code> and between words to a width, kerns, and rasterizes anti-aliased glyphs at quarter-pixel positions. <code>TextStyle</code> sets the size (pixels per em, as ffmpeg's <code>drawtext fontsize</code>), colour, outline, shadow, background box, line spacing and alignment. Complex scripts that need shaping (Arabic, Indic) are not supported.</p>
+      <pre><code class="language-csharp">using EggEncoder.Video.Text;
+
+var renderer = new TextRenderer(TrueTypeFont.Load(File.ReadAllBytes("NotoSans-Regular.ttf")));
+var title = new TextOverlayTransform(renderer, "Xin chào Việt Nam!",
+    new TextStyle { FontSize = 64, OutlineWidth = 3, Alignment = TextAlignment.Center },
+    TextAnchor.BottomCenter, marginY: 120, start: TimeSpan.Zero, end: TimeSpan.FromSeconds(3));</code></pre>
+      <p>A <code>RenderedText</code> can also be drawn directly with <code>DrawOn(frame, x, y)</code>, placed with <code>Place(anchor, ...)</code>. A renderer caches rasterized glyphs and is not thread-safe; a font is.</p>
+
       <h2 id="cross-platform">Cross-Platform, No Native Binaries</h2>
       <p>EggEncoder is 100% pure managed C# — every codec, including MP3, FLAC, and WavPack, is implemented directly in this project or via a pure managed NuGet dependency, with no native binary or P/Invoke binding anywhere. There's nothing to bundle, locate, or fail to find at runtime.</p>
       <p>It runs anywhere .NET 8/9/10 runs — Windows, Linux, and macOS — and CI builds and tests on all three to prove it.</p>
