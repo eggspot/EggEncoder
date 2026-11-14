@@ -198,7 +198,7 @@ namespace EggEncoder.Containers.Mp4
                     return (AudioInfo(header, MediaCodec.Mp3, [], entrySampleRate, entryChannels), 0);
                 case "mp4a":
                 {
-                    var esds = FindChild(stream, entry, childrenStart, "esds")
+                    var esds = TryFindChild(stream, entry, childrenStart, "esds")
                         ?? FindChild(stream, entry, entry.FieldsStart + Mp4TrackReader.AudioSampleEntryFieldBytes, "esds");
                     if (esds is null)
                     {
@@ -228,6 +228,18 @@ namespace EggEncoder.Containers.Mp4
 
         private static MediaTrackInfo AudioInfo(Mp4TrackHeader header, MediaCodec codec, byte[] configuration, int sampleRate, int channels) =>
             new(header.TrackId, MediaKind.Audio, codec, header.Timescale, configuration, 0, sampleRate, channels);
+
+        private static byte[]? TryFindChild(Stream stream, Mp4SampleEntry entry, long childrenStart, string type)
+        {
+            try
+            {
+                return FindChild(stream, entry, childrenStart, type);
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
+        }
 
         private static byte[]? FindChild(Stream stream, Mp4SampleEntry entry, long childrenStart, string type)
         {
