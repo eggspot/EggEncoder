@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EggEncoder is a .NET audio encoding/decoding toolkit built around a single `IMediaEncoder` abstraction (`Probe`, `ConvertFile`, `CutFile`) implemented entirely in-process by `NativeEncoder` — pure .NET + P/Invoke codec bindings, no external process, no ffmpeg dependency. Originally extracted from a music distribution platform's internal encoder project (which also had an ffmpeg-shell-out engine; that engine was dropped when EggEncoder became native-only).
 
+Video rendering (H.264 decode/encode, frame editing, text, MP4 writing) is in progress as Phase 5 of
+`docs/video-support-backlog.md`; until its items land, the description above is still accurate.
+
 ## Commands
 
 ```bash

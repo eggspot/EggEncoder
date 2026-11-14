@@ -13,7 +13,8 @@ used for in live work, in pure managed C#:
   `ffmpeg -re -i <in> -c copy -f flv rtmp://...` plus ffmpeg's `tee` muxer, with per-destination
   reconnects so one dead destination never stalls the others.
 
-Video is **passthrough only** (remux, never decode/encode — see "Scope philosophy"). Audio can be
+Video is **passthrough only** in this plan (remux, never decode/encode — see "Scope philosophy");
+decoding and encoding H.264 is Phase 5 of `docs/video-support-backlog.md`. Audio can be
 passed through, or optionally transcoded per output through the codecs and `PcmTransform`s that
 already exist.
 
@@ -684,7 +685,8 @@ into a live packet stream that can be fed into the hub.
 
 **Design** (`src/EggEncoder/Live/Sources/`), each source an async `MediaPacket` source:
 
-- `Mp4FileSource`: video from `MovVideoDemuxer` (extended with per-sample decode/composition times
+- `Mp4FileSource` (built as `docs/video-support-backlog.md` item 15, in `Containers/Mp4/` next to
+  `Containers/Flv/FlvFileSource`; the rest of this item stays here): video from `MovVideoDemuxer` (extended with per-sample decode/composition times
   from `stts`/`ctts`, plus `avcC`/`hvcC` from the sample entry) and AAC audio from the existing
   `MovDecoder` sample-table path as raw access units (no decode), interleaved by DTS.
 - `FlvFileSource` (item 2), `MpegTsSource` (new `Containers/MpegTs/MpegTsDemuxer`: PAT/PMT, PES
