@@ -341,5 +341,4 @@ unless the owner's own use case changes.
 overloads), mirroring MOV/MP4: `Probe` reports container/video metadata plus the audio track's
 waveform; `ConvertFile`/`CutFile` decode the FLV audio track (AAC via `AacFrameDecoder`, MP3 via
 `Mp3Decoder`) to PCM, which gets every `AudioCutter.Pipeline.cs` transform for free. Real FLVs are
-mostly stereo AAC, so this is far more useful once `AacFrameDecoder` handles a channel_pair_element
-(stereo); until then it has the same mono-only limit `MovDecoder` has.
+mostly stereo AAC, which `AacFrameDecoder` decodes since `docs/video-support-backlog.md` item 16.

@@ -223,13 +223,21 @@ Rules for every Phase 5 item, on top of the ones above:
     at or before the start time (non-video tracks one sample earlier for decoder pre-roll). Packets
     are ordered by decode time, not by file position as ffmpeg's demuxer orders close ones.
     `ProbeResult` gains `FrameCount`, `FrameRate`, `Rotation` and `HasAudio` for MOV/MP4.
-- [ ] **16. Stereo AAC-LC decode** — channel pair elements, M/S and intensity stereo, TNS, pulse
+- [x] **16. Stereo AAC-LC decode** — channel pair elements, M/S and intensity stereo, TNS, pulse
   data; LFE ignored for stereo output; PCE read; HE-AAC (SBR/PS) refused with
   `NotSupportedException`. `MovDecoder` returns two channels instead of throwing. TNS and pulse
   come from hand-assembled bitstreams (a test-only bit writer), since ffmpeg's encoder writes
   neither by default; PCM is compared within a stated tolerance, like the mono tests.
   - **Depends on**: nothing.
-  - Status: not started.
+  - Status: done. `AacFrameDecoder(sampleRate, channels)` decodes SCE, CPE (common window, M/S,
+    intensity stereo), LFE (parsed and dropped), DSE, PCE and FIL elements, pulse data, TNS, PNS,
+    every window sequence with the previous frame's window shape on the rising half, and the
+    scalefactor band tables of every sampling rate. Coupling channels, more than two channels, gain
+    control and SBR fill data are refused with `NotSupportedException`. Against ffmpeg's decode the
+    samples differ by at most 3 (ADTS stereo at 44.1 kHz with M/S, intensity stereo and short
+    windows; mono at 8, 16, 24, 32, 64 and 96 kHz; stereo AAC in MP4 at 48 kHz); noise
+    substitution matches in energy only. The existing AAC encoder now ends each raw_data_block
+    with ID_END, which it left out.
 - [ ] **17. Stereo AAC-LC encode with bitrate control** — 48 kHz stereo at a target bitrate
   (192 kb/s is the first consumer's), checked with item 16's decoder and baked ffmpeg-decode
   literals.

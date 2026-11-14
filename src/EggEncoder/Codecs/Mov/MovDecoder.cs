@@ -60,15 +60,15 @@ namespace EggEncoder.Codecs.Mov
 
             var audioConfig = ReadAudioConfig(stream, stsd, filePath);
 
-            if (audioConfig.Channels != 1)
+            if (audioConfig.Channels is not 1 and not 2)
             {
-                throw new NotSupportedException("Only mono AAC-in-MP4 tracks are supported");
+                throw new NotSupportedException($"AAC-in-MP4 tracks with {audioConfig.Channels} channels are not supported; only mono and stereo are");
             }
 
             var samples = Mp4SampleTable.ReadSamples(stream, stbl);
             var totalSamplesPerChannel = (long)samples.Count * SamplesPerAacFrame;
 
-            var frameDecoder = new AacFrameDecoder();
+            var frameDecoder = new AacFrameDecoder(audioConfig.SampleRate, audioConfig.Channels);
             var sampleBuffer = Array.Empty<byte>();
 
             foreach (var (offset, size) in samples)
@@ -82,7 +82,7 @@ namespace EggEncoder.Codecs.Mov
                 stream.ReadExactly(sampleBuffer.AsSpan(0, size));
 
                 var reader = new BitReader(sampleBuffer, 0, size);
-                var outputFrame = frameDecoder.DecodeFrame(reader, audioConfig.Channels);
+                var outputFrame = frameDecoder.DecodeFrame(reader);
 
                 onBlockDecoded(outputFrame, audioConfig.Channels, audioConfig.SampleRate, 16, totalSamplesPerChannel);
             }

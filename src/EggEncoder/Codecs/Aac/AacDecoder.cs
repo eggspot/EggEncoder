@@ -37,7 +37,7 @@ namespace EggEncoder.Codecs.Aac
             var totalSamples = CountTotalSamples(fileBytes);
 
             var reader = new BitReader(fileBytes);
-            var frameDecoder = new AacFrameDecoder();
+            AacFrameDecoder? frameDecoder = null;
 
             var channels = 0;
             var sampleRate = 0;
@@ -50,7 +50,8 @@ namespace EggEncoder.Codecs.Aac
 
                 var frameEndBitPosition = header.FrameStartBitPosition + (header.FrameLength * 8);
 
-                var outputFrame = frameDecoder.DecodeFrame(reader, channels);
+                frameDecoder ??= new AacFrameDecoder(sampleRate, channels);
+                var outputFrame = frameDecoder.DecodeFrame(reader);
                 if (reader.BitPosition > frameEndBitPosition)
                 {
                     throw new InvalidDataException("AAC: the raw_data_block runs past the ADTS frame_length");
