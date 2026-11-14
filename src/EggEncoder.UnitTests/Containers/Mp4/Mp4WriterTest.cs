@@ -287,6 +287,25 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             parts.Should().Be(1);
         }
 
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(-1.0)]
+        public void Split_PrimedAudioOnlyAtOrBeforeZero_Should_Write_One_Part(double seconds)
+        {
+            var parts = 0;
+            var input = File.ReadAllBytes(Mp4FileSourceTest.Vp9AacFixture);
+            ReadAll(input).Packets[0].Pts.Should().BeNegative();
+
+            var starts = Mp4Splitter.Split(new MemoryStream(input), [TimeSpan.FromSeconds(seconds)], _ =>
+            {
+                parts++;
+                return new MemoryStream();
+            });
+
+            starts.Should().Equal(TimeSpan.Zero);
+            parts.Should().Be(1);
+        }
+
         [Fact]
         public void Complete_SampleShownBeforeTheFirstDecodeTime_Should_Throw()
         {

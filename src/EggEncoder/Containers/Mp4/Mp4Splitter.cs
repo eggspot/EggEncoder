@@ -115,7 +115,7 @@ namespace EggEncoder.Containers.Mp4
                 {
                     if (track.IsSync(i) && track.PresentationTime(i) >= target)
                     {
-                        if (i > 0)
+                        if (i > 0 && track.PresentationTime(i) > Math.Max(0, track.PresentationTime(0)))
                         {
                             cuts.TryAdd(i, track.PresentationTime(i));
                         }
