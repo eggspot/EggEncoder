@@ -121,14 +121,14 @@ namespace EggEncoder.Codecs.Mov
             var stts = MovAtomReader.FindAtom(stream, "stts", stbl.ContentStart, stbl.ContentEnd)
                 ?? throw new InvalidDataException("Missing 'stts' atom in sample table");
             var decodeTimes = new long[sampleCount];
-            var durations = new int[sampleCount];
+            var durations = new long[sampleCount];
             var entries = ReadEntries(stream, stts, "'stts'");
             var index = 0;
             var time = 0L;
             for (var e = 0; e < entries.Length / 8 && index < sampleCount; e++)
             {
                 var count = BinaryPrimitives.ReadUInt32BigEndian(entries.AsSpan(e * 8, 4));
-                var delta = (int)BinaryPrimitives.ReadUInt32BigEndian(entries.AsSpan((e * 8) + 4, 4));
+                long delta = BinaryPrimitives.ReadUInt32BigEndian(entries.AsSpan((e * 8) + 4, 4));
                 for (var i = 0u; i < count && index < sampleCount; i++)
                 {
                     decodeTimes[index] = time;
@@ -265,5 +265,5 @@ namespace EggEncoder.Codecs.Mov
 
     internal readonly record struct Mp4SampleEntry(string FourCc, long FieldsStart, long End);
 
-    internal sealed record Mp4SampleTiming(long[] DecodeTimes, int[] Durations, int[]? CompositionOffsets, long TotalDuration);
+    internal sealed record Mp4SampleTiming(long[] DecodeTimes, long[] Durations, int[]? CompositionOffsets, long TotalDuration);
 }

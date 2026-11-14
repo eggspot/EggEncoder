@@ -358,7 +358,7 @@ Rules for every Phase 5 item, on top of the ones above:
     then-missing PR link -- a reminder to actually fill this field in, not leave the placeholder
     the way the first draft of this entry did.
 
-- [ ] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
+- [x] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
   already-encoded video sample byte arrays + keyframe flags + width/height/codec fourCC.
   - **Widened for Phase 5 (2026-11-14)**: built as `Containers/Mp4/Mp4Writer : IMediaPacketSink`,
     mirroring `FlvWriter` (sync core with async wrappers, ConfigVersion and negative-DTS checks; a
@@ -393,7 +393,18 @@ Rules for every Phase 5 item, on top of the ones above:
     (write real VP9/AV1/H.264 bytes and confirm `ffprobe` can open the result) becomes possible
     once a real codec exists (item 3+) — add that cross-check retroactively once one does, don't
     block this item on it.
-  - Status: not started.
+  - Status: done (widened form). `Mp4Writer` writes `ftyp`, `moov`, `mdat` for H.264, H.265 and AAC
+    with stts/ctts (v1 when negative)/stss/stsc/stsz/stco, an `elst` for a late start, B-frame delay
+    or AAC priming, version 1 `mvhd`/`tkhd`/`mdhd`/`elst` past 32 bits, the rotation matrix, and
+    chunks of at most 0.5 s interleaved by DTS; payloads wait in a scratch stream (default: a
+    delete-on-close temp file) and the file is written in one forward pass. Packets carry no
+    duration, so each track's last sample repeats the previous one (a remuxed AAC track can end a
+    few milliseconds longer than its source). `writer_remux.mp4` is the checked-in remux of
+    `h264_aac_rotated.mp4`: ffprobe reads the same packets and `ffmpeg -f framemd5` the same frames
+    as from the source. `Mp4Joiner` stream-copies files with identical tracks, offsetting each by
+    the previous one's longest track and dropping later inputs' AAC priming packets; `Mp4Splitter`
+    cuts at video keyframes (audio-only: the first packet at or after the time) and restarts each
+    part's timestamps at 0.
 
 ### Phase 1 — First real codec: decode
 

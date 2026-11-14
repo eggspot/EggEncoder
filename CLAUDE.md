@@ -234,6 +234,16 @@ and `HasAudio`. Fixtures (ffmpeg-made, ffprobe ground truth in `Mp4FileSourceTes
 `h264_aac_rotated.mp4` (x264 B-frames, stereo AAC, rotate=90), `hevc.mp4`, `vp9_aac.mp4` (VP9 is
 skipped).
 
+Item 2: `Mp4Writer : IMediaPacketSink` (sync core + async wrappers like `FlvWriter`) writes a
+faststart MP4 (`ftyp`, `moov`, `mdat`) from packets, holding payloads in a scratch stream until
+`Complete` (`Mp4WriterLayout` works out durations, edit lists and 0.5 s chunks; `Mp4MoovBuilder`
+writes the boxes, reusing `FmpInitSegmentWriter.ToInitTrack`/`BuildStsd`/`BuildHdlr`/... and
+`FmpMediaSegmentWriter.DefaultSampleDuration`). Over 4 GiB of file is refused; a ConfigVersion other
+than the track's is refused. `Mp4Joiner.Join` (identical tracks byte for byte; offset = previous
+input's longest track; later inputs' AAC priming dropped) and `Mp4Splitter.Split` (keyframe-aligned,
+per-part timestamps from 0) sit on top. `writer_remux.mp4` is a checked-in writer output that a test
+must reproduce byte for byte; ffprobe/framemd5 were checked against it when it was made.
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container

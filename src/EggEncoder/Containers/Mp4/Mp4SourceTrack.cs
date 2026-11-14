@@ -18,6 +18,7 @@ namespace EggEncoder.Containers.Mp4
             Offsets = samples.Select(s => s.Offset).ToArray();
             Sizes = samples.Select(s => s.Size).ToArray();
             DecodeTimes = timing.DecodeTimes;
+            Durations = timing.Durations;
             CompositionOffsets = timing.CompositionOffsets;
             TotalDuration = timing.TotalDuration;
             SyncSamples = syncSamples;
@@ -35,6 +36,8 @@ namespace EggEncoder.Containers.Mp4
 
         public int[]? CompositionOffsets { get; }
 
+        public long[] Durations { get; }
+
         public long TotalDuration { get; }
 
         public HashSet<int>? SyncSamples { get; }
@@ -46,6 +49,17 @@ namespace EggEncoder.Containers.Mp4
         public bool IsSync(int index) => SyncSamples is null || SyncSamples.Contains(index);
 
         public long PresentationTime(int index) => DecodeTimes[index] + EditShift + (CompositionOffsets?[index] ?? 0);
+
+        public long PresentationEnd()
+        {
+            var end = long.MinValue;
+            for (var i = 0; i < Offsets.Length; i++)
+            {
+                end = Math.Max(end, PresentationTime(i) + Durations[i]);
+            }
+
+            return Offsets.Length == 0 ? 0 : end;
+        }
 
         public int FindStartIndex(TimeSpan startAt)
         {
