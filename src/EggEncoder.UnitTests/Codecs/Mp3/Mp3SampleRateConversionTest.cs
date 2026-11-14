@@ -50,7 +50,7 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
-        public void Convert_FullScale96kHzWav_Should_ClampTheResampledSignalInsteadOfWrappingAround()
+        public void Convert_FullScale96kHzWav_Should_DecodeWithoutWrappingAround()
         {
             const int bitsPerSample = 24;
             var source = BuildSine((1 << (bitsPerSample - 1)) - 1, frameCount: 96_000, channels: 2, sampleRate: 96000);

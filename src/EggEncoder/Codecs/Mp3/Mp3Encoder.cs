@@ -173,7 +173,7 @@ namespace EggEncoder.Codecs.Mp3
             // last ~1 frame's worth of genuinely real input samples are never recoverable from the
             // bitstream at all (confirmed by decoding with and without this flush frame and
             // comparing against the original signal sample-by-sample, not just by reasoning about
-            // the filter structure). See Mp3Encoder.EncoderDelaySamples' own doc comment.
+            // the filter structure).
             for (var i = 0; i < FrameSamples * _channels; i++)
             {
                 _pendingInterleaved.Add(0);

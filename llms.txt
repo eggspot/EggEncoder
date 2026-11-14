@@ -524,7 +524,10 @@ even created -- `Codecs.Mp3.Id3v2Reader`/`Id3v2Writer` for the implementation.
 
 ## MP3 Gapless-Playback Metadata (Encoder Delay/Padding)
 
-Every MP3 `Mp3Encoder.Encode`/`OpenSession` writes now starts with a dedicated "Info" header frame
+Conversions to MP3 through `AudioCutter`/`NativeEncoder` accept any input sample rate: rates
+MPEG-1 can't take are resampled to 44.1 kHz (multiples of 11025 Hz) or 48 kHz first;
+`Mp3Encoder.OpenSession` itself takes 32/44.1/48 kHz only.
+ with a dedicated "Info" header frame
 carrying the MP3 ecosystem's own de-facto-standard "LAME tag" -- an Xing-style VBR-header
 extension (no official spec of its own) real-world encoders and players use for gapless-playback
 encoder-delay/padding metadata. `Mp3Encoder.EncoderDelaySamples` (a fixed `528`, counted over audio frames only, this encoder's

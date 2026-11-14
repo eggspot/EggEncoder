@@ -245,11 +245,15 @@ namespace EggEncoder.Codecs
         private static IAudioSink OpenMp3Sink(string destFilePath, int channels, int sampleRate, int bitsPerSample)
         {
             var encodedSampleRate = Mp3Encoder.ChooseEncodedSampleRate(sampleRate);
+            if (encodedSampleRate == sampleRate)
+            {
+                return Mp3Encoder.OpenSession(destFilePath, channels, sampleRate, bitsPerSample);
+            }
+
+            var resampler = new ResamplingTransform(sampleRate, encodedSampleRate, channels);
             var session = Mp3Encoder.OpenSession(destFilePath, channels, encodedSampleRate, bitsPerSample);
 
-            return encodedSampleRate == sampleRate
-                ? session
-                : new ResamplingSink(session, new ResamplingTransform(sampleRate, encodedSampleRate, channels), channels, sampleRate, bitsPerSample);
+            return new ResamplingSink(session, resampler, channels, sampleRate, bitsPerSample);
         }
 
         private sealed class ResamplingSink : IAudioSink

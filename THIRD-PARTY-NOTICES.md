@@ -101,8 +101,8 @@ or transcription of FFmpeg's C.
 This project's own `Mp3Encoder.EncoderDelaySamples` constant (528, counted over audio frames only; an earlier
 1680 also counted the Info-tag frame, which decoders skip) and the corresponding
 encoder-padding formula were **not** read from FFmpeg or LAME source at all — they were derived
-empirically, specific to this project's own encoder design (the dedicated Info-tag header frame
-plus this encoder's own one-granule MDCT history warm-up), by measuring this exact encoder+decoder
+empirically, specific to this project's own encoder design (its analysis filterbank and one-granule MDCT
+history warm-up; the Info-tag frame is not counted), by measuring this exact encoder+decoder
 pair's own real round-trip delay via normalized cross-correlation against known test signals, then
 cross-checked two further ways: against an independent real `ffmpeg` decode of the same file
 (binary only, as a black box, never its source — the same "real `lame`/`ffmpeg` CLI builds... as
