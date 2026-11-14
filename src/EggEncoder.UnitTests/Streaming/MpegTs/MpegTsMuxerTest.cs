@@ -11,9 +11,9 @@ namespace EggEncoder.UnitTests.Streaming.MpegTs
         private const int TsPacketSize = 188;
 
         [Fact]
-        public void Constructor_WithStereoChannels_Should_Throw()
+        public void Constructor_WithThreeChannels_Should_Throw()
         {
-            var act = () => new MpegTsMuxer(2, SampleRate);
+            var act = () => new MpegTsMuxer(3, SampleRate);
 
             act.Should().ThrowExactly<NotSupportedException>();
         }

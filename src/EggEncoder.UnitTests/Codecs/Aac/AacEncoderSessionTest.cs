@@ -49,11 +49,11 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         }
 
         [Fact]
-        public void OpenSession_WithStereoChannels_Should_Throw_Immediately()
+        public void OpenSession_WithThreeChannels_Should_Throw_Immediately()
         {
             var outputPath = Path.Combine(Path.GetTempPath(), $"aac_invalid_{Guid.NewGuid():N}.aac");
 
-            var act = () => AacEncoderSession.OpenSession(outputPath, channels: 2, sampleRate: 44100);
+            var act = () => AacEncoderSession.OpenSession(outputPath, channels: 3, sampleRate: 44100);
 
             act.Should().ThrowExactly<NotSupportedException>();
             File.Exists(outputPath).Should().BeFalse("validation should fail before any file is created");
@@ -78,11 +78,11 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         }
 
         [Fact]
-        public void OpenSession_Stream_WithStereoChannels_Should_Throw()
+        public void OpenSession_Stream_WithThreeChannels_Should_Throw()
         {
             using var destStream = new MemoryStream();
 
-            var act = () => AacEncoderSession.OpenSession(destStream, channels: 2, sampleRate: 44100);
+            var act = () => AacEncoderSession.OpenSession(destStream, channels: 3, sampleRate: 44100);
 
             act.Should().ThrowExactly<NotSupportedException>();
         }

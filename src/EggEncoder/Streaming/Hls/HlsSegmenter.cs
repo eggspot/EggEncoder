@@ -44,7 +44,7 @@ namespace EggEncoder.Streaming.Hls
 
         /// <summary>VOD mode: every segment ever produced stays in the playlist until <see cref="Complete"/> writes <c>EXT-X-ENDLIST</c>.</summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive.</exception>
-        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1 (fMP4 segments) or not 1 or 2 (MPEG-TS segments), or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(channels, sampleRate, targetDurationSeconds, sink, liveWindowSize: null, segmentFormat)
@@ -58,7 +58,7 @@ namespace EggEncoder.Streaming.Hls
         /// is written until <see cref="Complete"/> signals the live stream itself has ended.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetDurationSeconds"/> is not positive, or <paramref name="liveWindowSize"/> is less than 1.</exception>
-        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1 (fMP4 segments) or not 1 or 2 (MPEG-TS segments), or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         /// <exception cref="InvalidOperationException">The sink returned no URI for the fMP4 init segment.</exception>
         public HlsSegmenter(int channels, int sampleRate, int targetDurationSeconds, IStreamingSink sink, int liveWindowSize, SegmentFormat segmentFormat = SegmentFormat.Fmp4)
             : this(channels, sampleRate, targetDurationSeconds, sink, (int?)liveWindowSize, segmentFormat)

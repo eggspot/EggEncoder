@@ -238,11 +238,22 @@ Rules for every Phase 5 item, on top of the ones above:
     windows; mono at 8, 16, 24, 32, 64 and 96 kHz; stereo AAC in MP4 at 48 kHz); noise
     substitution matches in energy only. The existing AAC encoder now ends each raw_data_block
     with ID_END, which it left out.
-- [ ] **17. Stereo AAC-LC encode with bitrate control** — 48 kHz stereo at a target bitrate
+- [x] **17. Stereo AAC-LC encode with bitrate control** — 48 kHz stereo at a target bitrate
   (192 kb/s is the first consumer's), checked with item 16's decoder and baked ffmpeg-decode
   literals.
   - **Depends on**: 16.
-  - Status: not started.
+  - Status: done. `AacFrameEncoder` writes mono (SCE) or stereo (CPE, common window, M/S chosen per
+    band) at any standard sample rate and a target bit rate (`AacEncoder.Encode`,
+    `AacEncoderSession.OpenSession` and `AacStreamingEncoder.Create` overloads take `bitRate`; 0
+    means 96 kb/s per channel). Long windows only. Each band's allowed noise comes from its
+    energy, a tonality estimate (spectral flatness: 26 dB below tonal bands, 8 dB below noise-like
+    ones) and the absolute hearing threshold; a global offset is binary-searched so the frame fits
+    the average budget plus half the bit reservoir. Noise-like bands from 4 kHz up are sent as
+    perceptual noise substitution; the bandwidth follows the rate per channel. On a test signal at
+    192 kb/s stereo the SNR (27.7 dB) equals ffmpeg's native AAC encoder at the same rate.
+    `encoded_stereo_48000_192k.aac` is a checked-in encoder output with its ffmpeg decode; ffprobe
+    reads it as AAC LC 48 kHz stereo. Two bugs of the previous mono encoder are fixed: its
+    spectrum was half the decoder's scale (output 6 dB too quiet) and its sign bits were inverted.
 - [ ] **18. Mixing and loudness** — `Pcm/PcmMixer`: N inputs with per-input gain, start offsets,
   looping, a first/longest/shortest duration rule and no normalization (ffmpeg `amix`
   `normalize=0`); a silence source; integrated loudness (ITU-R BS.1770, gated, stereo) read from an

@@ -72,9 +72,9 @@ namespace EggEncoder.UnitTests.Codecs.Aac
         }
 
         [Fact]
-        public void Encode_WithStereoChannels_Should_Throw()
+        public void Encode_WithThreeChannels_Should_Throw()
         {
-            var act = () => AacEncoder.Encode(Path.GetTempFileName(), new short[1024], channels: 2, sampleRate: 44100);
+            var act = () => AacEncoder.Encode(Path.GetTempFileName(), new short[1024], channels: 3, sampleRate: 44100);
             act.Should().ThrowExactly<NotSupportedException>();
         }
 

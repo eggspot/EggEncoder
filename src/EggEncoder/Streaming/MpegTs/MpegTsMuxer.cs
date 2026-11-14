@@ -7,7 +7,7 @@ namespace EggEncoder.Streaming.MpegTs
     /// <summary>
     /// Builds MPEG-TS segments (ISO/IEC 13818-1) -- the alternative, ADTS-framed segment format to
     /// <see cref="FmpMediaSegmentWriter"/>'s own fMP4/CMAF one. Two modes, chosen by constructor: a
-    /// single mono AAC-LC track fed <see cref="Mp4EncodedFrame"/>s from this project's own encoders
+    /// single mono or stereo AAC-LC track fed <see cref="Mp4EncodedFrame"/>s from this project's own encoders
     /// (docs/streaming-plan.md item 4), and a <see cref="MediaTrackSet"/> of H.264, H.265 and AAC
     /// tracks fed <see cref="MediaPacket"/>s (docs/live-ingest-restream-plan.md item 5b). Each
     /// <c>BuildSegment</c> call produces one complete, independently-parseable <c>.ts</c> file
@@ -34,8 +34,8 @@ namespace EggEncoder.Streaming.MpegTs
 
         private long _cumulativeSampleCount;
 
-        /// <summary>Frame mode: one mono AAC-LC track, fed by <see cref="BuildSegment(IReadOnlyList{Mp4EncodedFrame})"/>.</summary>
-        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
+        /// <summary>Frame mode: one mono or stereo AAC-LC track, fed by <see cref="BuildSegment(IReadOnlyList{Mp4EncodedFrame})"/>.</summary>
+        /// <exception cref="NotSupportedException"><paramref name="channels"/> is not 1 or 2, or <paramref name="sampleRate"/> is not a valid MPEG-4 AAC sample rate.</exception>
         public MpegTsMuxer(int channels, int sampleRate)
         {
             _sampleRateIndex = AacFrameEncoder.ValidateAndGetSampleRateIndex(channels, sampleRate);

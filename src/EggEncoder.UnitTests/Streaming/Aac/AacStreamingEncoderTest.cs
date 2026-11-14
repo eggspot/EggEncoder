@@ -28,9 +28,9 @@ namespace EggEncoder.UnitTests.Streaming.Aac
         }
 
         [Fact]
-        public void Create_WithStereoChannels_Should_Throw()
+        public void Create_WithThreeChannels_Should_Throw()
         {
-            var act = () => AacStreamingEncoder.Create(channels: 2, SampleRate, _ => { });
+            var act = () => AacStreamingEncoder.Create(channels: 3, SampleRate, _ => { });
 
             act.Should().ThrowExactly<NotSupportedException>();
         }

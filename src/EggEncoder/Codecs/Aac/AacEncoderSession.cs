@@ -12,7 +12,7 @@ namespace EggEncoder.Codecs.Aac
 
         private bool _disposed;
 
-        private AacEncoderSession(Stream destStream, bool leaveOpen, int channels, int sampleRate, int bitsPerSample)
+        private AacEncoderSession(Stream destStream, bool leaveOpen, int channels, int sampleRate, int bitsPerSample, int bitRate = 0)
         {
             _destStream = destStream;
             _leaveOpen = leaveOpen;
@@ -22,7 +22,7 @@ namespace EggEncoder.Codecs.Aac
             _frameEncoder = new AacFrameEncoder(channels, sampleRate, (payload, _, _) =>
             {
                 destStream.Write(AdtsFrameWriter.Wrap(payload, sampleRateIndex, channels));
-            });
+            }, bitRate);
         }
 
         public static AacEncoderSession OpenSession(string destFilePath, int channels, int sampleRate) =>
@@ -71,12 +71,21 @@ namespace EggEncoder.Codecs.Aac
         /// <paramref name="bitsPerSample"/>'s own native range -- see
         /// <see cref="OpenSession(string, int, int, int)"/>.
         /// </summary>
-        public static AacEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample)
+        public static AacEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample) =>
+            OpenSession(destStream, channels, sampleRate, bitsPerSample, bitRate: 0);
+
+        /// <summary>
+        /// Same as <see cref="OpenSession(Stream, int, int, int)"/>, at a target bit rate for all
+        /// channels together (bits per second; 0 means 96 kb/s per channel). Frames vary around the
+        /// target through a bit reservoir, so the long-run average matches it.
+        /// </summary>
+        public static AacEncoderSession OpenSession(Stream destStream, int channels, int sampleRate, int bitsPerSample, int bitRate)
         {
             ArgumentNullException.ThrowIfNull(destStream);
             ValidateParameters(channels, sampleRate, bitsPerSample);
+            ArgumentOutOfRangeException.ThrowIfNegative(bitRate);
 
-            return new AacEncoderSession(destStream, leaveOpen: true, channels, sampleRate, bitsPerSample);
+            return new AacEncoderSession(destStream, leaveOpen: true, channels, sampleRate, bitsPerSample, bitRate);
         }
 
         private static void ValidateParameters(int channels, int sampleRate, int bitsPerSample)
