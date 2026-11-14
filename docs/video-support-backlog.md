@@ -26,6 +26,7 @@ created this file. Here is everything you need:
    continue that instead of starting something new. If an item here is checked off but you can't
    find a merged PR for it, something is inconsistent — investigate before trusting the checkbox.
 4. **Pick the first unchecked item** whose "Depends on" line (if any) is already checked off.
+   Phase 5 (below) comes before items 3-11.
    Items are pre-ordered by priority/dependency/value — you shouldn't need to reorder them, only
    skip one if it's genuinely blocked (see step 8).
 5. **Read the "Architecture notes" section below** for where the existing pieces you'll build on
@@ -178,6 +179,148 @@ trusting a "confirmed" verdict, the same discipline already established for the 
 ## Backlog
 
 Ordered by priority/dependency/value. An item's "Depends on" line names a prerequisite by number.
+Phase 5 comes first: pick its first unchecked item whose "Depends on" items are all checked off
+before any of items 3-11.
+
+### Phase 5 — Video rendering (takes priority over items 3-11)
+
+Decided by the repo owner on 2026-11-14: EggEncoder renders short videos end to end with no
+ffmpeg — decode H.264 clips, edit frames (fit, crop, rotate, blur, boxes, text, subtitles, fades),
+mix audio, encode H.264 + AAC into a progressive MP4. Its first consumer is a production video
+renderer that today shells out to ffmpeg; every item below exists because that renderer needs it.
+H.264 is approved for this phase (see Phase 4); VP9/VP8/AV1/MPEG-2 and the extra containers (items
+3-11) wait until this phase is done.
+
+Rules for every Phase 5 item, on top of the ones above:
+
+- **Clean-room.** Written from the ITU-T/ISO/IEC specifications only. No code is copied or ported
+  from ffmpeg, x264, openh264 or any other implementation; reading them to understand a spec point is
+  fine, copying is not. Each codec item adds a provenance line to `THIRD-PARTY-NOTICES.md` like the
+  managed codec rewrites already did.
+- **Third-party readability is proven in CI without ffmpeg.** Every writer or encoder item checks in
+  a few tiny output files with `ffprobe`/`ffmpeg -f framemd5` ground truth baked in as literals; the
+  live ffmpeg oracle stays gated on `EGGENCODER_FFMPEG_ORACLE=1` (`FlvWriterTest`'s pattern).
+- **Fixture size.** Each checked-in fixture stays small (≤ 50 KB for filter/PSNR fixtures). Real
+  third-party clips are never checked in; tests against them run only when a local path is set.
+- **AOT.** New public types are added to `EggEncoder.AotSmokeTest` in the same PR.
+- **Numbering.** These items continue this file's numbering; always say "backlog item N" (the
+  live-ingest and streaming plans have their own item numbers).
+- **Public text.** `README.md`, `docs/index.html` and `docs/feature-roadmap.md` describe what
+  ships; they change in the PR that ships the feature, not before.
+
+- [ ] **15. MP4 file source** — `Containers/Mp4/Mp4FileSource`, an MP4 → `MediaPacket` source:
+  real decode/composition times from `stts`/`ctts`, `elst` applied (B-frame shift, AAC priming),
+  `avcC`/`hvcC`/`esds` into `MediaTrackInfo`, tracks interleaved by DTS, keyframe seek, rotation
+  from the `tkhd` matrix (a new optional `MediaTrackInfo` field). Fragmented MP4 is refused with
+  `NotSupportedException`. `MovProbe` gains audio presence, frame count, frame rate and rotation.
+  Box readers stay in `Codecs/Mov/`; `Containers/Mp4/` holds only the packet-level source, writer,
+  joiner and splitter, mirroring `Containers/Flv/`. This is the MP4 part of
+  `docs/live-ingest-restream-plan.md` item 8, whose pacing, looping and other sources stay there.
+  - **Depends on**: 1.
+  - Status: not started.
+- [ ] **16. Stereo AAC-LC decode** — channel pair elements, M/S and intensity stereo, TNS, pulse
+  data; LFE ignored for stereo output; PCE read; HE-AAC (SBR/PS) refused with
+  `NotSupportedException`. `MovDecoder` returns two channels instead of throwing. TNS and pulse
+  come from hand-assembled bitstreams (a test-only bit writer), since ffmpeg's encoder writes
+  neither by default; PCM is compared within a stated tolerance, like the mono tests.
+  - **Depends on**: nothing.
+  - Status: not started.
+- [ ] **17. Stereo AAC-LC encode with bitrate control** — 48 kHz stereo at a target bitrate
+  (192 kb/s is the first consumer's), checked with item 16's decoder and baked ffmpeg-decode
+  literals.
+  - **Depends on**: 16.
+  - Status: not started.
+- [ ] **18. Mixing and loudness** — `Pcm/PcmMixer`: N inputs with per-input gain, start offsets,
+  looping, a first/longest/shortest duration rule and no normalization (ffmpeg `amix`
+  `normalize=0`); a silence source; integrated loudness (ITU-R BS.1770, gated, stereo) read from an
+  MP4; loudness normalization as measure → gain → true-peak limiter at a ceiling (the consumer uses
+  -1.5 dBTP), documented as close to but not identical with ffmpeg `loudnorm`; normalization
+  buffers the mixed audio (duration × 48000 × 2 × 4 bytes, stated in the API docs); mono 16 kHz
+  downmix for speech recognition input.
+  - **Depends on**: 15, 16.
+  - Status: not started.
+- [ ] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
+  block-aligned), not an `IPcmTransform`: ffmpeg `sidechaincompress`'s threshold, ratio, attack and
+  release, its default knee, makeup and detection mapped onto `CompressorTransform`'s envelope
+  maths; the gated oracle test bounds the RMS error against ffmpeg.
+  - **Depends on**: 18.
+  - Status: not started.
+- [ ] **20. Video frames** — top-level `Video/`: planar YUV 4:2:0 8-bit `VideoFrame`, odd sizes
+  allowed (chroma `(w+1)/2`), per-plane stride, pooled buffers, colour range (limited/full) and
+  matrix (BT.601/BT.709) carried on the frame, `RgbaImage` for overlay sources only;
+  `IVideoFrameTransform`, mirroring `Pcm/IPcmTransform`.
+  - **Depends on**: nothing.
+  - Status: not started.
+- [ ] **21. Frame operations** — `Video/Filters/`: scale (bicubic, Lanczos; separable, SIMD), fit
+  and pad to a canvas, crop, rotate/transpose by 90/180/270, frame-rate change by PTS
+  (drop/duplicate), box blur, alpha-blended box, RGBA overlay, fade to/from a colour, crossfade —
+  all in YUV. Tests: exact values on synthetic frames plus a PSNR floor against ffmpeg output
+  (kernels and chroma siting differ).
+  - **Depends on**: 20.
+  - Status: not started.
+- [ ] **22. Text** — TrueType parser (`cmap` 4/12, `glyf` including composite glyphs such as stacked
+  Vietnamese marks, `hmtx`, `kern` and basic GPOS pair kerning) and an anti-aliased scanline
+  rasterizer; text normalized to NFC; the caller supplies the font bytes. Draws text with colour,
+  outline, shadow, background box, wrapping and time windows. An OFL font is checked in for the
+  tests (with its `THIRD-PARTY-NOTICES.md` entry); tests assert geometry and coverage, not PSNR
+  against `drawtext`. CFF/OTF outlines and complex-script shaping are out of scope.
+  - **Depends on**: 20.
+  - Status: not started.
+- [ ] **23. Subtitle burn-in** — takes cues (start, end, text) directly, with styles in libass units
+  (font size, vertical margin, outline and alignment in PlayResY=288 units scaled to the frame
+  height). Output differs visibly from libass's own font fallback; that's intended.
+  - **Depends on**: 22.
+  - Status: not started.
+- [ ] **24. H.264 decode I** — `Codecs/H264/` (full SPS/PPS including VUI in new internal types; the
+  public `H264SpsInfo` record is unchanged): I slices, CAVLC, intra 4x4/16x16/chroma prediction,
+  I_PCM, dequantization and inverse transforms, deblocking, frame cropping. Refused with
+  `NotSupportedException`: High 10 and above, 4:2:2/4:4:4, monochrome, interlaced (PAFF/MBAFF),
+  FMO/ASO, SP/SI slices. Fixtures (`-g 1 --no-cabac`): multiple slices, deblocking idc 0/1/2 with
+  offsets, constrained intra prediction, chroma QP offset; I_PCM hand-built; ground truth from
+  `ffmpeg -f framemd5`.
+  - **Depends on**: 20.
+  - Status: not started.
+- [ ] **25. H.264 decode II** — P slices, motion vector prediction, quarter-pel luma and
+  eighth-pel chroma interpolation, multiple reference frames, weighted P prediction, the DPB's
+  sliding window. MMCO, long-term references, reference list modification and POC type 1 are tested
+  with hand-built bitstreams or JVT conformance vectors through a local-path test.
+  - **Depends on**: 24.
+  - Status: not started.
+- [ ] **26. H.264 decode III** — CABAC. Fixtures: Main profile with `bframes=0`.
+  - **Depends on**: 25.
+  - Status: not started.
+- [ ] **27. H.264 decode IV (High profile)** — B slices with spatial and temporal direct modes,
+  weighted bi-prediction, 8x8 transform and intra 8x8, scaling matrices, output reordering.
+  Synthetic fixtures only; real camera and AI-model clips through the local-path test.
+  - **Depends on**: 26.
+  - Status: not started.
+- [ ] **28. H.264 encode I** — I and P frames, CAVLC, intra mode decision (SAD/SATD), hexagon search
+  with quarter-pel refinement, deblocking, CRF-like rate control, a correct `level_idc`, VUI timing,
+  SAR 1:1, SPS cropping for sizes that aren't multiples of 16. Tests: encoder reconstruction equals
+  item 24-25's decoder output bit for bit; tiny outputs checked in with framemd5/ffprobe literals;
+  a PSNR floor.
+  - **Depends on**: 24, 25.
+  - Status: not started.
+- [ ] **29. H.264 encode II** — CABAC, 8x8 transform (High profile), row-wavefront threading.
+  Targets, measured in `EggEncoder.Benchmarks` plus an environment-gated test: at least real time
+  for 1080x1920 at 30 fps on 4 vCPU, and size within 15% of x264 `veryfast crf 20` at equal PSNR on
+  a 10 s 1080p clip measured locally.
+  - **Depends on**: 26, 27, 28.
+  - Status: not started.
+- [ ] **30. JPEG frame grab** — a baseline JPEG encoder (full range, quality mapped from ffmpeg's
+  `-q:v` scale and stated), tested with a small decoder in the test project. A scene-change score
+  is deferred: only film analysis uses it, and films need codecs outside this phase.
+  - **Depends on**: 20.
+  - Status: not started.
+- [ ] **31. Composition API** — `Video/Composition/VideoComposition`: scenes (clip, seek/trim, fit,
+  overlays, per-track volumes), concatenation, looped music with ducking, loudness normalization,
+  end text and subtitles, written to MP4 frame by frame, cancellable, with progress. Inputs without
+  a file extension are recognized by sniffing; the JPEG thumbnail comes from its own frames; the
+  result carries has-audio, size, duration and integrated loudness. Targets: a 60 s 1080x1920
+  render in at most twice real time on 4 vCPU, peak memory at most 1.5 GB.
+  - **Depends on**: 2, 17, 18, 19, 21, 23, 27, 29, 30.
+  - Status: not started.
+
 
 ### Phase 0 — Container infrastructure (pure C#, zero patent/licensing risk)
 
@@ -212,6 +355,20 @@ Ordered by priority/dependency/value. An item's "Depends on" line names a prereq
 
 - [ ] **2. MP4/MOV video muxing** — write a minimal but valid MP4/MOV file from a list of
   already-encoded video sample byte arrays + keyframe flags + width/height/codec fourCC.
+  - **Widened for Phase 5 (2026-11-14)**: built as `Containers/Mp4/Mp4Writer : IMediaPacketSink`,
+    mirroring `FlvWriter` (sync core with async wrappers, ConfigVersion and negative-DTS checks; a
+    mid-stream ConfigVersion change is refused), with H.264, H.265 (passthrough) and AAC tracks
+    validated through `FmpInitSegmentWriter.ToInitTrack`, the last-sample-duration rule and packet
+    checks extracted from `FmpMediaSegmentWriter` rather than copied, `moov` before `mdat`, real
+    durations (version 1 boxes past 32 bits), `ctts` version 0 or 1, one `elst` entry per track when
+    the first PTS isn't 0 or the audio has priming, chunks of at most 0.5 s interleaved by DTS, the
+    rotation matrix written back, files over 4 GiB refused, and a caller-supplied scratch stream
+    (default: a delete-on-close temp file). Plus `Mp4Joiner` (stream copy across files with
+    rebased timestamps, priming handled at the joins, codec configurations compared byte for byte)
+    and `Mp4Splitter` (keyframe-aligned parts with timestamps reset). Tests round-trip through item
+    15 and `MovProbe`, remux `test.mp4`, compare box order and sample tables with an ffmpeg
+    `-c copy -movflags +faststart` fixture, and check in tiny outputs with ffprobe literals.
+  - **Depends on (widened)**: 15.
   - **Feasibility**: pure C#, small-to-medium. `Mp4FileBuilder.CreateVideoOnly` (added for item 1,
     test-only, in `src/EggEncoder.UnitTests/TestUtilities/`) already builds exactly this box
     layout — `stsd`/`stts`/`stsc`/`stsz`/`stco`/`stss`/`vmhd`/`tkhd`/`hdlr` for a single video
@@ -356,8 +513,18 @@ original authoring session — licensing positions and the owner's risk toleranc
 These are listed for completeness against the "match ffmpeg's coverage" ambition, not as
 work to default into.
 
-- [ ] **12. H.264/AVC decode via `openh264`** — **GATED, needs explicit owner sign-off before
-  starting.**
+**Sign-off recorded, 2026-11-14 (H.264 only):** the repo owner approved H.264 decode and encode
+(items 12 and 13), written in-house in pure C#, after checking the patent question with a lawyer.
+They're built as Phase 5 items 24-29, not through `openh264`: Cisco's royalty coverage applies only
+to its own binaries downloaded separately by the end user, and only to uses that receive no
+remuneration, so bundling its binary would not have inherited that coverage for a commercial user
+anyway (checked against openh264.org's `BINARY_LICENSE.txt` and FAQ that day). HEVC (item 14)
+stays gated; writing already-encoded H.265 samples into a container (backlog item 2) is
+passthrough, not codec work, and stays allowed. An in-house implementation isn't covered by
+Cisco's grant; it rests on the owner's own legal advice.
+
+- [ ] **12. H.264/AVC decode via `openh264`** — was gated on owner sign-off; approved 2026-11-14
+  for an in-house build (see the sign-off above), so `openh264` itself isn't used.
   - **Licensing, the critical nuance**: the H.264 patent pool (MPEG LA, consolidated into Via
     Licensing Alliance in 2023) is actively, commercially enforced — this is not a dormant or
     symbolic royalty regime. Cisco's `openh264` is BSD-licensed *source*, and Cisco has paid the
@@ -370,14 +537,16 @@ work to default into.
     of inheriting that royalty coverage — and this must be re-verified against Cisco's current
     terms at implementation time, not assumed to still hold from this document's authoring date.
   - **Depends on**: 2 (and 1, for round-trip testing).
-  - Status: not started — blocked on owner sign-off, not on technical readiness.
+  - Status: approved 2026-11-14 (see the sign-off above); built in pure C# as Phase 5 items 24-27
+    instead of through `openh264`.
 
-- [ ] **13. H.264/AVC encode via `openh264`** — **GATED**, same sign-off requirement as item 12.
+- [ ] **13. H.264/AVC encode via `openh264`** — was gated like item 12; approved the same day.
   Do not use `x264` for this even if sign-off is given — `x264` is GPL-licensed, which is
   copyleft and incompatible with bundling into this MIT-licensed project's binary distribution
   the way every other native dependency here is bundled.
   - **Depends on**: 12.
-  - Status: not started.
+  - Status: approved 2026-11-14 (see the sign-off above); built in pure C# as Phase 5 items 28-29
+    instead of through `openh264`.
 
 - [ ] **14. H.265/HEVC decode via `libde265`** — **GATED, needs explicit owner sign-off, and is
   the lowest-priority item in this entire backlog.**
@@ -449,6 +618,6 @@ time has passed, per the lesson stated earlier in this document.
 | `dav1d` | BSD-2-Clause | AV1 decode |
 | `SVT-AV1` | BSD-2/3-Clause + AOMedia Patent License 1.0 | AV1 encode (preferred over `libaom`'s reference encoder for speed) |
 | `libvpx` | BSD-3-Clause | VP8 + VP9 decode and encode (one library, both codecs) |
-| `openh264` | BSD (source), but royalty coverage is binary-only | H.264 decode/encode — must bundle Cisco's actual prebuilt binary, not a from-source build, to inherit royalty coverage |
+| `openh264` | BSD (source), but royalty coverage is binary-only | Not used: Cisco's coverage needs its binary downloaded separately by the end user and excludes uses that receive remuneration (checked 2026-11-14); H.264 is built in pure C# instead (Phase 5) |
 | `libde265` | LGPL-3.0 | HEVC decode — license itself is fine under this repo's existing LGPL precedent; the patent pool is the real gate |
 | `libtheora` | BSD-style (Xiph) | Theora decode/encode |
