@@ -41,7 +41,7 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             video.Timescale.Should().Be(12800);
             video.Width.Should().Be(64);
             video.Height.Should().Be(48);
-            video.Rotation.Should().Be(90);
+            video.Rotation.Should().Be(270);
             AvcDecoderConfigurationRecord.Parse(video.CodecConfiguration.Span).NalLengthSize.Should().Be(4);
 
             var audio = source.Tracks.Tracks[1];
@@ -284,9 +284,9 @@ namespace EggEncoder.UnitTests.Containers.Mp4
 
         [Theory]
         [InlineData(0x10000, 0, 0)]
-        [InlineData(0, -0x10000, 90)]
+        [InlineData(0, 0x10000, 90)]
         [InlineData(-0x10000, 0, 180)]
-        [InlineData(0, 0x10000, 270)]
+        [InlineData(0, -0x10000, 270)]
         [InlineData(0, 0, 0)]
         public void RotationFromMatrix_Should_Map_Quarter_Turns(int a, int b, int expected)
         {
@@ -323,6 +323,64 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             var act = () => Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1000, 1000);
 
             act.Should().Throw<InvalidDataException>();
+        }
+
+        [Fact]
+        public void ReadEditShift_HugeEmptyEdit_Should_Throw_InvalidData()
+        {
+            var elst = Concat([1, 0, 0, 0], U32(1), U64(long.MaxValue), U64(ulong.MaxValue), U32(0x10000));
+            var trak = Box("trak", Box("edts", Box("elst", elst)));
+
+            var act = () => Mp4TrackReader.ReadEditShift(new MemoryStream(trak), new MovAtom("trak", 8, trak.Length), 1, 90000);
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Fact]
+        public void Constructor_UniformSampleSizeLargerThanTheFile_Should_Throw_InvalidData()
+        {
+            var bytes = File.ReadAllBytes(HevcFixture);
+            var stsz = IndexOf(bytes, "stsz");
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(stsz + 8), 1000);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(stsz + 12), 0x1FFFFFFF);
+
+            var act = () => new Mp4FileSource(new MemoryStream(bytes));
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Fact]
+        public void Constructor_SampleSizeAboveIntMax_Should_Throw_InvalidData()
+        {
+            var bytes = File.ReadAllBytes(HevcFixture);
+            BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(IndexOf(bytes, "stsz") + 16), 0xFFFFFFFF);
+
+            var act = () => new Mp4FileSource(new MemoryStream(bytes));
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Fact]
+        public void Constructor_AtomSmallerThanItsHeader_Should_Throw_InvalidData()
+        {
+            var bytes = Concat(U32(4), Encoding.ASCII.GetBytes("moov"), new byte[8]);
+
+            var act = () => new Mp4FileSource(new MemoryStream(bytes));
+
+            act.Should().Throw<InvalidDataException>();
+        }
+
+        [Fact]
+        public void MovProbe_VideoTrackWithoutStts_Should_Leave_Frame_Fields_Empty()
+        {
+            var bytes = File.ReadAllBytes(HevcFixture);
+            var stts = IndexOf(bytes, "stts");
+            bytes[stts] = (byte)'x';
+
+            var result = MovProbe.Probe(new MemoryStream(bytes));
+
+            result.FrameCount.Should().BeNull();
+            result.FrameRate.Should().BeNull();
         }
 
         [Fact]
@@ -365,7 +423,7 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             result.HasAudio.Should().BeTrue();
             result.FrameCount.Should().Be(10);
             result.FrameRate.Should().Be(25);
-            result.Rotation.Should().Be(90);
+            result.Rotation.Should().Be(270);
         }
 
         [Fact]
@@ -387,7 +445,7 @@ namespace EggEncoder.UnitTests.Containers.Mp4
 
             result.FrameCount.Should().Be(10);
             result.FrameRate.Should().Be(25);
-            result.Rotation.Should().Be(90);
+            result.Rotation.Should().Be(270);
             result.HasAudio.Should().BeTrue();
         }
 

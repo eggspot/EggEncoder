@@ -89,7 +89,7 @@ namespace EggEncoder.Codecs.Mov
                 return 0;
             }
 
-            var degrees = -Math.Atan2(b, a) * 180 / Math.PI;
+            var degrees = Math.Atan2(b, a) * 180 / Math.PI;
             var quarterTurns = (int)Math.Round(degrees / 90);
             return ((quarterTurns % 4) + 4) % 4 * 90;
         }
@@ -196,16 +196,28 @@ namespace EggEncoder.Codecs.Mov
                 {
                     if (movieTimescale > 0)
                     {
-                        emptyTicks += Media.MediaTimestamp.Rescale(segmentDuration, (int)Math.Min(movieTimescale, int.MaxValue), mediaTimescale);
+                        emptyTicks = CheckedAdd(emptyTicks, () => Media.MediaTimestamp.Rescale(segmentDuration, (int)Math.Min(movieTimescale, int.MaxValue), mediaTimescale));
                     }
 
                     continue;
                 }
 
-                return emptyTicks - mediaTime;
+                return CheckedAdd(emptyTicks, () => checked(-mediaTime));
             }
 
             return emptyTicks;
+        }
+
+        private static long CheckedAdd(long value, Func<long> term)
+        {
+            try
+            {
+                return checked(value + term());
+            }
+            catch (OverflowException e)
+            {
+                throw new InvalidDataException("'elst' times don't fit a 64-bit timestamp", e);
+            }
         }
 
         private static byte[] ReadEntries(Stream stream, MovAtom atom, string atomName)

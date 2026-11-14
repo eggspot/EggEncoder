@@ -84,8 +84,8 @@ namespace EggEncoder.Media
         public int Height { get => _height; init => _height = RequireNonNegative(value, nameof(Height)); }
 
         /// <summary>
-        /// Degrees to turn decoded video clockwise for display (an MP4 <c>tkhd</c> matrix, ffmpeg's
-        /// <c>rotate</c> tag): 0, 90, 180 or 270. <see cref="Width"/> and <see cref="Height"/> stay the
+        /// Degrees to turn decoded video clockwise for display, as players and ffmpeg's autorotate do
+        /// with an MP4 <c>tkhd</c> matrix: 0, 90, 180 or 270. <see cref="Width"/> and <see cref="Height"/> stay the
         /// unrotated picture size.
         /// </summary>
         public int Rotation

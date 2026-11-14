@@ -198,7 +198,8 @@ namespace EggEncoder.Containers.Mp4
                     return (AudioInfo(header, MediaCodec.Mp3, [], entrySampleRate, entryChannels), 0);
                 case "mp4a":
                 {
-                    var esds = FindChild(stream, entry, childrenStart, "esds");
+                    var esds = FindChild(stream, entry, childrenStart, "esds")
+                        ?? FindChild(stream, entry, entry.FieldsStart + Mp4TrackReader.AudioSampleEntryFieldBytes, "esds");
                     if (esds is null)
                     {
                         return null;

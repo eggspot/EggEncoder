@@ -82,6 +82,11 @@ namespace EggEncoder.Codecs.Mov
 
         private static int SamplesPerChunk(List<(int FirstChunk, int SamplesPerChunk, int SampleDescriptionIndex)> entries, int chunkNumber)
         {
+            if (entries.Count == 0)
+            {
+                throw new InvalidDataException("'stsc' atom has no entries");
+            }
+
             var samplesPerChunk = entries[0].SamplesPerChunk;
 
             foreach (var entry in entries)
@@ -106,6 +111,12 @@ namespace EggEncoder.Codecs.Mov
             var uniformSampleSize = BinaryPrimitives.ReadUInt32BigEndian(header[..4]);
             var sampleCount = CheckedEntryCount(BinaryPrimitives.ReadUInt32BigEndian(header[4..8]), entryBytes: 4, "'stsz'");
 
+            var tableBytes = uniformSampleSize != 0 ? 0L : (long)sampleCount * 4;
+            if (stsz.ContentStart + 12 + tableBytes > stsz.ContentEnd || (uniformSampleSize != 0 && (long)uniformSampleSize * sampleCount > stream.Length))
+            {
+                throw new InvalidDataException($"'stsz' atom declares {sampleCount} samples, more than the file can hold");
+            }
+
             var sizes = new List<int>(sampleCount);
 
             if (uniformSampleSize != 0)
@@ -123,7 +134,8 @@ namespace EggEncoder.Codecs.Mov
 
             for (var i = 0; i < sampleCount; i++)
             {
-                sizes.Add((int)BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(i * 4, 4)));
+                var size = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(i * 4, 4));
+                sizes.Add(size <= int.MaxValue ? (int)size : throw new InvalidDataException($"'stsz' sample {i} declares size {size}"));
             }
 
             return sizes;

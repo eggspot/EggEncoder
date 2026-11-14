@@ -43,6 +43,10 @@ namespace EggEncoder.Containers.Mp4
             {
                 throw new InvalidDataException("The MP4 file is truncated", e);
             }
+            catch (OverflowException e)
+            {
+                throw new InvalidDataException("The MP4 file has a value too large to be valid", e);
+            }
 
             Tracks = new MediaTrackSet(_tracks.Select(t => t.Info).ToArray());
         }
@@ -68,7 +72,7 @@ namespace EggEncoder.Containers.Mp4
         /// <summary>The movie duration from <c>mvhd</c>, or the longest track when <c>mvhd</c> gives none.</summary>
         public TimeSpan Duration { get; }
 
-        /// <summary>Tracks left out because their codec isn't one this source reads (or they carry no samples description it understands).</summary>
+        /// <summary>Tracks left out because their codec isn't one this source reads, or their sample description lacks its codec configuration box.</summary>
         public int SkippedTrackCount { get; }
 
         /// <summary>The number of samples of one track.</summary>
@@ -95,8 +99,9 @@ namespace EggEncoder.Containers.Mp4
             foreach (var (track, index) in Schedule(startAt))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var payload = new byte[track.Sizes[index]];
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 CheckSampleRange(track, index);
+                var payload = new byte[track.Sizes[index]];
                 _source.Position = track.Offsets[index];
                 await _source.ReadExactlyAsync(payload, cancellationToken).ConfigureAwait(false);
                 yield return CreatePacket(track, index, payload);
@@ -108,8 +113,8 @@ namespace EggEncoder.Containers.Mp4
             foreach (var (track, index) in Schedule(startAt))
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                var payload = new byte[track.Sizes[index]];
                 CheckSampleRange(track, index);
+                var payload = new byte[track.Sizes[index]];
                 _source.Position = track.Offsets[index];
                 _source.ReadExactly(payload);
                 yield return CreatePacket(track, index, payload);
@@ -118,7 +123,9 @@ namespace EggEncoder.Containers.Mp4
 
         private void CheckSampleRange(Mp4SourceTrack track, int index)
         {
-            if (track.Offsets[index] < 0 || track.Offsets[index] + track.Sizes[index] > _source.Length)
+            var offset = track.Offsets[index];
+            var size = track.Sizes[index];
+            if (offset < 0 || size < 0 || offset > _source.Length - size)
             {
                 throw new InvalidDataException($"Sample {index} of track {track.Info.TrackId} lies past the end of the file");
             }
@@ -214,7 +221,7 @@ namespace EggEncoder.Containers.Mp4
 
         internal static byte[] WidenNalLengths(byte[] payload, int lengthSize)
         {
-            var output = new List<byte>(payload.Length + 16);
+            using var output = new MemoryStream(payload.Length + 64);
             var position = 0;
             Span<byte> prefix = stackalloc byte[4];
             while (position < payload.Length)
@@ -237,8 +244,8 @@ namespace EggEncoder.Containers.Mp4
                 }
 
                 BinaryPrimitives.WriteInt32BigEndian(prefix, length);
-                output.AddRange(prefix.ToArray());
-                output.AddRange(payload.AsSpan(position, length).ToArray());
+                output.Write(prefix);
+                output.Write(payload, position, length);
                 position += length;
             }
 

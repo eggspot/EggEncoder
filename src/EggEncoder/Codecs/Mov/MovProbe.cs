@@ -92,6 +92,18 @@ namespace EggEncoder.Codecs.Mov
 
         private static (int? FrameCount, double? FrameRate) ReadFrameCountAndRate(Stream stream, Mp4TrackHeader track)
         {
+            try
+            {
+                return ReadFrameCountAndRateCore(stream, track);
+            }
+            catch (Exception e) when (e is InvalidDataException or EndOfStreamException)
+            {
+                return (null, null);
+            }
+        }
+
+        private static (int? FrameCount, double? FrameRate) ReadFrameCountAndRateCore(Stream stream, Mp4TrackHeader track)
+        {
             var sampleCount = Mp4SampleTable.ReadSamples(stream, track.Stbl).Count;
             var timing = Mp4TrackReader.ReadTiming(stream, track.Stbl, sampleCount);
             double? frameRate = timing.TotalDuration > 0 && track.Timescale > 0
