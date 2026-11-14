@@ -366,6 +366,20 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("Sidechain ducking: SidechainCompressor.Duck", () =>
+    {
+        var music = new EggEncoder.Pcm.PcmAudio(Enumerable.Repeat(0.5f, 9600).ToArray(), 2, 48000);
+        var voice = new EggEncoder.Pcm.PcmAudio(Enumerable.Repeat(0.5f, 4800).ToArray(), 1, 48000);
+        var ducked = EggEncoder.Pcm.SidechainCompressor.Duck(music, voice,
+            new EggEncoder.Pcm.SidechainCompressorSettings { Threshold = 0.05, Ratio = 8, AttackMs = 20, ReleaseMs = 400 });
+        if (ducked.FrameCount != 4800 || ducked.Samples[^1] >= 0.1f)
+        {
+            throw new InvalidOperationException("Sidechain ducking check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }

@@ -227,6 +227,18 @@ namespace EggEncoder.Codecs.Wav
                         adpcmBlockAlign = reader.ReadUInt16();
                         bitsPerSample = reader.ReadUInt16();
 
+                        if (formatTag == WaveFormatExtensibleTag && chunkSize >= 40)
+                        {
+                            reader.ReadBytes(8);
+                            var subFormatTag = reader.ReadUInt16();
+                            if (subFormatTag != PcmFormatTag && subFormatTag != IeeeFloatFormatTag)
+                            {
+                                throw new NotSupportedException($"'{filePath}' is WAVE_FORMAT_EXTENSIBLE with sub-format {subFormatTag}; only PCM and IEEE float are supported there");
+                            }
+
+                            isFloatFormat = subFormatTag == IeeeFloatFormatTag;
+                        }
+
                         if (isAdpcm)
                         {
                             if (chunkSize < 20)

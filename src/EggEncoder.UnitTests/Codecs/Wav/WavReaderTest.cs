@@ -265,6 +265,66 @@ namespace EggEncoder.UnitTests.Codecs.Wav
         }
 
         [Fact]
+        public void Open_ExtensibleFloat_Should_Decode_As_Float()
+        {
+            using var stream = new MemoryStream(BuildExtensibleWav(subFormatTag: 3, bitsPerSample: 32, BitConverter.GetBytes(0.5f)));
+            using var reader = WavReader.Open(stream);
+            var buffer = new int[1];
+
+            reader.ReadInterleavedSamples(buffer, 1);
+
+            reader.IsFloatFormat.Should().BeTrue();
+            buffer[0].Should().Be(int.MaxValue / 2);
+        }
+
+        [Fact]
+        public void Open_ExtensiblePcm_Should_Decode_As_Integer()
+        {
+            using var stream = new MemoryStream(BuildExtensibleWav(subFormatTag: 1, bitsPerSample: 16, BitConverter.GetBytes((short)-1234)));
+            using var reader = WavReader.Open(stream);
+            var buffer = new int[1];
+
+            reader.ReadInterleavedSamples(buffer, 1);
+
+            reader.IsFloatFormat.Should().BeFalse();
+            buffer[0].Should().Be(-1234);
+        }
+
+        [Fact]
+        public void Open_ExtensibleWithUnsupportedSubFormat_Should_Throw_NotSupported()
+        {
+            using var stream = new MemoryStream(BuildExtensibleWav(subFormatTag: 2, bitsPerSample: 16, new byte[2]));
+
+            FluentActions.Invoking(() => WavReader.Open(stream)).Should().Throw<NotSupportedException>().WithMessage("*sub-format 2*");
+        }
+
+        private static byte[] BuildExtensibleWav(ushort subFormatTag, ushort bitsPerSample, byte[] data)
+        {
+            var output = new MemoryStream();
+            var writer = new BinaryWriter(output);
+            writer.Write("RIFF"u8);
+            writer.Write((uint)(4 + 8 + 40 + 8 + data.Length));
+            writer.Write("WAVEfmt "u8);
+            writer.Write(40u);
+            writer.Write((ushort)0xFFFE);
+            writer.Write((ushort)1);
+            writer.Write(48000u);
+            writer.Write((uint)(48000 * bitsPerSample / 8));
+            writer.Write((ushort)(bitsPerSample / 8));
+            writer.Write(bitsPerSample);
+            writer.Write((ushort)22);
+            writer.Write(bitsPerSample);
+            writer.Write(4u);
+            writer.Write(subFormatTag);
+            writer.Write(Convert.FromHexString("000000001000800000AA00389B71"));
+            writer.Write("data"u8);
+            writer.Write((uint)data.Length);
+            writer.Write(data);
+            writer.Flush();
+            return output.ToArray();
+        }
+
+        [Fact]
         public void Open_32BitFloat_NaN_Should_Decode_As_Silence()
         {
             // A plain (int)double.NaN cast's result for an out-of-range value is unspecified by the C#

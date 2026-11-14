@@ -130,6 +130,9 @@ var mix = PcmMixer.Mix(
 var normalized = LoudnessNormalizer.Normalize(mix, targetLufs: -16);
 short[] forTheAacEncoder = normalized.ToInt16();</code></pre>
       <p>Everything is held in memory: about 384 KB per second of 48 kHz stereo for the audio itself, about 2 MB per second while normalizing. The result is close to, not identical with, ffmpeg's two-pass <code>loudnorm</code> in linear mode. <code>DownmixForSpeech()</code> gives mono 16 kHz for speech recognition.</p>
+      <p><code>SidechainCompressor.Duck(target, key, settings)</code> lowers the target while the key is loud (music under a voice), with ffmpeg <code>sidechaincompress</code>'s parameters, defaults and attack/release timing (RMS or peak detection, soft knee, makeup, mix). It stays within 0.005 of ffmpeg's gain on the test signals. Unlike ffmpeg, the output always keeps the target's length: the key counts as silence after it ends. <code>SidechainCompressor.Process</code> does the same block by block.</p>
+      <pre><code class="language-csharp">var ducked = SidechainCompressor.Duck(music, voice,
+    new SidechainCompressorSettings { Threshold = 0.05, Ratio = 8, AttackMs = 20, ReleaseMs = 400 });</code></pre>
 
       <h2>Stream-based Probing</h2>
       <p><code>IMediaEncoder.Probe(Stream source, AudioFormat format)</code> probes a source that isn't a local file — an HTTP response body, blob storage, an in-memory buffer — without ever disposing <code>source</code>:</p>

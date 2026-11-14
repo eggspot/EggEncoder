@@ -278,12 +278,22 @@ Rules for every Phase 5 item, on top of the ones above:
     0 dBTP, -1.5 by default); it lands within 1 LU of ffmpeg's two-pass linear `loudnorm` (gated
     oracle) and takes about a second for a minute of heavily limited 48 kHz stereo. Audio shorter than
     400 ms is only limited, silence is left as it is.
-- [ ] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
+- [x] **19. Sidechain ducking** — `Pcm/SidechainCompressor`, a two-input processor (key and target,
   block-aligned), not an `IPcmTransform`: ffmpeg `sidechaincompress`'s threshold, ratio, attack and
-  release, its default knee, makeup and detection mapped onto `CompressorTransform`'s envelope
-  maths; the gated oracle test bounds the RMS error against ffmpeg.
+  release, its default knee, makeup and detection, with ffmpeg's own envelope timing (see Status);
+  the gated oracle test bounds the RMS error against ffmpeg.
   - **Depends on**: 18.
-  - Status: not started.
+  - Status: done. `SidechainCompressor` (float, key and target mono or stereo, fixed at
+    construction) with `SidechainCompressorSettings` holding ffmpeg's options, ranges and defaults
+    (input gain, threshold, ratio, attack, release, makeup, knee, RMS/peak detection,
+    average/maximum link, key gain, mix; upward mode left out). It does not reuse
+    `CompressorTransform`'s envelope: that one is an exp(-1/(fs·t)) peak follower, while matching
+    ffmpeg's ducking needs its smoothing coefficient min(1, 4000/(ms·fs)) on the key's absolute or
+    squared level, so the envelope here is ffmpeg's. Gain is computed in the log domain with a
+    cubic Hermite soft knee. Against ffmpeg (2021-12-20 git build) the gain stays within 0.005 at 18
+    points for three settings (baked literals); the gated oracle bounds the whole-output RMS error
+    at 0.002. `Duck(target, key, settings)` converts the key's rate and keeps the target's length
+    (the key counts as silence after it ends; ffmpeg ends its output with the key).
 - [ ] **20. Video frames** — top-level `Video/`: planar YUV 4:2:0 8-bit `VideoFrame`, odd sizes
   allowed (chroma `(w+1)/2`), per-plane stride, pooled buffers, colour range (limited/full) and
   matrix (BT.601/BT.709) carried on the frame, `RgbaImage` for overlay sources only;
