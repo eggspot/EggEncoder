@@ -208,7 +208,7 @@ Rules for every Phase 5 item, on top of the ones above:
 - **Public text.** `README.md`, `docs/index.html` and `docs/feature-roadmap.md` describe what
   ships; they change in the PR that ships the feature, not before.
 
-- [ ] **15. MP4 file source** — `Containers/Mp4/Mp4FileSource`, an MP4 → `MediaPacket` source:
+- [x] **15. MP4 file source** — `Containers/Mp4/Mp4FileSource`, an MP4 → `MediaPacket` source:
   real decode/composition times from `stts`/`ctts`, `elst` applied (B-frame shift, AAC priming),
   `avcC`/`hvcC`/`esds` into `MediaTrackInfo`, tracks interleaved by DTS, keyframe seek, rotation
   from the `tkhd` matrix (a new optional `MediaTrackInfo` field). Fragmented MP4 is refused with
@@ -217,7 +217,12 @@ Rules for every Phase 5 item, on top of the ones above:
   joiner and splitter, mirroring `Containers/Flv/`. This is the MP4 part of
   `docs/live-ingest-restream-plan.md` item 8, whose pacing, looping and other sources stay there.
   - **Depends on**: 1.
-  - Status: not started.
+  - Status: done. `Mp4FileSource` reads H.264, H.265, AAC and MP3 tracks (other codecs are
+    skipped and counted), applies the first media edit plus any leading empty edits (later edits
+    are ignored), widens 1- and 2-byte NAL lengths to 4, and seeks per track to the last sync sample
+    at or before the start time (non-video tracks one sample earlier for decoder pre-roll). Packets
+    are ordered by decode time, not by file position as ffmpeg's demuxer orders close ones.
+    `ProbeResult` gains `FrameCount`, `FrameRate`, `Rotation` and `HasAudio` for MOV/MP4.
 - [ ] **16. Stereo AAC-LC decode** — channel pair elements, M/S and intensity stereo, TNS, pulse
   data; LFE ignored for stereo output; PCE read; HE-AAC (SBR/PS) refused with
   `NotSupportedException`. `MovDecoder` returns two channels instead of throwing. TNS and pulse

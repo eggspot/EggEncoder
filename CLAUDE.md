@@ -218,6 +218,22 @@ plain, RTMPS, IPv6, HEVC, MP3, config change; `RtmpScriptedServer`, a test-only 
 server, for every failure path) and the `EGGENCODER_FFMPEG_ORACLE=1`-gated
 `RtmpPublishClientFfmpegOracleTest` (`ffmpeg -listen 1` records, `ffprobe` checks).
 
+### MP4 packet source (`src/EggEncoder/Containers/Mp4/`)
+
+`docs/video-support-backlog.md` item 15. `Mp4FileSource` turns a progressive MP4/MOV (seekable
+stream, `moov` read up front; `mvex` refused with `NotSupportedException`) into a `MediaTrackSet`
+plus `MediaPacket`s, sync (`ReadPackets`) or async (`ReadPacketsAsync`), interleaved by DTS, from an
+optional start time (each track from its last sync sample at or before it; non-video tracks one
+sample earlier). Timestamps are `stts` + `ctts` (read signed in both versions) shifted by the first
+media edit and leading empty edits of `elst`, so x264 B-frame delay gives negative DTS and AAC
+priming a negative PTS, matching ffprobe. Box-level reading lives in `Codecs/Mov/Mp4TrackReader`
+(tkhd/mdhd/hdlr/stsd/stts/ctts/elst; `RotationFromMatrix` maps the tkhd matrix to 0/90/180/270
+clockwise, the new `MediaTrackInfo.Rotation`) and `Mp4EsdsParser.ReadDecoderConfig` (object type +
+raw AudioSpecificConfig); `MovProbe`/`ProbeResult` use it for `FrameCount`, `FrameRate`, `Rotation`
+and `HasAudio`. Fixtures (ffmpeg-made, ffprobe ground truth in `Mp4FileSourceTest`):
+`h264_aac_rotated.mp4` (x264 B-frames, stereo AAC, rotate=90), `hevc.mp4`, `vp9_aac.mp4` (VP9 is
+skipped).
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container

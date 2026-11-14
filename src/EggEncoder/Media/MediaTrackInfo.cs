@@ -21,6 +21,7 @@ namespace EggEncoder.Media
         private readonly int _channels;
         private readonly int _width;
         private readonly int _height;
+        private readonly int _rotation;
 
         /// <param name="trackId">Identifies the track within its <see cref="MediaTrackSet"/>; non-negative.</param>
         /// <param name="kind">Audio, video or data.</param>
@@ -81,6 +82,19 @@ namespace EggEncoder.Media
         public int Width { get => _width; init => _width = RequireNonNegative(value, nameof(Width)); }
 
         public int Height { get => _height; init => _height = RequireNonNegative(value, nameof(Height)); }
+
+        /// <summary>
+        /// Degrees to turn decoded video clockwise for display, as players and ffmpeg's autorotate do
+        /// with an MP4 <c>tkhd</c> matrix: 0, 90, 180 or 270. <see cref="Width"/> and <see cref="Height"/> stay the
+        /// unrotated picture size.
+        /// </summary>
+        public int Rotation
+        {
+            get => _rotation;
+            init => _rotation = value is 0 or 90 or 180 or 270
+                ? value
+                : throw new ArgumentOutOfRangeException(nameof(Rotation), value, "Rotation must be 0, 90, 180 or 270");
+        }
 
         private static int RequireNonNegative(int value, string name) =>
             value >= 0 ? value : throw new ArgumentOutOfRangeException(name, value, $"{name} must not be negative");

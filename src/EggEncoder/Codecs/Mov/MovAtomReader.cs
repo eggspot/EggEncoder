@@ -84,6 +84,11 @@ namespace EggEncoder.Codecs.Mov
                     size = rangeEnd - position;
                 }
 
+                if (size < headerSize)
+                {
+                    throw new InvalidDataException($"'{type}' atom declares size {size}, smaller than its own header");
+                }
+
                 atoms.Add(new MovAtom(type, position + headerSize, position + size));
                 position += size;
             }

@@ -73,6 +73,19 @@ try
         }
     });
 
+    await RunCheck("MP4 file source: H.265 track and packet timestamps from a progressive MP4", () =>
+    {
+        using var mp4Source = EggEncoder.Containers.Mp4.Mp4FileSource.Open(Path.Combine(AppContext.BaseDirectory, "hevc.mp4"));
+        var mp4Packets = mp4Source.ReadPackets().ToList();
+        if (mp4Source.Tracks.Tracks.Count != 1 || mp4Packets.Count != 3 || mp4Packets[1].Pts != 512
+            || mp4Source.Tracks.Tracks[0].Codec != EggEncoder.Media.MediaCodec.H265)
+        {
+            throw new InvalidOperationException("MP4 file source check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     await RunCheck("fMP4: multi-track H.264 + AAC init segment and a packet media segment", () =>
     {
         var avcC = Convert.FromHexString("014d400affe10017674d400aeca2136022000003000200000300641e244b2c01000468ce0fc8");
