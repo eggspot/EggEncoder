@@ -86,7 +86,7 @@ internal sealed class HalfPelPlanes
                 var (low, high) = CenterTaps(taps, tapStride, x, y);
                 var lowShifted = Vector128.ShiftRightArithmetic(low + Vector128.Create(512), 10);
                 var highShifted = Vector128.ShiftRightArithmetic(high + Vector128.Create(512), 10);
-                Store(Center, target + x, Vector128.Narrow(Vector128.Clamp(lowShifted, Vector128<int>.Zero, Vector128.Create(255)), Vector128.Clamp(highShifted, Vector128<int>.Zero, Vector128.Create(255))));
+                Store(Center, target + x, Vector128.Narrow(Vector128.Min(Vector128.Max(lowShifted, Vector128<int>.Zero), Vector128.Create(255)), Vector128.Min(Vector128.Max(highShifted, Vector128<int>.Zero), Vector128.Create(255))));
             }
         }
     }
@@ -127,7 +127,7 @@ internal sealed class HalfPelPlanes
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Store(byte[] target, int index, Vector128<short> values)
     {
-        var clamped = Vector128.Clamp(values, Vector128<short>.Zero, Vector128.Create((short)255)).AsUInt16();
+        var clamped = Vector128.Min(Vector128.Max(values, Vector128<short>.Zero), Vector128.Create((short)255)).AsUInt16();
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(target.AsSpan(index), Vector128.Narrow(clamped, clamped).AsUInt64().ToScalar());
     }
 }
