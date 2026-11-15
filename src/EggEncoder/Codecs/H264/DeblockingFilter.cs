@@ -44,81 +44,90 @@ internal static partial class DeblockingFilter
 
     public static void ApplyRows(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices, int firstRow, int endRow)
     {
-        var width = picture.WidthInMacroblocks;
-        var count = width * picture.HeightInMacroblocks;
-        var masks = ArrayPool<int>.Shared.Rent(count);
+        var masks = ArrayPool<int>.Shared.Rent(picture.WidthInMacroblocks * picture.HeightInMacroblocks);
         try
         {
-            for (var macroblock = Math.Max(0, firstRow - 1) * width; macroblock < endRow * width; macroblock++)
-            {
-                masks[macroblock] = CoefficientMask(picture, macroblock) | (HasUniformMotion(picture, macroblock) ? UniformMotion : 0);
-            }
-
-            Span<byte> strengths = stackalloc byte[4];
-            for (var macroblock = firstRow * width; macroblock < endRow * width; macroblock++)
-            {
-                var slice = picture.SliceNumbers[macroblock];
-                if (slice < 0)
-                {
-                    continue;
-                }
-
-                var parameters = slices[slice];
-                if (parameters.DisableIdc == 1)
-                {
-                    continue;
-                }
-
-                var mbX = macroblock % width;
-                var mbY = macroblock / width;
-                var left = mbX > 0 ? macroblock - 1 : -1;
-                var top = mbY > 0 ? macroblock - width : -1;
-                if (left >= 0 && (picture.SliceNumbers[left] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[left] != slice)))
-                {
-                    left = -1;
-                }
-
-                if (top >= 0 && (picture.SliceNumbers[top] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[top] != slice)))
-                {
-                    top = -1;
-                }
-
-                var intra = picture.IsIntra(macroblock);
-                var transform8x8 = picture.Transform8x8[macroblock];
-                var mask = masks[macroblock];
-                var skipInternal = mask == UniformMotion;
-                for (var vertical = 1; vertical >= 0; vertical--)
-                {
-                    var neighbour = vertical == 1 ? left : top;
-                    for (var edge = 0; edge < 4; edge++)
-                    {
-                        if (edge == 0 ? neighbour < 0 : skipInternal || (transform8x8 && (edge & 1) == 1))
-                        {
-                            continue;
-                        }
-
-                        var p = edge == 0 ? neighbour : macroblock;
-                        if (intra || (edge == 0 && picture.IsIntra(p)))
-                        {
-                            strengths.Fill((byte)(edge == 0 ? 4 : 3));
-                        }
-                        else if (!EdgeStrengths(picture, macroblock, mask, p, masks[p], vertical == 1, edge, strengths))
-                        {
-                            continue;
-                        }
-
-                        FilterLumaEdge(picture, macroblock, p, vertical == 1, edge, strengths, parameters);
-                        if ((edge & 1) == 0)
-                        {
-                            FilterChromaEdge(picture, macroblock, p, vertical == 1, edge / 2, strengths, parameters);
-                        }
-                    }
-                }
-            }
+            ComputeEdgeMasks(picture, masks, Math.Max(0, firstRow - 1), endRow);
+            FilterRows(picture, slices, masks, firstRow, endRow);
         }
         finally
         {
             ArrayPool<int>.Shared.Return(masks);
+        }
+    }
+
+    public static void ComputeEdgeMasks(H264Picture picture, int[] masks, int firstRow, int endRow)
+    {
+        var width = picture.WidthInMacroblocks;
+        for (var macroblock = firstRow * width; macroblock < endRow * width; macroblock++)
+        {
+            masks[macroblock] = CoefficientMask(picture, macroblock) | (HasUniformMotion(picture, macroblock) ? UniformMotion : 0);
+        }
+    }
+
+    public static void FilterRows(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices, int[] masks, int firstRow, int endRow)
+    {
+        var width = picture.WidthInMacroblocks;
+        Span<byte> strengths = stackalloc byte[4];
+        for (var macroblock = firstRow * width; macroblock < endRow * width; macroblock++)
+        {
+            var slice = picture.SliceNumbers[macroblock];
+            if (slice < 0)
+            {
+                continue;
+            }
+
+            var parameters = slices[slice];
+            if (parameters.DisableIdc == 1)
+            {
+                continue;
+            }
+
+            var mbX = macroblock % width;
+            var mbY = macroblock / width;
+            var left = mbX > 0 ? macroblock - 1 : -1;
+            var top = mbY > 0 ? macroblock - width : -1;
+            if (left >= 0 && (picture.SliceNumbers[left] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[left] != slice)))
+            {
+                left = -1;
+            }
+
+            if (top >= 0 && (picture.SliceNumbers[top] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[top] != slice)))
+            {
+                top = -1;
+            }
+
+            var intra = picture.IsIntra(macroblock);
+            var transform8x8 = picture.Transform8x8[macroblock];
+            var mask = masks[macroblock];
+            var skipInternal = mask == UniformMotion;
+            for (var vertical = 1; vertical >= 0; vertical--)
+            {
+                var neighbour = vertical == 1 ? left : top;
+                for (var edge = 0; edge < 4; edge++)
+                {
+                    if (edge == 0 ? neighbour < 0 : skipInternal || (transform8x8 && (edge & 1) == 1))
+                    {
+                        continue;
+                    }
+
+                    var p = edge == 0 ? neighbour : macroblock;
+                    if (intra || (edge == 0 && picture.IsIntra(p)))
+                    {
+                        strengths.Fill((byte)(edge == 0 ? 4 : 3));
+                    }
+                    else if (!EdgeStrengths(picture, macroblock, mask, p, masks[p], vertical == 1, edge, strengths))
+                    {
+                        continue;
+                    }
+
+                    FilterLumaEdge(picture, macroblock, p, vertical == 1, edge, strengths, parameters);
+                    if ((edge & 1) == 0)
+                    {
+                        FilterChromaEdge(picture, macroblock, p, vertical == 1, edge / 2, strengths, parameters);
+                    }
+                }
+            }
         }
     }
 

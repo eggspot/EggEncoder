@@ -38,6 +38,12 @@ internal static class InterPrediction
         }
 
         var lanes = width >= 8 ? 8 : 4;
+        if (width == 16 && Vector256.IsHardwareAccelerated && (yFrac == 0 || xFrac == 0 || (xFrac != 2 && yFrac != 2)))
+        {
+            LumaWide(source, origin, stride, xFrac, yFrac, height, output, outputStride, average);
+            return;
+        }
+
         if (yFrac == 0)
         {
             for (var j = 0; j < height; j++)
@@ -143,6 +149,75 @@ internal static class InterPrediction
                 Store(output, (j * outputStride) + i, center, lanes, average);
             }
         }
+    }
+
+    private static void LumaWide(ReadOnlySpan<byte> source, int origin, int stride, int xFrac, int yFrac, int height, Span<byte> output, int outputStride, bool average)
+    {
+        for (var j = 0; j < height; j++)
+        {
+            var row = origin + (j * stride);
+            Vector256<short> value;
+            if (yFrac == 0)
+            {
+                value = HalfVectorWide(source, row, 1);
+                if (xFrac != 2)
+                {
+                    value = RoundedAverageWide(value, LoadWide(source, row + (xFrac >> 1)));
+                }
+            }
+            else if (xFrac == 0)
+            {
+                value = HalfVectorWide(source, row, stride);
+                if (yFrac != 2)
+                {
+                    value = RoundedAverageWide(value, LoadWide(source, row + ((yFrac >> 1) * stride)));
+                }
+            }
+            else
+            {
+                var b = HalfVectorWide(source, row + ((yFrac >> 1) * stride), 1);
+                var h = HalfVectorWide(source, row + (xFrac >> 1), stride);
+                value = RoundedAverageWide(b, h);
+            }
+
+            StoreWide(output, j * outputStride, value, average);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<short> LoadWide(ReadOnlySpan<byte> source, int index)
+    {
+        var bytes = Vector128.LoadUnsafe(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), index));
+        return Vector256.Create(Vector128.WidenLower(bytes).AsInt16(), Vector128.WidenUpper(bytes).AsInt16());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<short> HalfVectorWide(ReadOnlySpan<byte> source, int index, int step)
+    {
+        var sum = LoadWide(source, index - (2 * step)) + LoadWide(source, index + (3 * step))
+            - (Vector256.Create((short)5) * (LoadWide(source, index - step) + LoadWide(source, index + (2 * step))))
+            + (Vector256.Create((short)20) * (LoadWide(source, index) + LoadWide(source, index + step)));
+        var shifted = Vector256.ShiftRightArithmetic(sum + Vector256.Create((short)16), 5);
+        return Vector256.Min(Vector256.Max(shifted, Vector256<short>.Zero), Vector256.Create((short)255));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<short> RoundedAverageWide(Vector256<short> a, Vector256<short> b) =>
+        Vector256.ShiftRightArithmetic(a + b + Vector256<short>.One, 1);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void StoreWide(Span<byte> output, int index, Vector256<short> values, bool average)
+    {
+        var clamped = Vector256.Min(Vector256.Max(values, Vector256<short>.Zero), Vector256.Create((short)255)).AsUInt16();
+        ref var at = ref Unsafe.Add(ref MemoryMarshal.GetReference(output), index);
+        if (average)
+        {
+            var existing = Vector128.LoadUnsafe(ref at);
+            var old = Vector256.Create(Vector128.WidenLower(existing), Vector128.WidenUpper(existing));
+            clamped = Vector256.ShiftRightLogical(clamped + old + Vector256<ushort>.One, 1);
+        }
+
+        Vector128.Narrow(clamped.GetLower(), clamped.GetUpper()).StoreUnsafe(ref at);
     }
 
     public static void Chroma(H264Picture reference, bool cr, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride, bool average = false)
