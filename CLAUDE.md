@@ -408,6 +408,24 @@ from the SimpleBlock flag or a BlockGroup without ReferenceBlock; audio packets 
 `h264_aac_rotated.mp4`, payloads compared with `Mp4FileSource`) and `vp9_opus.webm`; `TestUtilities/Ebml` builds
 synthetic files (unknown sizes, every lacing, skipped tracks).
 
+### AVI (`src/EggEncoder/Containers/Avi/`)
+
+`docs/video-support-backlog.md` item 11. `AviFileSource` reads RIFF AVI (OpenDML `AVIX` lists too) into the packet
+model: H.264 (`H264`/`X264`/`DAVC` with Annex B data, converted to 4-byte length prefixes, or `avc1` with an avcC, as
+ffmpeg writes a stream copy from MP4), MP3 (format tag 0x55) and AAC (0xFF with its AudioSpecificConfig); other
+streams are skipped. When an H.264 format carries no parameter sets (ffmpeg's encoder writes a bare 40-byte
+BITMAPINFOHEADER), a seekable source is searched for the first chunk with SPS and PPS (`AviSourceStream`); a
+non-seekable one skips that stream. Track id = AVI stream number; timescale = rate / scale reduced; AVI stores no
+presentation times, so a video packet's DTS = PTS = frame number x scale, empty chunks (dropped frames) advance the
+frame number without a packet, and keyframes are packets holding an IDR slice (no `idx1` needed, so no seeking).
+`AviWriter : IMediaPacketSink` keeps chunks in a scratch stream until `Complete`, then writes `hdrl`, `movi` and
+`idx1` in one forward pass: H.264 as Annex B (`H264`) with its SPS/PPS before every keyframe and in `strf`, MP3/AAC
+one chunk per packet (VBR style: scale = samples per frame); a video track's frame duration is the GCD of its DTS
+steps, gaps filled with empty chunks (ordinal frame numbers when the gaps would be over 10x the packet count);
+presentation times are not stored. Files past 1 GiB are refused (no OpenDML index). Fixtures (ffmpeg-made, ffprobe
+ground truth in `AviTest`): `h264_mp3.avi` (x264 + LAME, parameter sets only in-band) and `h264_aac.avi` (a stream
+copy of `h264_aac_rotated.mp4`); an `EGGENCODER_FFMPEG_ORACLE=1`-gated test decodes the writer's output with ffmpeg.
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container

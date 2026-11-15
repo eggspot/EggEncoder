@@ -738,12 +738,13 @@ Rules for every Phase 5 item, on top of the ones above:
   - **Depends on**: 9.
   - Status: not started.
 
-- [ ] **11. AVI (RIFF) demux + mux (pure C#)**
+- [x] **11. AVI (RIFF) demux + mux (pure C#)**
   - **Feasibility**: pure C#, simpler container than MP4/MKV (flat RIFF chunk structure). Legacy
     format, low real-world priority — include for completeness/"match ffmpeg's coverage" but don't
     prioritize ahead of anything in Phase 0-2.
   - **Depends on**: nothing technical; sequenced last because of low value, not difficulty.
-  - Status: not started.
+  - Status: done. `Containers/Avi/AviFileSource` and `AviWriter`: H.264 (Annex B or avcC), MP3 and AAC, through the
+    packet model; parameter sets found in-band when the header has none; writer refuses files past 1 GiB.
 
 ### Phase 4 — Patent-encumbered codecs: EXPLICITLY GATED
 
