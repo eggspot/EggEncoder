@@ -219,27 +219,49 @@ internal static class Quantizer
         [7282, 6428, 11570, 6830, 9118, 8640]
     ];
 
+    private static readonly int[][] RasterFactors8x8 = BuildRasterFactors8x8();
+
     public static int Quantize8x8(ReadOnlySpan<int> coefficients, Span<short> raster, Span<short> scanned, int qp, bool intra)
     {
         var shift = 16 + (qp / 6);
-        var rounding = intra ? (1 << shift) / 3 : (1 << shift) / 6;
-        var factors = Factors8x8[qp % 6];
-        var nonzero = 0;
-        for (var scan = 0; scan < 64; scan++)
+        var rounding = Vector128.Create(intra ? (1 << shift) / 3 : (1 << shift) / 6);
+        ref var factors = ref MemoryMarshal.GetArrayDataReference(RasterFactors8x8[qp % 6]);
+        ref var source = ref MemoryMarshal.GetReference(coefficients[..64]);
+        ref var target = ref MemoryMarshal.GetReference(raster[..64]);
+        var zeros = 0UL;
+        for (var i = 0; i < 64; i += 8)
         {
-            var position = MacroblockLayout.ZigZag8x8[scan];
-            var value = coefficients[position];
-            var level = ((Math.Abs(value) * (long)factors[Class8x8(position >> 3, position & 7)]) + rounding) >> shift;
-            var signed = (short)(value < 0 ? -level : level);
-            raster[position] = signed;
-            scanned[scan] = signed;
-            if (signed != 0)
-            {
-                nonzero++;
-            }
+            var low = QuantizeLanes(Vector128.LoadUnsafe(ref source, (nuint)i), Vector128.LoadUnsafe(ref factors, (nuint)i), rounding, shift);
+            var high = QuantizeLanes(Vector128.LoadUnsafe(ref source, (nuint)(i + 4)), Vector128.LoadUnsafe(ref factors, (nuint)(i + 4)), rounding, shift);
+            var levels = Vector128.Narrow(low, high);
+            levels.StoreUnsafe(ref target, (nuint)i);
+            zeros |= (ulong)Vector128.ExtractMostSignificantBits(Vector128.Equals(levels, Vector128<short>.Zero)) << i;
         }
 
-        return nonzero;
+        var zigZag = MacroblockLayout.ZigZag8x8;
+        for (var scan = 0; scan < 64; scan++)
+        {
+            scanned[scan] = raster[zigZag[scan]];
+        }
+
+        return 64 - BitOperations.PopCount(zeros);
+    }
+
+    private static int[][] BuildRasterFactors8x8()
+    {
+        var tables = new int[Factors8x8.Length][];
+        for (var remainder = 0; remainder < Factors8x8.Length; remainder++)
+        {
+            var table = new int[64];
+            for (var position = 0; position < 64; position++)
+            {
+                table[position] = Factors8x8[remainder][Class8x8(position >> 3, position & 7)];
+            }
+
+            tables[remainder] = table;
+        }
+
+        return tables;
     }
 
     private static int Class8x8(int row, int column)
