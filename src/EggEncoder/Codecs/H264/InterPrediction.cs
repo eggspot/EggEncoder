@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -244,6 +246,27 @@ internal static class InterPrediction
             origin = 0;
         }
 
+        ChromaBlock(source, origin, stride, xFrac, yFrac, width, height, output, outputStride, average);
+    }
+
+    public static void ChromaPair(H264Picture reference, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> cb, Span<byte> cr, int outputStride, bool average = false)
+    {
+        var frame = reference.Frame;
+        if (x < 0 || y < 0 || x + width + 1 > reference.WidthInMacroblocks * 8 || y + height + 1 > reference.HeightInMacroblocks * 8)
+        {
+            Chroma(reference, false, x, y, xFrac, yFrac, width, height, cb, outputStride, average);
+            Chroma(reference, true, x, y, xFrac, yFrac, width, height, cr, outputStride, average);
+            return;
+        }
+
+        var stride = frame.StrideUV;
+        var offset = (y * stride) + x;
+        ChromaBlock(frame.Buffer, frame.OffsetU + offset, stride, xFrac, yFrac, width, height, cb, outputStride, average);
+        ChromaBlock(frame.Buffer, frame.OffsetV + offset, stride, xFrac, yFrac, width, height, cr, outputStride, average);
+    }
+
+    private static void ChromaBlock(ReadOnlySpan<byte> source, int origin, int stride, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride, bool average)
+    {
         if (xFrac == 0 && yFrac == 0)
         {
             CopyBlock(source, origin, stride, output, outputStride, width, height, average);
@@ -370,33 +393,75 @@ internal static class InterPrediction
 
     public static void AverageInto(Span<byte> first, int firstStride, ReadOnlySpan<byte> second, int secondStride, int width, int height)
     {
+        if (height <= 0)
+        {
+            return;
+        }
+
+        var target = first[..(((height - 1) * firstStride) + width)];
+        var source = second[..(((height - 1) * secondStride) + width)];
+        ref var targetRow = ref MemoryMarshal.GetReference(target);
+        ref var sourceRow = ref MemoryMarshal.GetReference(source);
+        switch (width)
+        {
+            case 16:
+                for (var j = 0; j < height; j++)
+                {
+                    RoundedByteAverage(Vector128.LoadUnsafe(ref targetRow), Vector128.LoadUnsafe(ref sourceRow)).StoreUnsafe(ref targetRow);
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+            case 8:
+                for (var j = 0; j < height; j++)
+                {
+                    var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref targetRow)).AsByte();
+                    var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref sourceRow)).AsByte();
+                    Unsafe.WriteUnaligned(ref targetRow, RoundedByteAverage(a, b).AsUInt64().ToScalar());
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+            case 4:
+                for (var j = 0; j < height; j++)
+                {
+                    var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref targetRow)).AsByte();
+                    var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref sourceRow)).AsByte();
+                    Unsafe.WriteUnaligned(ref targetRow, RoundedByteAverage(a, b).AsUInt32().ToScalar());
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+        }
+
         for (var j = 0; j < height; j++)
         {
-            var target = first.Slice(j * firstStride, width);
-            var source = second.Slice(j * secondStride, width);
-            var i = 0;
-            if (width >= 16)
+            var targetLine = target.Slice(j * firstStride, width);
+            var sourceLine = source.Slice(j * secondStride, width);
+            for (var i = 0; i < width; i++)
             {
-                for (; i + 16 <= width; i += 16)
-                {
-                    var a = Vector128.Create<byte>(target[i..]);
-                    var b = Vector128.Create<byte>(source[i..]);
-                    ((a | b) - Vector128.ShiftRightLogical(a ^ b, 1)).CopyTo(target[i..]);
-                }
-            }
-
-            for (; i + 8 <= width; i += 8)
-            {
-                var a = BinaryPrimitives.ReadUInt64LittleEndian(target[i..]);
-                var b = BinaryPrimitives.ReadUInt64LittleEndian(source[i..]);
-                BinaryPrimitives.WriteUInt64LittleEndian(target[i..], (a | b) - (((a ^ b) >> 1) & 0x7F7F7F7F7F7F7F7FUL));
-            }
-
-            for (; i < width; i++)
-            {
-                target[i] = (byte)((target[i] + source[i] + 1) >> 1);
+                targetLine[i] = (byte)((targetLine[i] + sourceLine[i] + 1) >> 1);
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<byte> RoundedByteAverage(Vector128<byte> a, Vector128<byte> b)
+    {
+        if (Sse2.IsSupported)
+        {
+            return Sse2.Average(a, b);
+        }
+
+        if (AdvSimd.IsSupported)
+        {
+            return AdvSimd.FusedAddRoundedHalving(a, b);
+        }
+
+        return (a | b) - Vector128.ShiftRightLogical(a ^ b, 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
