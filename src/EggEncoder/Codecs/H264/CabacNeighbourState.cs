@@ -12,6 +12,7 @@ internal sealed class CabacNeighbourState
         CodedBlockFlags = new int[macroblockCount];
         CodedBlockPatterns = new byte[macroblockCount];
         IntraChromaModes = new byte[macroblockCount];
+        DirectBlocks = new byte[macroblockCount];
         AbsoluteMvd = [new byte[macroblockCount * 32], new byte[macroblockCount * 32]];
     }
 
@@ -22,6 +23,8 @@ internal sealed class CabacNeighbourState
     public byte[] CodedBlockPatterns { get; }
 
     public byte[] IntraChromaModes { get; }
+
+    public byte[] DirectBlocks { get; }
 
     public byte[][] AbsoluteMvd { get; }
 

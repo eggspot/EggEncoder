@@ -3,6 +3,10 @@ namespace EggEncoder.Codecs.H264;
 internal sealed partial class SliceDecoder
 {
     private const int MbSkipPOffset = 11;
+    private const int MbSkipBOffset = 24;
+    private const int MbTypeBOffset = 27;
+    private const int MbTypeBIntraOffset = 32;
+    private const int SubMbTypeBOffset = 36;
     private const int MbTypeIOffset = 3;
     private const int MbTypePPrefixOffset = 14;
     private const int MbTypePIntraOffset = 17;
@@ -21,6 +25,21 @@ internal sealed partial class SliceDecoder
     private const int LastSignificantCoefficientOffset = 166;
     private const int CoefficientAbsLevelOffset = 227;
     private const int TransformSize8x8Offset = 399;
+    private const int Significant8x8Offset = 402;
+    private const int LastSignificant8x8Offset = 417;
+    private const int CoefficientAbsLevel8x8Offset = 426;
+
+    private static readonly byte[] Significant8x8Increments =
+    [
+        0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5, 4, 4, 4, 4, 3, 3, 6, 7, 7, 7, 8, 9, 10, 9, 8, 7,
+        7, 6, 11, 12, 13, 11, 6, 7, 8, 9, 14, 10, 9, 8, 6, 11, 12, 13, 11, 6, 9, 14, 10, 9, 11, 12, 13, 11, 14, 10, 12
+    ];
+
+    private static readonly byte[] LastSignificant8x8Increments =
+    [
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8
+    ];
 
     private static readonly int[] CodedBlockFlagOffsets = [0, 4, 8, 12, 16];
     private static readonly int[] SignificantOffsets = [0, 15, 29, 44, 47];
@@ -39,20 +58,25 @@ internal sealed partial class SliceDecoder
         cabac.Start(_reader.Buffer, _reader.ByteLength, _reader.Position);
         _macroblock = _header.FirstMacroblock;
         _previousQpDeltaNonZero = false;
-        if (_header.Type == SliceType.B)
-        {
-            throw new NotSupportedException("H.264: B slices are not supported yet");
-        }
-
         while (true)
         {
             BeginMacroblock();
-            if (_header.Type == SliceType.P && cabac.DecodeDecision(MbSkipPOffset + SkipContextIncrement()) == 1)
+            var skipOffset = _header.Type == SliceType.B ? MbSkipBOffset : MbSkipPOffset;
+            if (_header.Type != SliceType.I && cabac.DecodeDecision(skipOffset + SkipContextIncrement()) == 1)
             {
                 _cabacState!.Record(_macroblock, 0, 0, 0);
                 _cabacState.ClearMotion(_macroblock);
                 _previousQpDeltaNonZero = false;
-                DecodeSkippedMacroblock();
+                if (_header.Type == SliceType.B)
+                {
+                    _cabacState.DirectBlocks[_macroblock] = 0xF;
+                    DecodeSkippedMacroblockB();
+                }
+                else
+                {
+                    _cabacState.DirectBlocks[_macroblock] = 0;
+                    DecodeSkippedMacroblock();
+                }
             }
             else
             {
@@ -81,9 +105,25 @@ internal sealed partial class SliceDecoder
     {
         var state = _cabacState!;
         state.ClearMotion(_macroblock);
+        state.DirectBlocks[_macroblock] = 0;
         if (_header.Type == SliceType.I)
         {
             ParseIntraMacroblockCabac(cabac, DecodeIntraMacroblockType(cabac, MbTypeIOffset));
+            return;
+        }
+
+        if (_header.Type == SliceType.B)
+        {
+            var bType = DecodeMacroblockTypeB(cabac);
+            if (bType < 0)
+            {
+                ParseIntraMacroblockCabac(cabac, DecodeIntraMacroblockType(cabac, MbTypeBIntraOffset));
+            }
+            else
+            {
+                ParseInterMacroblockBCabac(cabac, bType);
+            }
+
             return;
         }
 
@@ -104,6 +144,182 @@ internal sealed partial class SliceDecoder
         }
 
         ParseInterMacroblockPCabac(cabac, mbType);
+    }
+
+    private int DecodeMacroblockTypeB(CabacDecoder cabac)
+    {
+        var a = NeighbourMacroblock(-1, 0);
+        var b = NeighbourMacroblock(0, -1);
+        var increment = (a >= 0 && _picture.Kinds[a] is not (MacroblockKind.BSkip or MacroblockKind.BDirect16x16) ? 1 : 0)
+            + (b >= 0 && _picture.Kinds[b] is not (MacroblockKind.BSkip or MacroblockKind.BDirect16x16) ? 1 : 0);
+        if (cabac.DecodeDecision(MbTypeBOffset + increment) == 0)
+        {
+            return 0;
+        }
+
+        if (cabac.DecodeDecision(MbTypeBOffset + 3) == 0)
+        {
+            return 1 + cabac.DecodeDecision(MbTypeBOffset + 5);
+        }
+
+        var b2 = cabac.DecodeDecision(MbTypeBOffset + 4);
+        var b3 = cabac.DecodeDecision(MbTypeBOffset + 5);
+        var b4 = cabac.DecodeDecision(MbTypeBOffset + 5);
+        var b5 = cabac.DecodeDecision(MbTypeBOffset + 5);
+        if (b2 == 0)
+        {
+            return 3 + ((b3 << 2) | (b4 << 1) | b5);
+        }
+
+        if (b3 == 0)
+        {
+            var b6 = cabac.DecodeDecision(MbTypeBOffset + 5);
+            return 12 + ((b4 << 2) | (b5 << 1) | b6);
+        }
+
+        return (b4, b5) switch
+        {
+            (1, 0) => 11,
+            (1, 1) => 22,
+            (0, 1) => -1,
+            _ => 20 + cabac.DecodeDecision(MbTypeBOffset + 5)
+        };
+    }
+
+    private int DecodeSubMacroblockTypeB(CabacDecoder cabac)
+    {
+        if (cabac.DecodeDecision(SubMbTypeBOffset) == 0)
+        {
+            return 0;
+        }
+
+        if (cabac.DecodeDecision(SubMbTypeBOffset + 1) == 0)
+        {
+            return 1 + cabac.DecodeDecision(SubMbTypeBOffset + 3);
+        }
+
+        if (cabac.DecodeDecision(SubMbTypeBOffset + 2) == 0)
+        {
+            var low0 = cabac.DecodeDecision(SubMbTypeBOffset + 3);
+            var low1 = cabac.DecodeDecision(SubMbTypeBOffset + 3);
+            return 3 + ((low0 << 1) | low1);
+        }
+
+        if (cabac.DecodeDecision(SubMbTypeBOffset + 3) == 1)
+        {
+            return 11 + cabac.DecodeDecision(SubMbTypeBOffset + 3);
+        }
+
+        var high = cabac.DecodeDecision(SubMbTypeBOffset + 3);
+        var low = cabac.DecodeDecision(SubMbTypeBOffset + 3);
+        return 7 + ((high << 1) | low);
+    }
+
+    private void ParseInterMacroblockBCabac(CabacDecoder cabac, int mbType)
+    {
+        var syntax = _syntax;
+        var state = _cabacState!;
+        StartInterMacroblockB(mbType);
+        _cabacReferences.AsSpan().Fill(-1);
+        var counts = (Span<int>)[_header.ReferenceCountL0, _header.ReferenceCountL1];
+        if (syntax.Kind == MacroblockKind.BDirect16x16)
+        {
+            state.DirectBlocks[_macroblock] = 0xF;
+        }
+        else if (syntax.Kind == MacroblockKind.B8x8)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                syntax.SubMacroblockTypes[i] = DecodeSubMacroblockTypeB(cabac);
+                if (syntax.SubMacroblockTypes[i] == 0)
+                {
+                    state.DirectBlocks[_macroblock] |= (byte)(1 << i);
+                }
+            }
+
+            for (var list = 0; list < 2; list++)
+            {
+                for (var i = 0; i < 4; i++)
+                {
+                    var type = syntax.SubMacroblockTypes[i];
+                    if (type != 0 && (BSubModes[type] & (list == 0 ? PredictL0 : PredictL1)) != 0)
+                    {
+                        _cabacReferences[(list * 4) + i] = (sbyte)(counts[list] > 1 ? DecodeReferenceIndex(cabac, list, (i & 1) * 2, (i >> 1) * 2, counts[list]) : 0);
+                    }
+                }
+            }
+
+            for (var i = 0; i < 4; i++)
+            {
+                AddSubMacroblockB(i);
+                for (var p = _subPartitionStarts[i]; p < _subPartitionStarts[i + 1]; p++)
+                {
+                    if (!syntax.Partitions[p].Direct)
+                    {
+                        syntax.Partitions[p].ReferenceL0 = _cabacReferences[i];
+                        syntax.Partitions[p].ReferenceL1 = _cabacReferences[4 + i];
+                    }
+                }
+            }
+
+            for (var list = 0; list < 2; list++)
+            {
+                for (var p = 0; p < syntax.PartitionCount; p++)
+                {
+                    ref var partition = ref syntax.Partitions[p];
+                    if (!partition.Direct && (list == 0 ? partition.UsesL0 : partition.UsesL1))
+                    {
+                        DecodeMvd(cabac, ref partition, list);
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (var list = 0; list < 2; list++)
+            {
+                for (var p = 0; p < syntax.PartitionCount; p++)
+                {
+                    ref var partition = ref syntax.Partitions[p];
+                    if (!(list == 0 ? partition.UsesL0 : partition.UsesL1))
+                    {
+                        continue;
+                    }
+
+                    var reference = counts[list] > 1 ? DecodeReferenceIndex(cabac, list, partition.X, partition.Y, counts[list]) : 0;
+                    if (list == 0)
+                    {
+                        partition.ReferenceL0 = reference;
+                    }
+                    else
+                    {
+                        partition.ReferenceL1 = reference;
+                    }
+
+                    for (var y8 = partition.Y >> 1; y8 <= (partition.Y + partition.Height - 1) >> 1; y8++)
+                    {
+                        for (var x8 = partition.X >> 1; x8 <= (partition.X + partition.Width - 1) >> 1; x8++)
+                        {
+                            _cabacReferences[(list * 4) + (y8 * 2) + x8] = (sbyte)reference;
+                        }
+                    }
+                }
+            }
+
+            for (var list = 0; list < 2; list++)
+            {
+                for (var p = 0; p < syntax.PartitionCount; p++)
+                {
+                    ref var partition = ref syntax.Partitions[p];
+                    if (list == 0 ? partition.UsesL0 : partition.UsesL1)
+                    {
+                        DecodeMvd(cabac, ref partition, list);
+                    }
+                }
+            }
+        }
+
+        FinishInterMacroblockCabac(cabac);
     }
 
     private int DecodeIntraMacroblockType(CabacDecoder cabac, int offset)
@@ -167,12 +383,8 @@ internal sealed partial class SliceDecoder
 
         if (syntax.Kind == MacroblockKind.IntraNxN)
         {
-            if (_pps.Transform8x8Mode && DecodeTransformSize8x8(cabac) == 1)
-            {
-                throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
-            }
-
-            for (var block = 0; block < 16; block++)
+            syntax.Transform8x8 = _pps.Transform8x8Mode && DecodeTransformSize8x8(cabac) == 1;
+            for (var block = 0; block < (syntax.Transform8x8 ? 4 : 16); block++)
             {
                 syntax.PreviousIntraModeFlags[block] = cabac.DecodeDecision(PreviousIntraModeOffset) == 1;
                 if (!syntax.PreviousIntraModeFlags[block])
@@ -216,7 +428,7 @@ internal sealed partial class SliceDecoder
             for (var i = 0; i < 4; i++)
             {
                 var first = syntax.PartitionCount;
-                AddSubPartitions(i);
+                AddSubPartitions(i, syntax.SubMacroblockTypes[i]);
                 for (var p = first; p < syntax.PartitionCount; p++)
                 {
                     syntax.Partitions[p].ReferenceL0 = _cabacReferences[i];
@@ -247,18 +459,20 @@ internal sealed partial class SliceDecoder
             }
         }
 
+        FinishInterMacroblockCabac(cabac);
+    }
+
+    private void FinishInterMacroblockCabac(CabacDecoder cabac)
+    {
+        var syntax = _syntax;
         DecodeCodedBlockPattern(cabac);
-        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && UsesOnly8x8Partitions() && DecodeTransformSize8x8(cabac) == 1)
+        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && NoPartitionSmallerThan8x8())
         {
-            throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
+            syntax.Transform8x8 = DecodeTransformSize8x8(cabac) == 1;
         }
 
         FinishMacroblockCabac(cabac);
     }
-
-    private bool UsesOnly8x8Partitions() =>
-        _syntax.Shape != InterShape.Partition8x8
-        || (_syntax.SubMacroblockTypes[0] == 0 && _syntax.SubMacroblockTypes[1] == 0 && _syntax.SubMacroblockTypes[2] == 0 && _syntax.SubMacroblockTypes[3] == 0);
 
     private void FinishMacroblockCabac(CabacDecoder cabac)
     {
@@ -343,7 +557,13 @@ internal sealed partial class SliceDecoder
             return 0;
         }
 
-        return _picture.ReferenceIndexes[list][(macroblock * 4) + ((ny >> 1) * 2) + (nx >> 1)] > 0 ? 1 : 0;
+        var quadrant = ((ny >> 1) * 2) + (nx >> 1);
+        if ((_cabacState!.DirectBlocks[macroblock] & (1 << quadrant)) != 0)
+        {
+            return 0;
+        }
+
+        return _picture.ReferenceIndexes[list][(macroblock * 4) + quadrant] > 0 ? 1 : 0;
     }
 
     private void DecodeMvd(CabacDecoder cabac, ref InterPartition partition, int list)
@@ -528,10 +748,15 @@ internal sealed partial class SliceDecoder
             }
         }
 
+        if (syntax.Transform8x8)
+        {
+            ReadLumaResidual8x8Cabac(cabac, lumaTotals);
+        }
+
         var ac = syntax.Kind == MacroblockKind.Intra16x16;
         var category = ac ? 1 : 2;
         var coefficientCount = ac ? 15 : 16;
-        for (var block = 0; block < 16; block++)
+        for (var block = 0; block < 16 && !syntax.Transform8x8; block++)
         {
             if ((syntax.CodedBlockPatternLuma & (1 << (block >> 2))) == 0)
             {
@@ -611,6 +836,59 @@ internal sealed partial class SliceDecoder
         }
     }
 
+    private void ReadLumaResidual8x8Cabac(CabacDecoder cabac, Span<byte> lumaTotals)
+    {
+        Span<short> levels = stackalloc short[64];
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            if ((_syntax.CodedBlockPatternLuma & (1 << block8)) == 0)
+            {
+                continue;
+            }
+
+            levels.Clear();
+            var total = ReadCoefficients8x8(cabac, levels);
+            var bx = (block8 & 1) * 2;
+            var by = (block8 >> 1) * 2;
+            foreach (var position in (ReadOnlySpan<int>)[(by * 4) + bx, (by * 4) + bx + 1, ((by + 1) * 4) + bx, ((by + 1) * 4) + bx + 1])
+            {
+                lumaTotals[position] = (byte)total;
+                _codedBlockFlags |= 1 << position;
+            }
+
+            StoreLuma8x8(block8, levels);
+        }
+    }
+
+    private static int ReadCoefficients8x8(CabacDecoder cabac, Span<short> scanned)
+    {
+        Span<int> positions = stackalloc int[64];
+        var found = 0;
+        var ended = false;
+        for (var i = 0; i < 63; i++)
+        {
+            if (cabac.DecodeDecision(Significant8x8Offset + Significant8x8Increments[i]) == 0)
+            {
+                continue;
+            }
+
+            positions[found++] = i;
+            if (cabac.DecodeDecision(LastSignificant8x8Offset + LastSignificant8x8Increments[i]) == 1)
+            {
+                ended = true;
+                break;
+            }
+        }
+
+        if (!ended)
+        {
+            positions[found++] = 63;
+        }
+
+        ReadLevels(cabac, CoefficientAbsLevel8x8Offset, 4, positions[..found], scanned);
+        return found;
+    }
+
     private int MacroblockFlagCondition(int macroblock, int flag, bool currentIntra)
     {
         if (macroblock < 0)
@@ -674,10 +952,15 @@ internal sealed partial class SliceDecoder
             positions[found++] = count - 1;
         }
 
+        ReadLevels(cabac, levelBase, category == 3 ? 3 : 4, positions[..found], scanned);
+        return found;
+    }
+
+    private static void ReadLevels(CabacDecoder cabac, int levelBase, int maximumGreater, ReadOnlySpan<int> positions, Span<short> scanned)
+    {
         var greaterThanOne = 0;
         var equalToOne = 0;
-        var maximumGreater = category == 3 ? 3 : 4;
-        for (var j = found - 1; j >= 0; j--)
+        for (var j = positions.Length - 1; j >= 0; j--)
         {
             var first = greaterThanOne != 0 ? 0 : Math.Min(4, 1 + equalToOne);
             int level;
@@ -719,7 +1002,5 @@ internal sealed partial class SliceDecoder
 
             scanned[positions[j]] = (short)(negative ? -level : level);
         }
-
-        return found;
     }
 }

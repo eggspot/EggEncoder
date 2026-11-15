@@ -26,6 +26,9 @@ internal sealed partial class SliceDecoder
             case MacroblockKind.IntraPcm:
                 ReconstructPcm(buffer, lumaOffset, frame.StrideY, chromaOffsetU, chromaOffsetV, frame.StrideUV);
                 return;
+            case MacroblockKind.IntraNxN when syntax.Transform8x8:
+                ReconstructIntra8x8(buffer, lumaOffset, frame.StrideY);
+                break;
             case MacroblockKind.IntraNxN:
                 ReconstructIntra4x4(buffer, lumaOffset, frame.StrideY);
                 break;
@@ -89,6 +92,58 @@ internal sealed partial class SliceDecoder
                 _dequantizer.Dequantize4x4(syntax.LumaCoefficients.AsSpan(block * 16, 16), d, _qp, 0, keepDc: false);
                 InverseTransform.Add4x4(d, buffer, offset, stride);
             }
+        }
+    }
+
+    private void ReconstructIntra8x8(byte[] buffer, int lumaOffset, int stride)
+    {
+        var syntax = _syntax;
+        var modes = _picture.IntraModes.AsSpan(_macroblock * 16, 16);
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            var bx = (block8 & 1) * 2;
+            var by = (block8 >> 1) * 2;
+            var predicted = PredictedIntraMode(bx, by, modes);
+            var mode = syntax.PreviousIntraModeFlags[block8]
+                ? predicted
+                : syntax.RemainingIntraModes[block8] < predicted ? syntax.RemainingIntraModes[block8] : syntax.RemainingIntraModes[block8] + 1;
+            modes[(by * 4) + bx] = (byte)mode;
+            modes[(by * 4) + bx + 1] = (byte)mode;
+            modes[((by + 1) * 4) + bx] = (byte)mode;
+            modes[((by + 1) * 4) + bx + 1] = (byte)mode;
+
+            var offset = lumaOffset + (by * 4 * stride) + (bx * 4);
+            var first = block8 * 4;
+            IntraPrediction8x8.Predict(
+                buffer,
+                offset,
+                stride,
+                mode,
+                BlockSamplesAvailable(bx - 1, by, first),
+                BlockSamplesAvailable(bx, by - 1, first),
+                BlockSamplesAvailable(bx - 1, by - 1, first),
+                BlockSamplesAvailable(bx + 2, by - 1, first));
+            if (syntax.LumaBlock8x8Coded[block8])
+            {
+                _dequantizer.Dequantize8x8(syntax.LumaCoefficients.AsSpan(block8 * 64, 64), _dequantized, _qp, 0);
+                InverseTransform.Add8x8(_dequantized, buffer, offset, stride);
+            }
+        }
+    }
+
+    private void AddLumaResidual8x8(byte[] buffer, int lumaOffset, int stride, int list)
+    {
+        var syntax = _syntax;
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            if (!syntax.LumaBlock8x8Coded[block8])
+            {
+                continue;
+            }
+
+            var offset = lumaOffset + ((block8 >> 1) * 8 * stride) + ((block8 & 1) * 8);
+            _dequantizer.Dequantize8x8(syntax.LumaCoefficients.AsSpan(block8 * 64, 64), _dequantized, _qp, list);
+            InverseTransform.Add8x8(_dequantized, buffer, offset, stride);
         }
     }
 
