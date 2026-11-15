@@ -50,30 +50,18 @@ internal sealed class CabacDecoder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int DecodeDecision(int context)
     {
-        var state = _states[context];
-        uint lps = CabacTables.RangeLps[((state >> 1) << 2) + (int)((_range >> 6) & 3)];
-        _range -= lps;
-        int bin;
-        if (_offset < _range)
-        {
-            bin = state & 1;
-            _states[context] = CabacTables.NextStateMps[state];
-            if (_range >= 256)
-            {
-                return bin;
-            }
-        }
-        else
-        {
-            _offset -= _range;
-            _range = lps;
-            bin = (state & 1) ^ 1;
-            _states[context] = CabacTables.NextStateLps[state];
-        }
-
-        var shift = BitOperations.LeadingZeroCount(_range) - 23;
-        _range <<= shift;
-        _offset = (_offset << shift) | ReadBits(shift);
+        ref var state = ref _states[context];
+        int current = state;
+        uint lps = CabacTables.RangeLps[((current >> 1) << 2) + (int)((_range >> 6) & 3)];
+        var range = _range - lps;
+        var lpsMask = (uint)((int)(range - 1 - _offset) >> 31);
+        var offset = _offset - (range & lpsMask);
+        range = (range & ~lpsMask) | (lps & lpsMask);
+        var bin = (current ^ (int)lpsMask) & 1;
+        state = CabacTables.NextStateForBin[(current << 1) | bin];
+        var shift = BitOperations.LeadingZeroCount(range) - 23;
+        _range = range << shift;
+        _offset = (offset << shift) | ReadBitsOrNone(shift);
         return bin;
     }
 
@@ -125,6 +113,20 @@ internal sealed class CabacDecoder
             value += DecodeBypass() << k;
         }
 
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private uint ReadBitsOrNone(int count)
+    {
+        if (_cacheBits < count)
+        {
+            Refill();
+        }
+
+        var value = (uint)((_cache >> (63 - count)) >> 1);
+        _cache <<= count;
+        _cacheBits -= count;
         return value;
     }
 
