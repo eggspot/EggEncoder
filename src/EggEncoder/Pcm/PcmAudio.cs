@@ -59,12 +59,13 @@ public sealed class PcmAudio
     /// scale, so 16-bit audio round-trips through <see cref="ToInt16"/>.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
-    /// <exception cref="NotSupportedException">The format, the MP4 audio codec (only AAC-LC), or a channel count above 2 is not supported.</exception>
+    /// <exception cref="NotSupportedException">The format (a name without an extension is recognised by its first bytes), the MP4 audio codec (only AAC-LC), or a channel count above 2 is not supported.</exception>
     /// <exception cref="InvalidDataException">The file is damaged, has no audio track, or is too long to hold in one array.</exception>
     public static PcmAudio Decode(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        var extension = Path.GetExtension(path).ToLowerInvariant();
+        var extension = MediaFormatSniffer.ResolveExtension(path)
+            ?? throw new NotSupportedException($"'{path}' has no extension and its format isn't recognised");
         return extension is ".mp4" or ".m4a" or ".mov" ? DecodeMp4(path) : DecodeWithAudioCutter(path, extension);
     }
 

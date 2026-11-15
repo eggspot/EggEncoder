@@ -517,14 +517,34 @@ Rules for every Phase 5 item, on top of the ones above:
     grabs one (`GrabFrame`: the first frame at or after a time, else the last; `GrabJpeg`). Tested
     with a baseline decoder in the test project and, with `EGGENCODER_FFMPEG_ORACLE=1`, against
     ffmpeg's decode (within 1 per sample).
-- [ ] **31. Composition API** — `Video/Composition/VideoComposition`: scenes (clip, seek/trim, fit,
+- [x] **31. Composition API** — `Video/Composition/VideoComposition`: scenes (clip, seek/trim, fit,
   overlays, per-track volumes), concatenation, looped music with ducking, loudness normalization,
   end text and subtitles, written to MP4 frame by frame, cancellable, with progress. Inputs without
   a file extension are recognized by sniffing; the JPEG thumbnail comes from its own frames; the
   result carries has-audio, size, duration and integrated loudness. Targets: a 60 s 1080x1920
   render in at most twice real time on 4 vCPU, peak memory at most 1.5 GB.
   - **Depends on**: 2, 17, 18, 19, 21, 23, 27, 29, 30.
-  - Status: not started.
+  - Status: done. `VideoComposition` (a record: canvas, frame rate, `CompositionScene`s, optional
+    `CompositionMusic` and `CompositionEndCard`, subtitle cues, font, target loudness, CRF, profile,
+    AAC bit rate, threads, thumbnail position) renders with `Render(path|stream, progress, token)`
+    or `RenderAsync`. Each scene decodes its clip through `Mp4VideoReader` (seek to `Start`, trim to
+    `Duration`, the last frame held if the clip is shorter), converts it to BT.709 limited range
+    (`ColorConvertTransform`), fits it (`FitTransform`), runs its overlays; frames are picked for the
+    output rate by nearest presentation time, subtitles are burnt in over the whole timeline, and
+    the end card is rendered text on a plain background. Audio: each scene's AAC at its volume,
+    placed on the timeline; music looped to the full length, ducked under the clips' sound with
+    `SidechainCompressor`, mixed, then normalised (-14 LUFS by default, -1.5 dBTP). Output: H.264
+    (`H264Encoder`) and stereo 48 kHz AAC-LC in a progressive MP4 (`Mp4Writer`, scratch payloads in
+    a temp file); decoding and filtering run on their own thread ahead of the encoder (four frames
+    queued). `CompositionResult` gives has-audio, size, duration, frame count, integrated loudness
+    and a JPEG thumbnail of the frame at `ThumbnailAt`. Names without an extension are recognised by
+    their first bytes (`Media.MediaFormatSniffer`, also used by `PcmAudio.Decode`). Measured on a 60 s
+    1080x1920 30 fps `testsrc2` clip with noise and a tone (x264 + AAC), CRF 28, four encoder
+    threads, i7-8850H: rendered in 111 s (1.86x real time, target met) with a peak working set of
+    245 MB (target met); ffprobe reads 1,800 frames and the AAC track. The decode thread, the
+    entropy-writing stage and the deblocking stage run beside the four encoder threads, so the
+    machine had more than four cores busy. `CompositionBenchmarks` measures it with a clip named by
+    `EGGENCODER_COMPOSITION_BENCHMARK_CLIP`.
 
 
 ### Phase 0 — Container infrastructure (pure C#, zero patent/licensing risk)

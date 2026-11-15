@@ -37,6 +37,7 @@ inside each iteration instead.
 | `VideoFilterBenchmarks` | One 1080x1920 frame through `FitTransform` (Cover, bicubic, from 1920x1080), `BoxBlurTransform` (radius 20/10) and `OverlayTransform` (a 400x200 logo), one thread each — the per-frame cost of the filters a video render spends most of its time in (video backlog item 21). Each iteration includes cloning the input frame |
 | `H264DecodeBenchmarks` | `H264Decoder` on a whole Annex B file named by `EGGENCODER_H264_BENCHMARK_FILE` (no H.264 file is checked in for this; make one locally, for example with ffmpeg/x264), one thread, frames disposed as they come out |
 | `H264EncodeBenchmarks` | `H264Encoder` on 30 frames of 1080x1920 (a synthetic pattern, or raw `yuv420p` frames named by `EGGENCODER_H264_ENCODE_BENCHMARK_FILE`), High profile CRF 23, on 1 and 4 threads |
+| `CompositionBenchmarks` | `VideoComposition.Render` of 60 s at 1080x1920 30 fps built from the H.264 MP4 named by `EGGENCODER_COMPOSITION_BENCHMARK_CLIP` (looped as scenes), four threads |
 | `CodecDecodeBenchmarks` | Pure decode throughput, isolated from encoding, for `FlacDecoder`/`Mp3Decoder`/`WavPackDecoder`/`TtaDecoder`/`AlacDecoder`/`WmaDecoder`/`AacDecoder` — FLAC/WavPack/TTA are `docs/managed-codec-rewrite-plan.md`'s own from-scratch managed rewrites; MP3 decode is still NLayer-backed, pending `docs/external-dependency-removal-plan.md` Phase 1, so its number is the baseline the in-house decoder will be compared against. AAC is a mono fixture (`AacEncoder` is mono-only), so its number is per mono stream |
 
 ## What's not covered
