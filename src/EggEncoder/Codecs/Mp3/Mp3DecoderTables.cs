@@ -68,6 +68,8 @@ internal static class Mp3DecoderTables
 
     public static readonly float[] SynthesisColumns = BuildSynthesisColumns();
 
+    public static readonly float[] SynthesisDctColumns = BuildSynthesisDctColumns();
+
     public static readonly float[] SynthesisWindow = Array.ConvertAll(Mp3Tables.WindowCoefficients, value => (float)value);
 
     public static readonly (float Left, float Right)[] Mpeg1Intensity = BuildMpeg1Intensity();
@@ -193,7 +195,7 @@ internal static class Mp3DecoderTables
         return window;
     }
 
-    private static float[] BuildSynthesisColumns()
+    private static float[] BuildSynthesisDctColumns()
     {
         var columns = new float[32 * 32];
         for (var k = 0; k < 32; k++)
@@ -201,6 +203,20 @@ internal static class Mp3DecoderTables
             for (var i = 0; i < 32; i++)
             {
                 columns[(k * 32) + i] = (float)Math.Cos(i * ((2 * k) + 1) * Math.PI / 64);
+            }
+        }
+
+        return columns;
+    }
+
+    private static float[] BuildSynthesisColumns()
+    {
+        var columns = new float[32 * 64];
+        for (var k = 0; k < 32; k++)
+        {
+            for (var i = 0; i < 64; i++)
+            {
+                columns[(k * 64) + i] = (float)Math.Cos((16 + i) * ((2 * k) + 1) * Math.PI / 64);
             }
         }
 
