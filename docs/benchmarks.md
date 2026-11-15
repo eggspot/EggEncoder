@@ -144,6 +144,15 @@ edges through an 8x8 byte transpose) changed, interleaved A/B runs in one sessio
 | Main profile CABAC P | 0.972 s | 0.925 s | 0.358 s | 0.344 s |
 | Baseline CAVLC P | 0.682 s | 0.693 s | 0.250 s | 0.243 s |
 
+A per-thread profile (TraceEvent over a `dotnet-trace` capture, serial run) then showed explicit
+weighting applied with identity weights (x264 writes a weight table but most references keep the
+default weight), implicit bi-prediction with equal weights, and full-pel motion compensation copying
+4-16-byte rows through the general memmove. Skipping identity weights, averaging when the weights are
+equal, copying full-pel rows with fixed-width loads, and a progress wait that no longer takes a lock
+once the rows are ready: serial 1.048 -> 0.947 s (High), 0.860 -> 0.723 s (Main), 0.695 -> 0.631 s
+(Baseline); with frame threads 0.422 -> 0.386 s, 0.413 -> 0.367 s, Baseline unchanged (A/B, same
+session).
+
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 
 Budgets from the video backlog's item 21 plan: the composition (item 31) needs about 15 frames a

@@ -190,7 +190,8 @@ per macroblock) keeps what context selection reads from neighbours. Item 27 (Hig
 `SliceDecoder.Bipredictive` (B mb/sub types, spatial/temporal direct, bi-prediction weights), the
 8x8 transform in both entropy modes and `IntraPrediction8x8`. Speed: `InterPrediction` writes
 straight into the frame (16-bit vector lanes for the 6-tap, centre and bilinear filters and implicit
-weights), uniform B_Skip/B_Direct_16x16 macroblocks predict once as 16x16, per-picture macroblock
+weights; identity explicit weights are skipped and equal bi-prediction weights average), full-pel
+blocks copy with fixed-width loads, uniform B_Skip/B_Direct_16x16 macroblocks predict once as 16x16, per-picture macroblock
 arrays come from `MacroblockArrayPool`, and `DeblockingFilter` works from a coefficient bitmask per
 macroblock plus a uniform-motion flag (internal edges of such a macroblock need no motion check, an
 edge between two needs one) and filters eight samples at once (`DeblockingFilter.Vectors`: 8x8 byte

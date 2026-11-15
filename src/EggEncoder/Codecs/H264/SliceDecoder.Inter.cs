@@ -436,9 +436,17 @@ internal sealed partial class SliceDecoder
         }
 
         var (lumaWeight, lumaOffset) = weights.Luma[list][reference];
-        InterPrediction.WeightExplicit(luma, lumaStride, width, height, weights.LumaLog2Denominator, lumaWeight, lumaOffset);
+        WeightExplicit(luma, lumaStride, width, height, weights.LumaLog2Denominator, lumaWeight, lumaOffset);
         var chroma = weights.Chroma[list][reference];
-        InterPrediction.WeightExplicit(cb, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[0].Weight, chroma[0].Offset);
-        InterPrediction.WeightExplicit(cr, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[1].Weight, chroma[1].Offset);
+        WeightExplicit(cb, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[0].Weight, chroma[0].Offset);
+        WeightExplicit(cr, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[1].Weight, chroma[1].Offset);
+    }
+
+    private static void WeightExplicit(Span<byte> samples, int stride, int width, int height, int log2Denominator, int weight, int offset)
+    {
+        if (weight != 1 << log2Denominator || offset != 0)
+        {
+            InterPrediction.WeightExplicit(samples, stride, width, height, log2Denominator, weight, offset);
+        }
     }
 }
