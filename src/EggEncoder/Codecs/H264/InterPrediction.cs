@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -374,22 +376,26 @@ internal static class InterPrediction
         {
             var target = first.Slice(j * firstStride, width);
             var source = second.Slice(j * secondStride, width);
+            ref var targetStart = ref MemoryMarshal.GetReference(target);
+            ref var sourceStart = ref MemoryMarshal.GetReference(source);
             var i = 0;
-            if (width >= 16)
+            for (; i + 16 <= width; i += 16)
             {
-                for (; i + 16 <= width; i += 16)
-                {
-                    var a = Vector128.Create<byte>(target[i..]);
-                    var b = Vector128.Create<byte>(source[i..]);
-                    ((a | b) - Vector128.ShiftRightLogical(a ^ b, 1)).CopyTo(target[i..]);
-                }
+                RoundedByteAverage(Vector128.LoadUnsafe(ref targetStart, (nuint)i), Vector128.LoadUnsafe(ref sourceStart, (nuint)i)).StoreUnsafe(ref targetStart, (nuint)i);
             }
 
             for (; i + 8 <= width; i += 8)
             {
-                var a = BinaryPrimitives.ReadUInt64LittleEndian(target[i..]);
-                var b = BinaryPrimitives.ReadUInt64LittleEndian(source[i..]);
-                BinaryPrimitives.WriteUInt64LittleEndian(target[i..], (a | b) - (((a ^ b) >> 1) & 0x7F7F7F7F7F7F7F7FUL));
+                var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref targetStart, i))).AsByte();
+                var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref sourceStart, i))).AsByte();
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref targetStart, i), RoundedByteAverage(a, b).AsUInt64().ToScalar());
+            }
+
+            for (; i + 4 <= width; i += 4)
+            {
+                var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref targetStart, i))).AsByte();
+                var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref sourceStart, i))).AsByte();
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref targetStart, i), RoundedByteAverage(a, b).AsUInt32().ToScalar());
             }
 
             for (; i < width; i++)
@@ -397,6 +403,22 @@ internal static class InterPrediction
                 target[i] = (byte)((target[i] + source[i] + 1) >> 1);
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<byte> RoundedByteAverage(Vector128<byte> a, Vector128<byte> b)
+    {
+        if (Sse2.IsSupported)
+        {
+            return Sse2.Average(a, b);
+        }
+
+        if (AdvSimd.IsSupported)
+        {
+            return AdvSimd.FusedAddRoundedHalving(a, b);
+        }
+
+        return (a | b) - Vector128.ShiftRightLogical(a ^ b, 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

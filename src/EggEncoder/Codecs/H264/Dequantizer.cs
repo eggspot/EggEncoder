@@ -1,3 +1,5 @@
+using System.Runtime.Intrinsics;
+using System.Runtime.InteropServices;
 namespace EggEncoder.Codecs.H264;
 
 internal sealed class Dequantizer
@@ -75,33 +77,47 @@ internal sealed class Dequantizer
 
     public void Dequantize4x4(ReadOnlySpan<short> levels, Span<int> output, int qp, int list, bool keepDc)
     {
-        var scale = _levelScale4x4[list][qp % 6];
-        var shift = qp / 6;
-        for (var i = keepDc ? 1 : 0; i < 16; i++)
+        var dc = output[0];
+        Scale(levels[..16], _levelScale4x4[list][qp % 6], output[..16], qp / 6, 4);
+        if (keepDc)
         {
-            int level = levels[i];
-            if (level == 0)
-            {
-                output[i] = 0;
-                continue;
-            }
-
-            output[i] = shift >= 4
-                ? (level * scale[i]) << (shift - 4)
-                : ((level * scale[i]) + (1 << (3 - shift))) >> (4 - shift);
+            output[0] = dc;
         }
     }
 
-    public void Dequantize8x8(ReadOnlySpan<short> levels, Span<int> output, int qp, int list)
+    public void Dequantize8x8(ReadOnlySpan<short> levels, Span<int> output, int qp, int list) =>
+        Scale(levels[..64], _levelScale8x8[list][qp % 6], output[..64], qp / 6, 6);
+
+    private static void Scale(ReadOnlySpan<short> levels, int[] scale, Span<int> output, int shift, int normalShift)
     {
-        var scale = _levelScale8x8[list][qp % 6];
-        var shift = qp / 6;
-        for (var i = 0; i < 64; i++)
+        ref var levelStart = ref MemoryMarshal.GetReference(levels);
+        ref var scaleStart = ref MemoryMarshal.GetArrayDataReference(scale);
+        ref var outputStart = ref MemoryMarshal.GetReference(output);
+        var count = levels.Length;
+        if (shift >= normalShift)
         {
-            int level = levels[i];
-            output[i] = level == 0 ? 0
-                : shift >= 6 ? (level * scale[i]) << (shift - 6)
-                : ((level * scale[i]) + (1 << (5 - shift))) >> (6 - shift);
+            var left = shift - normalShift;
+            for (var i = 0; i < count; i += 8)
+            {
+                var level = Vector128.LoadUnsafe(ref levelStart, (nuint)i);
+                var low = Vector128.WidenLower(level) * Vector128.LoadUnsafe(ref scaleStart, (nuint)i);
+                var high = Vector128.WidenUpper(level) * Vector128.LoadUnsafe(ref scaleStart, (nuint)(i + 4));
+                Vector128.ShiftLeft(low, left).StoreUnsafe(ref outputStart, (nuint)i);
+                Vector128.ShiftLeft(high, left).StoreUnsafe(ref outputStart, (nuint)(i + 4));
+            }
+
+            return;
+        }
+
+        var right = normalShift - shift;
+        var rounding = Vector128.Create(1 << (right - 1));
+        for (var i = 0; i < count; i += 8)
+        {
+            var level = Vector128.LoadUnsafe(ref levelStart, (nuint)i);
+            var low = (Vector128.WidenLower(level) * Vector128.LoadUnsafe(ref scaleStart, (nuint)i)) + rounding;
+            var high = (Vector128.WidenUpper(level) * Vector128.LoadUnsafe(ref scaleStart, (nuint)(i + 4))) + rounding;
+            Vector128.ShiftRightArithmetic(low, right).StoreUnsafe(ref outputStart, (nuint)i);
+            Vector128.ShiftRightArithmetic(high, right).StoreUnsafe(ref outputStart, (nuint)(i + 4));
         }
     }
 
