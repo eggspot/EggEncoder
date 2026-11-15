@@ -17,6 +17,7 @@ internal sealed class CompositionRenderer
     private const int AudioChannels = 2;
     private const int VideoTimescale = 90000;
     private const int FrameQueueCapacity = 4;
+    private const int EncoderDelayedFrames = 2;
 
     private readonly VideoComposition _composition;
     private readonly VideoFramePool _pool = new();
@@ -44,7 +45,8 @@ internal sealed class CompositionRenderer
             Profile = _composition.Profile,
             ColorRange = VideoColorRange.Limited,
             ColorMatrix = VideoColorMatrix.Bt709,
-            MaxDegreeOfParallelism = _parallelism
+            MaxDegreeOfParallelism = _parallelism,
+            MaxDelayedFrames = EncoderDelayedFrames
         };
         using var encoder = new H264Encoder(settings);
         var videoTrack = new MediaTrackInfo(0, MediaKind.Video, MediaCodec.H264, VideoTimescale, encoder.DecoderConfiguration.ToArray(), 0, width: _composition.Width, height: _composition.Height);
@@ -131,6 +133,13 @@ internal sealed class CompositionRenderer
         byte[]? thumbnail = null;
         VideoFrame? lastFrame = null;
         long index = 0;
+        var presentationTimes = new Queue<long>();
+        void WritePacket(H264EncodedFrame encoded)
+        {
+            var pts = presentationTimes.Dequeue();
+            writer.Write(new MediaPacket(0, pts, pts, encoded.IsKeyframe, 0, encoded.Payload));
+        }
+
         try
         {
             foreach (var frame in frames.GetConsumingEnumerable(cancellationToken))
@@ -143,8 +152,8 @@ internal sealed class CompositionRenderer
                         thumbnail = JpegEncoder.Encode(frame, _composition.ThumbnailQuantizerScale);
                     }
 
-                    var pts = MediaTimestamp.Rescale(timestamp.Ticks, (int)TimeSpan.TicksPerSecond, VideoTimescale);
-                    encoder.Encode(frame, encoded => writer.Write(new MediaPacket(0, pts, pts, encoded.IsKeyframe, 0, encoded.Payload)));
+                    presentationTimes.Enqueue(MediaTimestamp.Rescale(timestamp.Ticks, (int)TimeSpan.TicksPerSecond, VideoTimescale));
+                    encoder.Encode(frame, WritePacket);
                     if (thumbnail is null)
                     {
                         lastFrame?.Dispose();
@@ -157,7 +166,7 @@ internal sealed class CompositionRenderer
             }
 
             producer.GetAwaiter().GetResult();
-            encoder.Flush(_ => { });
+            encoder.Flush(WritePacket);
             thumbnail ??= JpegEncoder.Encode(lastFrame!, _composition.ThumbnailQuantizerScale);
             return thumbnail;
         }

@@ -168,7 +168,7 @@ internal sealed partial class MacroblockEncoder
         if (_reference is null)
         {
             var intra16Cost = AnalyseIntra16x16(out var intra16Mode);
-            var intra4x4Cost = AnalyseIntra4x4();
+            var intra4x4Cost = AnalyseIntra4x4(intra16Cost);
             if (intra4x4Cost < intra16Cost)
             {
                 UseIntra4x4();
@@ -187,7 +187,7 @@ internal sealed partial class MacroblockEncoder
         var intraCost = AnalyseIntra16x16(out var mode);
         if (intraCost < interCost)
         {
-            var intra4x4Cost = AnalyseIntra4x4();
+            var intra4x4Cost = AnalyseIntra4x4(intraCost);
             if (intra4x4Cost < intraCost)
             {
                 UseIntra4x4();

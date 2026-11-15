@@ -153,6 +153,57 @@ namespace EggEncoder.UnitTests.Codecs.H264
             DecodeToMd5(threaded.Stream).Should().Equal(single.Reconstructions);
         }
 
+        [Theory]
+        [InlineData(H264Profile.Baseline, 1)]
+        [InlineData(H264Profile.High, 1)]
+        [InlineData(H264Profile.High, 3)]
+        [InlineData(H264Profile.Main, 8)]
+        public void Delayed_Frames_Should_Come_Out_In_Order_With_The_Same_Bytes(H264Profile profile, int delayedFrames)
+        {
+            var frames = SyntheticFrames(176, 144, 10);
+            for (var i = 0; i < frames.Count; i++)
+            {
+                frames[i].Timestamp = TimeSpan.FromMilliseconds(40 * i);
+            }
+
+            var settings = new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), Profile = profile, MaxDegreeOfParallelism = 4, KeyframeInterval = 4 };
+            var immediate = EncodeWithDelay(settings, frames);
+            var delayed = EncodeWithDelay(settings with { MaxDelayedFrames = delayedFrames }, frames);
+
+            delayed.Stream.Should().Equal(immediate.Stream);
+            delayed.Timestamps.Should().Equal(frames.Select(f => f.Timestamp));
+            delayed.Keyframes.Should().Equal(immediate.Keyframes);
+            for (var call = 0; call < frames.Count; call++)
+            {
+                immediate.OutputAfterCall[call].Should().Be(call + 1);
+                delayed.OutputAfterCall[call].Should().BeGreaterThanOrEqualTo(call + 1 - delayedFrames);
+            }
+        }
+
+        [Fact]
+        public void An_Encoder_Disposed_With_Frames_Held_Back_Should_Release_Them()
+        {
+            var frames = SyntheticFrames(176, 144, 3);
+            var encoder = new H264Encoder(new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), MaxDelayedFrames = 3 });
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, _ => { });
+            }
+
+            encoder.Invoking(e => e.Dispose()).Should().NotThrow();
+            encoder.Invoking(e => e.Flush(_ => { })).Should().Throw<ObjectDisposedException>();
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(H264EncoderSettings.MaxDelayedFramesLimit + 1)]
+        public void Out_Of_Range_Delayed_Frames_Should_Be_Refused(int delayedFrames)
+        {
+            var settings = new H264EncoderSettings { Width = 64, Height = 48, FrameRate = new VideoFrameRate(25), MaxDelayedFrames = delayedFrames };
+
+            FluentActions.Invoking(() => new H264Encoder(settings)).Should().Throw<ArgumentException>();
+        }
+
         [Fact]
         public void Lower_Rate_Factor_Should_Produce_A_Larger_Stream()
         {
@@ -394,6 +445,30 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
 
             return ([.. stream], reconstructions, keyframes);
+        }
+
+        private static (byte[] Stream, List<TimeSpan> Timestamps, List<bool> Keyframes, List<int> OutputAfterCall) EncodeWithDelay(H264EncoderSettings settings, List<VideoFrame> frames)
+        {
+            using var encoder = new H264Encoder(settings);
+            var stream = new List<byte>();
+            var timestamps = new List<TimeSpan>();
+            var keyframes = new List<bool>();
+            var outputAfterCall = new List<int>();
+            void Collect(H264EncodedFrame encoded)
+            {
+                stream.AddRange(AnnexBConverter.ToAnnexB(encoded.Payload.Span));
+                timestamps.Add(encoded.Timestamp);
+                keyframes.Add(encoded.IsKeyframe);
+            }
+
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, Collect);
+                outputAfterCall.Add(timestamps.Count);
+            }
+
+            encoder.Flush(Collect);
+            return ([.. stream], timestamps, keyframes, outputAfterCall);
         }
 
         private static double Psnr(H264EncoderSettings settings, List<VideoFrame> frames)
