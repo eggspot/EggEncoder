@@ -466,32 +466,65 @@ internal sealed partial class SliceDecoder
         return (colocated.ReferenceIndexes[list][slot], vectors[2 * index], vectors[(2 * index) + 1], colocated.ReferencePictureIds[list][slot]);
     }
 
-    private void CombineBipredicted(int referenceL0, int referenceL1, Span<byte> luma, Span<byte> cb, Span<byte> cr, ReadOnlySpan<byte> luma1, ReadOnlySpan<byte> cb1, ReadOnlySpan<byte> cr1)
+    private void CombineBipredicted(int referenceL0, int referenceL1, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride, ReadOnlySpan<byte> luma1, ReadOnlySpan<byte> cb1, ReadOnlySpan<byte> cr1, int width, int height)
     {
+        var chromaWidth = width / 2;
+        var chromaHeight = height / 2;
         if (_header.Weights is { } weights)
         {
             var (lumaWeight0, lumaOffset0) = weights.Luma[0][referenceL0];
             var (lumaWeight1, lumaOffset1) = weights.Luma[1][referenceL1];
-            InterPrediction.Bipredict(luma, luma1, weights.LumaLog2Denominator, lumaWeight0, lumaWeight1, lumaOffset0, lumaOffset1);
+            InterPrediction.Bipredict(luma, lumaStride, luma1, width, width, height, weights.LumaLog2Denominator, lumaWeight0, lumaWeight1, lumaOffset0, lumaOffset1);
             var chroma0 = weights.Chroma[0][referenceL0];
             var chroma1 = weights.Chroma[1][referenceL1];
-            InterPrediction.Bipredict(cb, cb1, weights.ChromaLog2Denominator, chroma0[0].Weight, chroma1[0].Weight, chroma0[0].Offset, chroma1[0].Offset);
-            InterPrediction.Bipredict(cr, cr1, weights.ChromaLog2Denominator, chroma0[1].Weight, chroma1[1].Weight, chroma0[1].Offset, chroma1[1].Offset);
+            InterPrediction.Bipredict(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[0].Weight, chroma1[0].Weight, chroma0[0].Offset, chroma1[0].Offset);
+            InterPrediction.Bipredict(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[1].Weight, chroma1[1].Weight, chroma0[1].Offset, chroma1[1].Offset);
             return;
         }
 
         if (_pps.WeightedBipredictionIdc == 2)
         {
             var (weight0, weight1) = ImplicitWeights(referenceL0, referenceL1);
-            InterPrediction.Bipredict(luma, luma1, 5, weight0, weight1, 0, 0);
-            InterPrediction.Bipredict(cb, cb1, 5, weight0, weight1, 0, 0);
-            InterPrediction.Bipredict(cr, cr1, 5, weight0, weight1, 0, 0);
+            InterPrediction.BipredictImplicit(luma, lumaStride, luma1, width, width, height, weight0, weight1);
+            InterPrediction.BipredictImplicit(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight, weight0, weight1);
+            InterPrediction.BipredictImplicit(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight, weight0, weight1);
             return;
         }
 
-        InterPrediction.AverageInto(luma, luma1);
-        InterPrediction.AverageInto(cb, cb1);
-        InterPrediction.AverageInto(cr, cr1);
+        InterPrediction.AverageInto(luma, lumaStride, luma1, width, width, height);
+        InterPrediction.AverageInto(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight);
+        InterPrediction.AverageInto(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight);
+    }
+
+    private bool HasUniformDirectMotion()
+    {
+        var syntax = _syntax;
+        var first = syntax.Partitions[0];
+        for (var p = 1; p < syntax.PartitionCount; p++)
+        {
+            ref var partition = ref syntax.Partitions[p];
+            if (partition.UsesL0 != first.UsesL0 || partition.UsesL1 != first.UsesL1 || partition.ReferenceL0 != first.ReferenceL0 || partition.ReferenceL1 != first.ReferenceL1)
+            {
+                return false;
+            }
+        }
+
+        for (var list = 0; list < 2; list++)
+        {
+            if (list == 0 ? !first.UsesL0 : !first.UsesL1)
+            {
+                continue;
+            }
+
+            var vectors = _picture.MotionVectors[list].AsSpan(_macroblock * 32, 32);
+            var reference = System.Runtime.InteropServices.MemoryMarshal.Cast<short, int>(vectors);
+            if (reference.IndexOfAnyExcept(reference[0]) >= 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private (int Weight0, int Weight1) ImplicitWeights(int referenceL0, int referenceL1)

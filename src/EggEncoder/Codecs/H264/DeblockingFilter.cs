@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -38,117 +40,172 @@ internal static class DeblockingFilter
     public static void Apply(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices)
     {
         var width = picture.WidthInMacroblocks;
-        var height = picture.HeightInMacroblocks;
-        Span<byte> strengths = stackalloc byte[16];
-        for (var macroblock = 0; macroblock < width * height; macroblock++)
+        var count = width * picture.HeightInMacroblocks;
+        var masks = ArrayPool<ushort>.Shared.Rent(count);
+        try
         {
-            var slice = picture.SliceNumbers[macroblock];
-            if (slice < 0)
+            for (var macroblock = 0; macroblock < count; macroblock++)
             {
-                continue;
+                masks[macroblock] = CoefficientMask(picture, macroblock);
             }
 
-            var parameters = slices[slice];
-            if (parameters.DisableIdc == 1)
+            Span<byte> strengths = stackalloc byte[4];
+            for (var macroblock = 0; macroblock < count; macroblock++)
             {
-                continue;
-            }
-
-            var mbX = macroblock % width;
-            var mbY = macroblock / width;
-            var left = mbX > 0 ? macroblock - 1 : -1;
-            var top = mbY > 0 ? macroblock - width : -1;
-            if (left >= 0 && (picture.SliceNumbers[left] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[left] != slice)))
-            {
-                left = -1;
-            }
-
-            if (top >= 0 && (picture.SliceNumbers[top] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[top] != slice)))
-            {
-                top = -1;
-            }
-
-            for (var vertical = 1; vertical >= 0; vertical--)
-            {
-                var neighbour = vertical == 1 ? left : top;
-                for (var edge = 0; edge < 4; edge++)
+                var slice = picture.SliceNumbers[macroblock];
+                if (slice < 0)
                 {
-                    if (edge == 0 && neighbour < 0)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (edge % 2 == 1 && picture.Transform8x8[macroblock])
-                    {
-                        continue;
-                    }
+                var parameters = slices[slice];
+                if (parameters.DisableIdc == 1)
+                {
+                    continue;
+                }
 
-                    if (edge > 0 && HasUniformMotionWithoutCoefficients(picture, macroblock))
-                    {
-                        continue;
-                    }
+                var mbX = macroblock % width;
+                var mbY = macroblock / width;
+                var left = mbX > 0 ? macroblock - 1 : -1;
+                var top = mbY > 0 ? macroblock - width : -1;
+                if (left >= 0 && (picture.SliceNumbers[left] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[left] != slice)))
+                {
+                    left = -1;
+                }
 
-                    var any = false;
-                    for (var k = 0; k < 4; k++)
-                    {
-                        strengths[k] = BoundaryStrength(picture, macroblock, edge == 0 ? neighbour : macroblock, vertical == 1, edge, k);
-                        any |= strengths[k] != 0;
-                    }
+                if (top >= 0 && (picture.SliceNumbers[top] < 0 || (parameters.DisableIdc == 2 && picture.SliceNumbers[top] != slice)))
+                {
+                    top = -1;
+                }
 
-                    if (!any)
+                var intra = picture.IsIntra(macroblock);
+                var transform8x8 = picture.Transform8x8[macroblock];
+                var mask = masks[macroblock];
+                var skipInternal = !intra && mask == 0 && picture.Kinds[macroblock] is MacroblockKind.PSkip or MacroblockKind.P16x16 or MacroblockKind.B16x16;
+                for (var vertical = 1; vertical >= 0; vertical--)
+                {
+                    var neighbour = vertical == 1 ? left : top;
+                    for (var edge = 0; edge < 4; edge++)
                     {
-                        continue;
-                    }
+                        if (edge == 0 ? neighbour < 0 : skipInternal || (transform8x8 && (edge & 1) == 1))
+                        {
+                            continue;
+                        }
 
-                    var pMacroblock = edge == 0 ? neighbour : macroblock;
-                    FilterLumaEdge(picture, macroblock, pMacroblock, vertical == 1, edge, strengths[..4], parameters);
-                    if (edge % 2 == 0)
-                    {
-                        FilterChromaEdge(picture, macroblock, pMacroblock, vertical == 1, edge / 2, strengths[..4], parameters);
+                        var p = edge == 0 ? neighbour : macroblock;
+                        if (intra || (edge == 0 && picture.IsIntra(p)))
+                        {
+                            strengths.Fill((byte)(edge == 0 ? 4 : 3));
+                        }
+                        else if (!EdgeStrengths(picture, macroblock, mask, p, masks[p], vertical == 1, edge, strengths))
+                        {
+                            continue;
+                        }
+
+                        FilterLumaEdge(picture, macroblock, p, vertical == 1, edge, strengths, parameters);
+                        if ((edge & 1) == 0)
+                        {
+                            FilterChromaEdge(picture, macroblock, p, vertical == 1, edge / 2, strengths, parameters);
+                        }
                     }
                 }
             }
         }
+        finally
+        {
+            ArrayPool<ushort>.Shared.Return(masks);
+        }
     }
 
-    private static bool HasUniformMotionWithoutCoefficients(H264Picture picture, int macroblock) =>
-        picture.Kinds[macroblock] is MacroblockKind.PSkip or MacroblockKind.P16x16 or MacroblockKind.B16x16
-        && picture.TotalCoefficientsLuma.AsSpan(macroblock * 16, 16).IndexOfAnyExcept((byte)0) < 0;
-
-    private static byte BoundaryStrength(H264Picture picture, int q, int p, bool vertical, int edge, int k)
+    private static ushort CoefficientMask(H264Picture picture, int macroblock)
     {
-        var macroblockEdge = edge == 0;
-        if (picture.IsIntra(q) || picture.IsIntra(p))
+        var totals = picture.TotalCoefficientsLuma.AsSpan(macroblock * 16, 16);
+        var mask = 0;
+        for (var i = 0; i < 16; i++)
         {
-            return (byte)(macroblockEdge ? 4 : 3);
+            if (totals[i] != 0)
+            {
+                mask |= 1 << i;
+            }
         }
 
-        var qx = vertical ? edge : k;
-        var qy = vertical ? k : edge;
-        var px = vertical ? (macroblockEdge ? 3 : edge - 1) : k;
-        var py = vertical ? k : (macroblockEdge ? 3 : edge - 1);
-        if (HasCoefficients(picture, q, qx, qy) || HasCoefficients(picture, p, px, py))
-        {
-            return 2;
-        }
-
-        return MotionDiffers(picture, q, (qy * 4) + qx, p, (py * 4) + px) ? (byte)1 : (byte)0;
-    }
-
-    private static bool HasCoefficients(H264Picture picture, int macroblock, int x, int y)
-    {
         if (picture.Transform8x8[macroblock])
         {
-            var x8 = x & ~1;
-            var y8 = y & ~1;
-            var start = macroblock * 16;
-            return picture.TotalCoefficientsLuma[start + (y8 * 4) + x8] != 0
-                || picture.TotalCoefficientsLuma[start + (y8 * 4) + x8 + 1] != 0
-                || picture.TotalCoefficientsLuma[start + ((y8 + 1) * 4) + x8] != 0
-                || picture.TotalCoefficientsLuma[start + ((y8 + 1) * 4) + x8 + 1] != 0;
+            var expanded = 0;
+            for (var block8 = 0; block8 < 4; block8++)
+            {
+                var corner = ((block8 >> 1) * 8) + ((block8 & 1) * 2);
+                var quad = (1 << corner) | (1 << (corner + 1)) | (1 << (corner + 4)) | (1 << (corner + 5));
+                if ((mask & quad) != 0)
+                {
+                    expanded |= quad;
+                }
+            }
+
+            mask = expanded;
         }
 
-        return picture.TotalCoefficientsLuma[(macroblock * 16) + (y * 4) + x] != 0;
+        return (ushort)mask;
+    }
+
+    private static bool EdgeStrengths(H264Picture picture, int q, int qMask, int p, int pMask, bool vertical, int edge, Span<byte> strengths)
+    {
+        var any = false;
+        var pEdge = edge == 0 ? 3 : edge - 1;
+        for (var k = 0; k < 4; k++)
+        {
+            var qBlock = vertical ? (k * 4) + edge : (edge * 4) + k;
+            var pBlock = vertical ? (k * 4) + pEdge : (pEdge * 4) + k;
+            byte strength;
+            if (((qMask >> qBlock) & 1) != 0 || ((pMask >> pBlock) & 1) != 0)
+            {
+                strength = 2;
+            }
+            else
+            {
+                strength = !SameMotion(picture, q, qBlock, p, pBlock) && MotionDiffers(picture, q, qBlock, p, pBlock) ? (byte)1 : (byte)0;
+            }
+
+            strengths[k] = strength;
+            any |= strength != 0;
+        }
+
+        return any;
+    }
+
+    private static bool SameMotion(H264Picture picture, int q, int qBlock, int p, int pBlock)
+    {
+        var qPartition = (q * 4) + ((qBlock >> 3) * 2) + ((qBlock & 3) >> 1);
+        var pPartition = (p * 4) + ((pBlock >> 3) * 2) + ((pBlock & 3) >> 1);
+        var qVector = (q * 16) + qBlock;
+        var pVector = (p * 16) + pBlock;
+        for (var list = 0; list < 2; list++)
+        {
+            var qReference = picture.ReferenceIndexes[list][qPartition];
+            var pReference = picture.ReferenceIndexes[list][pPartition];
+            if ((qReference < 0) != (pReference < 0))
+            {
+                return false;
+            }
+
+            if (qReference < 0)
+            {
+                continue;
+            }
+
+            if (picture.ReferencePictureIds[list][qPartition] != picture.ReferencePictureIds[list][pPartition])
+            {
+                return false;
+            }
+
+            var vectors = MemoryMarshal.Cast<short, int>(picture.MotionVectors[list]);
+            if (vectors[qVector] != vectors[pVector])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool MotionDiffers(H264Picture picture, int q, int qBlock, int p, int pBlock)
@@ -272,10 +329,11 @@ internal static class DeblockingFilter
 
     private static void FilterSamples(byte[] buffer, int q0Index, int step, int bS, int alpha, int beta, int tc0, bool chroma)
     {
-        int p0 = buffer[q0Index - step];
-        int p1 = buffer[q0Index - (2 * step)];
-        int q0 = buffer[q0Index];
-        int q1 = buffer[q0Index + step];
+        ref var q0Ref = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(buffer), q0Index);
+        int p0 = Unsafe.Add(ref q0Ref, -step);
+        int p1 = Unsafe.Add(ref q0Ref, -2 * step);
+        int q0 = q0Ref;
+        int q1 = Unsafe.Add(ref q0Ref, step);
         if (Math.Abs(p0 - q0) >= alpha || Math.Abs(p1 - p0) >= beta || Math.Abs(q1 - q0) >= beta)
         {
             return;
@@ -287,64 +345,64 @@ internal static class DeblockingFilter
             {
                 var tc = tc0 + 1;
                 var delta = Math.Clamp((((q0 - p0) << 2) + (p1 - q1) + 4) >> 3, -tc, tc);
-                buffer[q0Index - step] = IntraPrediction.Clip(p0 + delta);
-                buffer[q0Index] = IntraPrediction.Clip(q0 - delta);
+                Unsafe.Add(ref q0Ref, -step) = IntraPrediction.Clip(p0 + delta);
+                q0Ref = IntraPrediction.Clip(q0 - delta);
             }
             else
             {
-                buffer[q0Index - step] = (byte)(((2 * p1) + p0 + q1 + 2) >> 2);
-                buffer[q0Index] = (byte)(((2 * q1) + q0 + p1 + 2) >> 2);
+                Unsafe.Add(ref q0Ref, -step) = (byte)(((2 * p1) + p0 + q1 + 2) >> 2);
+                q0Ref = (byte)(((2 * q1) + q0 + p1 + 2) >> 2);
             }
 
             return;
         }
 
-        int p2 = buffer[q0Index - (3 * step)];
-        int q2 = buffer[q0Index + (2 * step)];
+        int p2 = Unsafe.Add(ref q0Ref, -3 * step);
+        int q2 = Unsafe.Add(ref q0Ref, 2 * step);
         var ap = Math.Abs(p2 - p0);
         var aq = Math.Abs(q2 - q0);
         if (bS < 4)
         {
             var tc = tc0 + (ap < beta ? 1 : 0) + (aq < beta ? 1 : 0);
             var delta = Math.Clamp((((q0 - p0) << 2) + (p1 - q1) + 4) >> 3, -tc, tc);
-            buffer[q0Index - step] = IntraPrediction.Clip(p0 + delta);
-            buffer[q0Index] = IntraPrediction.Clip(q0 - delta);
+            Unsafe.Add(ref q0Ref, -step) = IntraPrediction.Clip(p0 + delta);
+            q0Ref = IntraPrediction.Clip(q0 - delta);
             if (ap < beta)
             {
-                buffer[q0Index - (2 * step)] = (byte)(p1 + Math.Clamp((p2 + ((p0 + q0 + 1) >> 1) - (p1 << 1)) >> 1, -tc0, tc0));
+                Unsafe.Add(ref q0Ref, -2 * step) = (byte)(p1 + Math.Clamp((p2 + ((p0 + q0 + 1) >> 1) - (p1 << 1)) >> 1, -tc0, tc0));
             }
 
             if (aq < beta)
             {
-                buffer[q0Index + step] = (byte)(q1 + Math.Clamp((q2 + ((p0 + q0 + 1) >> 1) - (q1 << 1)) >> 1, -tc0, tc0));
+                Unsafe.Add(ref q0Ref, step) = (byte)(q1 + Math.Clamp((q2 + ((p0 + q0 + 1) >> 1) - (q1 << 1)) >> 1, -tc0, tc0));
             }
 
             return;
         }
 
-        int p3 = buffer[q0Index - (4 * step)];
-        int q3 = buffer[q0Index + (3 * step)];
+        int p3 = Unsafe.Add(ref q0Ref, -4 * step);
+        int q3 = Unsafe.Add(ref q0Ref, 3 * step);
         var strong = Math.Abs(p0 - q0) < ((alpha >> 2) + 2);
         if (ap < beta && strong)
         {
-            buffer[q0Index - step] = (byte)((p2 + (2 * p1) + (2 * p0) + (2 * q0) + q1 + 4) >> 3);
-            buffer[q0Index - (2 * step)] = (byte)((p2 + p1 + p0 + q0 + 2) >> 2);
-            buffer[q0Index - (3 * step)] = (byte)(((2 * p3) + (3 * p2) + p1 + p0 + q0 + 4) >> 3);
+            Unsafe.Add(ref q0Ref, -step) = (byte)((p2 + (2 * p1) + (2 * p0) + (2 * q0) + q1 + 4) >> 3);
+            Unsafe.Add(ref q0Ref, -2 * step) = (byte)((p2 + p1 + p0 + q0 + 2) >> 2);
+            Unsafe.Add(ref q0Ref, -3 * step) = (byte)(((2 * p3) + (3 * p2) + p1 + p0 + q0 + 4) >> 3);
         }
         else
         {
-            buffer[q0Index - step] = (byte)(((2 * p1) + p0 + q1 + 2) >> 2);
+            Unsafe.Add(ref q0Ref, -step) = (byte)(((2 * p1) + p0 + q1 + 2) >> 2);
         }
 
         if (aq < beta && strong)
         {
-            buffer[q0Index] = (byte)((p1 + (2 * p0) + (2 * q0) + (2 * q1) + q2 + 4) >> 3);
-            buffer[q0Index + step] = (byte)((p0 + q0 + q1 + q2 + 2) >> 2);
-            buffer[q0Index + (2 * step)] = (byte)(((2 * q3) + (3 * q2) + q1 + q0 + p0 + 4) >> 3);
+            q0Ref = (byte)((p1 + (2 * p0) + (2 * q0) + (2 * q1) + q2 + 4) >> 3);
+            Unsafe.Add(ref q0Ref, step) = (byte)((p0 + q0 + q1 + q2 + 2) >> 2);
+            Unsafe.Add(ref q0Ref, 2 * step) = (byte)(((2 * q3) + (3 * q2) + q1 + q0 + p0 + 4) >> 3);
         }
         else
         {
-            buffer[q0Index] = (byte)(((2 * q1) + q0 + p1 + 2) >> 2);
+            q0Ref = (byte)(((2 * q1) + q0 + p1 + 2) >> 2);
         }
     }
 }

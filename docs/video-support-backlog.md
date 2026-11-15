@@ -457,7 +457,8 @@ Rules for every Phase 5 item, on top of the ones above:
     scaling matrices, a cropped picture) and three with rewritten headers (explicit weighted
     bi-prediction; spatial and temporal direct without 8x8 inference). A 1080p High profile stream
     (60 frames, x264 medium preset) decodes byte-identical to ffmpeg, about 14 fps on one core of an
-    i7-8850H (ffmpeg with one thread: about 110 fps); the performance pass is next.
+    i7-8850H at first and 45 fps after the performance pass that followed (see `docs/benchmarks.md`;
+    ffmpeg with one thread: about 180 fps).
 - [ ] **28. H.264 encode I** — I and P frames, CAVLC, intra mode decision (SAD/SATD), hexagon search
   with quarter-pel refinement, deblocking, CRF-like rate control, a correct `level_idc`, VUI timing,
   SAR 1:1, SPS cropping for sizes that aren't multiples of 16. Tests: encoder reconstruction equals

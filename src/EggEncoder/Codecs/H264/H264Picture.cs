@@ -21,16 +21,11 @@ internal enum MacroblockKind : byte
     B8x8
 }
 
-internal sealed class H264Picture : IDisposable
+internal sealed class MacroblockArrays
 {
-    public const int Padding = 32;
-
-    public H264Picture(VideoFramePool pool, SequenceParameterSet sps)
+    public MacroblockArrays(int count)
     {
-        WidthInMacroblocks = sps.WidthInMacroblocks;
-        HeightInMacroblocks = sps.HeightInMacroblocks;
-        var count = WidthInMacroblocks * HeightInMacroblocks;
-        Frame = pool.Rent(WidthInMacroblocks * 16, HeightInMacroblocks * 16, sps.Range, sps.ColorMatrix, Padding);
+        Count = count;
         Kinds = new MacroblockKind[count];
         SliceNumbers = new int[count];
         QpY = new sbyte[count];
@@ -38,15 +33,88 @@ internal sealed class H264Picture : IDisposable
         IntraModes = new byte[count * 16];
         TotalCoefficientsLuma = new byte[count * 16];
         TotalCoefficientsChroma = new byte[count * 8];
-        MotionVectors = new short[2][];
-        ReferenceIndexes = new sbyte[2][];
-        ReferencePictureIds = new int[2][];
-        for (var list = 0; list < 2; list++)
+        MotionVectors = [new short[count * 32], new short[count * 32]];
+        ReferenceIndexes = [new sbyte[count * 4], new sbyte[count * 4]];
+        ReferencePictureIds = [new int[count * 4], new int[count * 4]];
+    }
+
+    public int Count { get; }
+
+    public MacroblockKind[] Kinds { get; }
+
+    public int[] SliceNumbers { get; }
+
+    public sbyte[] QpY { get; }
+
+    public bool[] Transform8x8 { get; }
+
+    public byte[] IntraModes { get; }
+
+    public byte[] TotalCoefficientsLuma { get; }
+
+    public byte[] TotalCoefficientsChroma { get; }
+
+    public short[][] MotionVectors { get; }
+
+    public sbyte[][] ReferenceIndexes { get; }
+
+    public int[][] ReferencePictureIds { get; }
+}
+
+internal sealed class MacroblockArrayPool
+{
+    private const int MaxRetained = 20;
+
+    private readonly Stack<MacroblockArrays> _free = new();
+
+    public MacroblockArrays Rent(int count)
+    {
+        while (_free.TryPop(out var arrays))
         {
-            MotionVectors[list] = new short[count * 32];
-            ReferenceIndexes[list] = new sbyte[count * 4];
-            ReferencePictureIds[list] = new int[count * 4];
+            if (arrays.Count == count)
+            {
+                return arrays;
+            }
         }
+
+        return new MacroblockArrays(count);
+    }
+
+    public void Return(MacroblockArrays arrays)
+    {
+        if (_free.Count < MaxRetained)
+        {
+            _free.Push(arrays);
+        }
+    }
+}
+
+internal sealed class H264Picture : IDisposable
+{
+    public const int Padding = 32;
+
+    private readonly MacroblockArrays _arrays;
+    private readonly MacroblockArrayPool? _arrayPool;
+    private bool _disposed;
+
+    public H264Picture(VideoFramePool pool, SequenceParameterSet sps, MacroblockArrayPool? arrayPool = null)
+    {
+        WidthInMacroblocks = sps.WidthInMacroblocks;
+        HeightInMacroblocks = sps.HeightInMacroblocks;
+        var count = WidthInMacroblocks * HeightInMacroblocks;
+        Frame = pool.Rent(WidthInMacroblocks * 16, HeightInMacroblocks * 16, sps.Range, sps.ColorMatrix, Padding);
+        _arrayPool = arrayPool;
+        _arrays = arrayPool?.Rent(count) ?? new MacroblockArrays(count);
+        Kinds = _arrays.Kinds;
+        SliceNumbers = _arrays.SliceNumbers;
+        QpY = _arrays.QpY;
+        Transform8x8 = _arrays.Transform8x8;
+        IntraModes = _arrays.IntraModes;
+        TotalCoefficientsLuma = _arrays.TotalCoefficientsLuma;
+        TotalCoefficientsChroma = _arrays.TotalCoefficientsChroma;
+        MotionVectors = _arrays.MotionVectors;
+        ReferenceIndexes = _arrays.ReferenceIndexes;
+        ReferencePictureIds = _arrays.ReferencePictureIds;
     }
 
     public VideoFrame Frame { get; }
@@ -109,5 +177,15 @@ internal sealed class H264Picture : IDisposable
         Array.Fill(SliceNumbers, -1);
     }
 
-    public void Dispose() => Frame.Dispose();
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        Frame.Dispose();
+        _arrayPool?.Return(_arrays);
+    }
 }

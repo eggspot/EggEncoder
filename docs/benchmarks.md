@@ -35,6 +35,7 @@ inside each iteration instead.
 | `AudioCutterBenchmarks` | End-to-end `AudioCutter.Convert` (decode block → encode block) throughput for WAV→MP3 and WAV→FLAC — the path a real transcode call actually runs, encode and decode together |
 | `AacStreamingBenchmarks` | `AacEncoderSession`'s own incremental push throughput (1024-sample blocks, 5s mono) and allocation behavior — the encoder most directly used in a real-time/streaming pipeline (see `docs/streaming-plan.md`) |
 | `VideoFilterBenchmarks` | One 1080x1920 frame through `FitTransform` (Cover, bicubic, from 1920x1080), `BoxBlurTransform` (radius 20/10) and `OverlayTransform` (a 400x200 logo), one thread each — the per-frame cost of the filters a video render spends most of its time in (video backlog item 21). Each iteration includes cloning the input frame |
+| `H264DecodeBenchmarks` | `H264Decoder` on a whole Annex B file named by `EGGENCODER_H264_BENCHMARK_FILE` (no H.264 file is checked in for this; make one locally, for example with ffmpeg/x264), one thread, frames disposed as they come out |
 | `CodecDecodeBenchmarks` | Pure decode throughput, isolated from encoding, for `FlacDecoder`/`Mp3Decoder`/`WavPackDecoder`/`TtaDecoder`/`AlacDecoder`/`WmaDecoder`/`AacDecoder` — FLAC/WavPack/TTA are `docs/managed-codec-rewrite-plan.md`'s own from-scratch managed rewrites; MP3 decode is still NLayer-backed, pending `docs/external-dependency-removal-plan.md` Phase 1, so its number is the baseline the in-house decoder will be compared against. AAC is a mono fixture (`AacEncoder` is mono-only), so its number is per mono stream |
 
 ## What's not covered
@@ -50,6 +51,26 @@ pre-emptively covering everything.
 
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
+
+### H.264 decode (Intel Core i7-8850H, .NET 10.0.12, AVX2, short job, `--inProcess`)
+
+Three 1080p streams of 60 frames made locally from `testsrc2` with ffmpeg's libx264: High profile
+(medium preset: B-pyramid, 8x8 transform, CABAC, weighted P), Main profile CABAC P (three
+references, no B) and Baseline CAVLC P. Before this entry the decoder ran at 25, 37 and 58 fps;
+predicting straight into the frame, vectorised interpolation and bi-prediction, one 16x16
+prediction for uniform direct macroblocks, an allocation-free intra 8x8 path, pooled per-picture
+arrays and cheaper deblocking decisions (a coefficient mask per macroblock, an equality check before
+the motion rule, no bounds checks in the sample filter) brought it to:
+
+| Stream | Mean (60 frames) | Frames per second | Allocated |
+|--------|-----:|-----:|----------:|
+| High profile, medium preset | 1.344 s | 45 | 14.5 MB |
+| Main profile CABAC P | 983 ms | 61 | 12.7 MB |
+| Baseline CAVLC P | 654 ms | 92 | 8.5 MB |
+
+For comparison, ffmpeg's decoder (hand-written SIMD assembly) on the same files and machine: 0.33 s,
+0.28 s and 0.16 s with one thread, 0.11 s, 0.10 s and 0.08 s with its default frame threads. The
+renderer needs well under one core for real-time 1080p decode, so frame threading is left for later.
 
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 
