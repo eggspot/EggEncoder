@@ -113,6 +113,11 @@ For comparison, ffmpeg's decoder (hand-written SIMD assembly) on the same files 
 0.28 s and 0.16 s with one thread, 0.11 s, 0.10 s and 0.08 s with its default frame threads. The
 renderer needs well under one core for real-time 1080p decode, so frame threading is left for later.
 
+Later, deblocking moved to a second thread running a row behind decoding (best of 6-8 runs in a
+scratch harness, same machine): 1.025 s (59 fps), 0.825 s (73 fps) and 0.526 s (114 fps) for the
+same three streams. On the decoding thread, inter prediction is now about 44% and CABAC residual
+decoding about 24% of the time.
+
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 
 Budgets from the video backlog's item 21 plan: the composition (item 31) needs about 15 frames a

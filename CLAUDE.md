@@ -160,8 +160,11 @@ length-prefixed or Annex B), parses parameter sets into `SequenceParameterSet`/
 `H264Picture` (padded `VideoFrame` from the pool + per-macroblock arrays: kind, slice number, QP,
 intra modes, CAVLC totals, motion vectors and reference ids per 4x4/8x8) on the first slice and
 decodes each slice with `SliceDecoder` (parse one macroblock into `MacroblockSyntax`, then
-reconstruct it). After the last slice, `DeblockingFilter` runs over the picture and the cropped area
-is copied into a fresh frame for the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
+reconstruct it). `DeblockingFilter` runs on a second thread a row behind decoding: the slice decoder
+reports each macroblock row through a `RowProgress`, row r is filtered once row r+1 is decoded (intra
+prediction reads unfiltered samples), and slice parameters sit in a per-picture array; slices out of
+raster order, or a single-core machine, deblock the whole picture at the end. The cropped area is then
+copied into a fresh frame for the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
 SP/SI, data partitioning, lossless. Items 24-25 decode I and P slices with CAVLC: `SliceDecoder.Inter` parses
 P partitions into `MacroblockSyntax.Partitions`, predicts motion vectors from neighbours in partition
 decoding order (`_motionAssigned`), and `InterPrediction` interpolates straight from the reference
