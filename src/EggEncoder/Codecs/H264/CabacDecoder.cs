@@ -68,14 +68,10 @@ internal sealed class CabacDecoder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int DecodeBypass()
     {
-        _offset = (_offset << 1) | ReadBits(1);
-        if (_offset >= _range)
-        {
-            _offset -= _range;
-            return 1;
-        }
-
-        return 0;
+        var offset = (_offset << 1) | ReadBits(1);
+        var oneMask = (uint)((int)(_range - 1 - offset) >> 31);
+        _offset = offset - (_range & oneMask);
+        return (int)(oneMask & 1);
     }
 
     public int DecodeTerminate()
