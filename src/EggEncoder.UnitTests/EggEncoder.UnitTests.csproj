@@ -91,6 +91,7 @@
     <None Include="Codecs\Mov\stereo_48000_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\h264_aac_rotated.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\hevc.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Avi\*.avi" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\vp9_aac.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Matroska\*.mkv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Matroska\*.webm" CopyToOutputDirectory="Always" />
