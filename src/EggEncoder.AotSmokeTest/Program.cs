@@ -726,6 +726,38 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("JPEG: encode a frame and an MP4 frame grab", () =>
+    {
+        using var frame = EggEncoder.Video.VideoFrame.Create(33, 17);
+        frame.Fill(new EggEncoder.Video.RgbaColor(200, 40, 90).ToYuv(EggEncoder.Video.VideoColorMatrix.Bt709, EggEncoder.Video.VideoColorRange.Limited));
+        var jpeg = EggEncoder.Codecs.Jpeg.JpegEncoder.Encode(frame);
+        var mp4 = new MemoryStream();
+        using (var h264 = new EggEncoder.Codecs.H264.H264Encoder(new EggEncoder.Codecs.H264.H264EncoderSettings { Width = 32, Height = 32, FrameRate = new EggEncoder.Video.VideoFrameRate(25) }))
+        using (var mp4Writer = new EggEncoder.Containers.Mp4.Mp4Writer(mp4, leaveOpen: true, new MemoryStream()))
+        {
+            mp4Writer.Open(new EggEncoder.Media.MediaTrackSet([new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, h264.DecoderConfiguration.ToArray(), 0, width: 32, height: 32)]));
+            using var picture = EggEncoder.Video.VideoFrame.Create(32, 32);
+            for (var index = 0; index < 2; index++)
+            {
+                picture.Fill(new EggEncoder.Video.YuvColor((byte)(60 + (index * 40)), 128, 128));
+                picture.Timestamp = TimeSpan.FromMilliseconds(40 * index);
+                h264.Encode(picture, encoded => mp4Writer.Write(new EggEncoder.Media.MediaPacket(0, 40 * index, 40 * index, encoded.IsKeyframe, 0, encoded.Payload)));
+            }
+
+            mp4Writer.Complete();
+        }
+
+        mp4.Position = 0;
+        using var reader = new EggEncoder.Containers.Mp4.Mp4VideoReader(mp4);
+        var grabbed = reader.GrabJpeg(TimeSpan.FromMilliseconds(40));
+        if (jpeg[0] != 0xFF || jpeg[1] != 0xD8 || jpeg[^2] != 0xFF || jpeg[^1] != 0xD9 || grabbed.Length < 100 || reader.DisplaySize != (32, 32))
+        {
+            throw new InvalidOperationException("JPEG check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
