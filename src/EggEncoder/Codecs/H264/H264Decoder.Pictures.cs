@@ -8,6 +8,7 @@ public sealed partial class H264Decoder
     private readonly Dictionary<int, (PictureParameterSet Pps, SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
     private readonly DecodedPictureBuffer _buffer = new();
     private readonly CabacDecoder _cabac = new();
+    private readonly MacroblockArrayPool _arrayPool = new();
     private CabacNeighbourState? _cabacState;
     private H264Picture? _current;
     private SliceHeader? _currentFirstSlice;
@@ -47,7 +48,7 @@ public sealed partial class H264Decoder
         }
 
         _activeSequenceSet = sps;
-        _current = new H264Picture(_pool, sps);
+        _current = new H264Picture(_pool, sps, _arrayPool);
         _current.PictureId = _buffer.NewPictureId();
         _current.ResetMacroblocks();
         _current.Timestamp = timestamp;

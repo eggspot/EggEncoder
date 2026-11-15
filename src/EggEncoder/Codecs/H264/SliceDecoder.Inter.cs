@@ -211,9 +211,19 @@ internal sealed partial class SliceDecoder
             }
         }
 
-        for (var p = 0; p < syntax.PartitionCount; p++)
+        if (syntax.Kind is MacroblockKind.BSkip or MacroblockKind.BDirect16x16 && HasUniformDirectMotion())
         {
-            PredictPartition(ref syntax.Partitions[p], buffer, lumaOffset, lumaStride, offsetU, offsetV, chromaStride);
+            var whole = syntax.Partitions[0];
+            whole.Width = 4;
+            whole.Height = 4;
+            PredictPartition(ref whole, buffer, lumaOffset, lumaStride, offsetU, offsetV, chromaStride);
+        }
+        else
+        {
+            for (var p = 0; p < syntax.PartitionCount; p++)
+            {
+                PredictPartition(ref syntax.Partitions[p], buffer, lumaOffset, lumaStride, offsetU, offsetV, chromaStride);
+            }
         }
 
         if (syntax.Transform8x8)
@@ -377,46 +387,30 @@ internal sealed partial class SliceDecoder
         var width = partition.Width * 4;
         var height = partition.Height * 4;
         var index = (_macroblock * 16) + (partition.Y * 4) + partition.X;
-        Span<byte> luma = stackalloc byte[256];
-        Span<byte> cb = stackalloc byte[64];
-        Span<byte> cr = stackalloc byte[64];
-        var lumaBlock = luma[..(width * height)];
-        var cbBlock = cb[..(width * height / 4)];
-        var crBlock = cr[..(width * height / 4)];
+        var x = partition.X * 4;
+        var y = partition.Y * 4;
+        var luma = buffer.AsSpan(lumaOffset + (y * lumaStride) + x);
+        var cb = buffer.AsSpan(offsetU + ((y / 2) * chromaStride) + (x / 2));
+        var cr = buffer.AsSpan(offsetV + ((y / 2) * chromaStride) + (x / 2));
         if (partition.UsesL0 && partition.UsesL1)
         {
-            Span<byte> luma1 = stackalloc byte[256];
-            Span<byte> cb1 = stackalloc byte[64];
-            Span<byte> cr1 = stackalloc byte[64];
-            var luma1Block = luma1[..(width * height)];
-            var cb1Block = cb1[..(width * height / 4)];
-            var cr1Block = cr1[..(width * height / 4)];
-            PredictFromList(0, partition.ReferenceL0, index, partition, lumaBlock, cbBlock, crBlock);
-            PredictFromList(1, partition.ReferenceL1, index, partition, luma1Block, cb1Block, cr1Block);
-            CombineBipredicted(partition.ReferenceL0, partition.ReferenceL1, lumaBlock, cbBlock, crBlock, luma1Block, cb1Block, cr1Block);
+            Span<byte> luma1 = stackalloc byte[width * height];
+            Span<byte> cb1 = stackalloc byte[width * height / 4];
+            Span<byte> cr1 = stackalloc byte[width * height / 4];
+            PredictFromList(0, partition.ReferenceL0, index, partition, luma, lumaStride, cb, cr, chromaStride);
+            PredictFromList(1, partition.ReferenceL1, index, partition, luma1, width, cb1, cr1, width / 2);
+            CombineBipredicted(partition.ReferenceL0, partition.ReferenceL1, luma, lumaStride, cb, cr, chromaStride, luma1, cb1, cr1, width, height);
         }
         else
         {
             var reference = partition.UsesL0 ? partition.ReferenceL0 : partition.ReferenceL1;
             var list = partition.UsesL0 ? 0 : 1;
-            PredictFromList(list, reference, index, partition, lumaBlock, cbBlock, crBlock);
-            ApplyWeights(list, reference, lumaBlock, cbBlock, crBlock);
-        }
-        var x = partition.X * 4;
-        var y = partition.Y * 4;
-        for (var row = 0; row < height; row++)
-        {
-            lumaBlock.Slice(row * width, width).CopyTo(buffer.AsSpan(lumaOffset + ((y + row) * lumaStride) + x, width));
-        }
-
-        for (var row = 0; row < height / 2; row++)
-        {
-            cbBlock.Slice(row * width / 2, width / 2).CopyTo(buffer.AsSpan(offsetU + (((y / 2) + row) * chromaStride) + (x / 2), width / 2));
-            crBlock.Slice(row * width / 2, width / 2).CopyTo(buffer.AsSpan(offsetV + (((y / 2) + row) * chromaStride) + (x / 2), width / 2));
+            PredictFromList(list, reference, index, partition, luma, lumaStride, cb, cr, chromaStride);
+            ApplyWeights(list, reference, luma, lumaStride, cb, cr, chromaStride, width, height);
         }
     }
 
-    private void PredictFromList(int list, int reference, int index, InterPartition partition, Span<byte> luma, Span<byte> cb, Span<byte> cr)
+    private void PredictFromList(int list, int reference, int index, InterPartition partition, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride)
     {
         var picture = (list == 0 ? _referencesL0 : _referencesL1)[reference];
         var vectors = _picture.MotionVectors[list];
@@ -426,12 +420,12 @@ internal sealed partial class SliceDecoder
         var height = partition.Height * 4;
         var x = (_mbX * 16) + (partition.X * 4);
         var y = (_mbY * 16) + (partition.Y * 4);
-        InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma);
-        InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb);
-        InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr);
+        InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma, lumaStride);
+        InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, chromaStride);
+        InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr, chromaStride);
     }
 
-    private void ApplyWeights(int list, int reference, Span<byte> luma, Span<byte> cb, Span<byte> cr)
+    private void ApplyWeights(int list, int reference, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride, int width, int height)
     {
         if (_header.Weights is not { } weights)
         {
@@ -439,9 +433,9 @@ internal sealed partial class SliceDecoder
         }
 
         var (lumaWeight, lumaOffset) = weights.Luma[list][reference];
-        InterPrediction.WeightExplicit(luma, weights.LumaLog2Denominator, lumaWeight, lumaOffset);
+        InterPrediction.WeightExplicit(luma, lumaStride, width, height, weights.LumaLog2Denominator, lumaWeight, lumaOffset);
         var chroma = weights.Chroma[list][reference];
-        InterPrediction.WeightExplicit(cb, weights.ChromaLog2Denominator, chroma[0].Weight, chroma[0].Offset);
-        InterPrediction.WeightExplicit(cr, weights.ChromaLog2Denominator, chroma[1].Weight, chroma[1].Offset);
+        InterPrediction.WeightExplicit(cb, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[0].Weight, chroma[0].Offset);
+        InterPrediction.WeightExplicit(cr, chromaStride, width / 2, height / 2, weights.ChromaLog2Denominator, chroma[1].Weight, chroma[1].Offset);
     }
 }
