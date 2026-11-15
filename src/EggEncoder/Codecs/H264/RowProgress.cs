@@ -3,27 +3,38 @@ namespace EggEncoder.Codecs.H264;
 internal sealed class RowProgress
 {
     private const int DefaultSpinRounds = 64;
+    private const int NobodyWaiting = int.MaxValue;
 
     private readonly int[] _done;
+    private readonly int[] _lowestAwaited;
+    private readonly object[] _gates;
     private readonly int _spinRounds;
-    private readonly object _gate = new();
-    private int _waiting;
     private volatile bool _cancelled;
 
     public RowProgress(int rows, int spinRounds = DefaultSpinRounds)
     {
         _done = new int[rows];
+        _lowestAwaited = new int[rows];
+        Array.Fill(_lowestAwaited, NobodyWaiting);
+        _gates = new object[rows];
+        for (var row = 0; row < rows; row++)
+        {
+            _gates[row] = new object();
+        }
+
         _spinRounds = spinRounds;
     }
 
     public void Report(int row, int done)
     {
         Interlocked.Exchange(ref _done[row], done);
-        if (Volatile.Read(ref _waiting) > 0)
+        if (done >= Volatile.Read(ref _lowestAwaited[row]))
         {
-            lock (_gate)
+            var gate = _gates[row];
+            lock (gate)
             {
-                Monitor.PulseAll(_gate);
+                _lowestAwaited[row] = NobodyWaiting;
+                Monitor.PulseAll(gate);
             }
         }
     }
@@ -33,9 +44,12 @@ internal sealed class RowProgress
     public void Cancel()
     {
         _cancelled = true;
-        lock (_gate)
+        foreach (var gate in _gates)
         {
-            Monitor.PulseAll(_gate);
+            lock (gate)
+            {
+                Monitor.PulseAll(gate);
+            }
         }
     }
 
@@ -57,21 +71,25 @@ internal sealed class RowProgress
             Thread.SpinWait(32);
         }
 
-        Interlocked.Increment(ref _waiting);
-        try
+        var gate = _gates[row];
+        lock (gate)
         {
-            lock (_gate)
+            while (true)
             {
-                while (Volatile.Read(ref _done[row]) < done)
+                ThrowIfCancelled();
+                if (done < _lowestAwaited[row])
                 {
-                    ThrowIfCancelled();
-                    Monitor.Wait(_gate);
+                    Volatile.Write(ref _lowestAwaited[row], done);
                 }
+
+                Interlocked.MemoryBarrier();
+                if (Volatile.Read(ref _done[row]) >= done)
+                {
+                    return;
+                }
+
+                Monitor.Wait(gate);
             }
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _waiting);
         }
     }
 
