@@ -26,6 +26,8 @@ public sealed partial class H264Encoder : IDisposable
     private readonly H264RateControl _rateControl;
     private readonly int _keyframeInterval;
     private readonly VideoFrame _source;
+    private readonly CabacEncoder? _cabac;
+    private readonly CabacNeighbourState? _cabacState;
     private H264Picture? _reference;
     private long _frameIndex;
     private int _frameNum;
@@ -67,6 +69,11 @@ public sealed partial class H264Encoder : IDisposable
         _dequantizer = new Dequantizer(_pps.ScalingListsFor(_sps));
         _rateControl = new H264RateControl(settings.ConstantRateFactor);
         _source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, range, matrix);
+        if (_pps.EntropyCodingCabac)
+        {
+            _cabac = new CabacEncoder();
+            _cabacState = new CabacNeighbourState(_sps.MacroblockCount);
+        }
     }
 
     /// <summary>The <c>avcC</c> record (SPS and PPS) a container needs to play the output.</summary>
@@ -124,11 +131,10 @@ public sealed partial class H264Encoder : IDisposable
                 ReferenceCountL0 = 1
             };
             var references = keyframe ? Array.Empty<H264Picture>() : [_reference!];
-            var slice = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, []);
+            var slice = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, _cabacState);
             var bits = new BitWriter();
             WriteSliceHeader(bits, header, keyframe);
-            new MacroblockEncoder(slice, picture, _source, keyframe ? null : _reference, qp, _dequantizer, _pps.ChromaQpIndexOffset).EncodeSlice(bits);
-            bits.WriteTrailingBits();
+            new MacroblockEncoder(slice, picture, _source, keyframe ? null : _reference, qp, _dequantizer, _pps.ChromaQpIndexOffset).EncodeSlice(bits, _cabac, header.Type);
             NalUnitWriter.AppendLengthPrefixed(payload, (header.NalReferenceIdc << 5) | (keyframe ? 5 : 1), bits.ToArray());
             DeblockingFilter.Apply(picture, [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)]);
             ExtendBorders(picture.Frame);

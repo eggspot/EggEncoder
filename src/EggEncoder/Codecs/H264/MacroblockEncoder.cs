@@ -60,12 +60,24 @@ internal sealed partial class MacroblockEncoder
 
     private Span<byte> SourceV => _source.Buffer.AsSpan(_source.OffsetV + (_mbY * 8 * _source.StrideUV) + (_mbX * 8));
 
-    public void EncodeSlice(BitWriter bits)
+    public void EncodeSlice(BitWriter bits, CabacEncoder? cabac, SliceType type)
     {
         var width = _picture.WidthInMacroblocks;
         var count = width * _picture.HeightInMacroblocks;
         var skipRun = 0;
         var frame = _picture.Frame;
+        if (cabac is not null)
+        {
+            while (bits.BitPosition % 8 != 0)
+            {
+                bits.WriteBits(1, 1);
+            }
+
+            cabac.InitializeContexts(type, 0, _qp);
+            cabac.Start(bits);
+            _slice.StartCabacWriting();
+        }
+
         for (var macroblock = 0; macroblock < count; macroblock++)
         {
             _mbX = macroblock % width;
@@ -77,12 +89,21 @@ internal sealed partial class MacroblockEncoder
             if (_reference is not null && TryEncodeSkip())
             {
                 _slice.ReconstructSkippedMacroblock();
-                skipRun++;
+                if (cabac is not null)
+                {
+                    _slice.WriteSkippedMacroblockCabac(cabac);
+                    cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
+                }
+                else
+                {
+                    skipRun++;
+                }
+
                 continue;
             }
 
             var syntax = _slice.Syntax;
-            if (_reference is not null)
+            if (_reference is not null && cabac is null)
             {
                 bits.WriteUe((uint)skipRun);
                 skipRun = 0;
@@ -90,13 +111,29 @@ internal sealed partial class MacroblockEncoder
 
             var (mvX, mvY) = Decide();
             _slice.ReconstructCurrentMacroblock();
-            WriteMacroblock(bits, syntax, mvX, mvY);
+            if (cabac is not null)
+            {
+                _slice.WriteMacroblockCabac(cabac);
+                cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
+            }
+            else
+            {
+                WriteMacroblock(bits, syntax, mvX, mvY);
+            }
+        }
+
+        if (cabac is not null)
+        {
+            bits.ByteAlign();
+            return;
         }
 
         if (skipRun > 0)
         {
             bits.WriteUe((uint)skipRun);
         }
+
+        bits.WriteTrailingBits();
     }
 
     private (int MvdX, int MvdY) Decide()

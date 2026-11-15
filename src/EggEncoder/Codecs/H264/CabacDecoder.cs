@@ -21,14 +21,9 @@ internal sealed class CabacDecoder
     public void InitializeContexts(SliceType type, int cabacInitIdc, int sliceQp)
     {
         var column = type == SliceType.I ? 0 : cabacInitIdc + 1;
-        var qp = Math.Clamp(sliceQp, 0, 51);
-        var table = CabacTables.ContextInit;
         for (var context = 0; context < CabacTables.ContextCount; context++)
         {
-            int m = table[(context * 8) + (column * 2)];
-            int n = table[(context * 8) + (column * 2) + 1];
-            var state = Math.Clamp(((m * qp) >> 4) + n, 1, 126);
-            _states[context] = state <= 63 ? (byte)((63 - state) << 1) : (byte)(((state - 64) << 1) | 1);
+            _states[context] = CabacTables.InitialState(context, column, sliceQp);
         }
     }
 

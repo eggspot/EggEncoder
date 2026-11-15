@@ -32,7 +32,9 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
 
             var writer = new BitWriter();
-            var encoder = new CabacTestEncoder(writer, 2, 30);
+            var encoder = new CabacEncoder();
+            encoder.InitializeContexts(SliceType.P, 1, 30);
+            encoder.Start(writer);
             foreach (var (kind, context, bin) in operations)
             {
                 switch (kind)
@@ -156,7 +158,9 @@ namespace EggEncoder.UnitTests.Codecs.H264
                     w.WriteBits(1, 1);
                 }
 
-                var encoder = new CabacTestEncoder(w, 0, 26);
+                var encoder = new CabacEncoder();
+                encoder.InitializeContexts(SliceType.I, 0, 26);
+                encoder.Start(w);
                 var count = widthInMbs * heightInMbs;
                 for (var mb = 0; mb < count; mb++)
                 {
@@ -169,7 +173,7 @@ namespace EggEncoder.UnitTests.Codecs.H264
                         w.WriteBits(sample(mb, i), 8);
                     }
 
-                    encoder.Restart();
+                    encoder.Start(w);
                     encoder.EncodeTerminate(mb == count - 1 ? 1 : 0);
                 }
             }, appendStopBit: false);
