@@ -25,6 +25,9 @@
     <None Include="Video\Filters\*.yuv" CopyToOutputDirectory="Always" />
     <None Include="Video\Text\*.ttf" CopyToOutputDirectory="Always" />
     <None Include="Codecs\H264\*.h264" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mpeg2\*.m2v" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mpeg2\*.m1v" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mpeg2\*.yuv" CopyToOutputDirectory="Always" />
     <None Include="Pcm\delayed_aac.mp4" CopyToOutputDirectory="Always" />
     <None Include="Pcm\delayed_aac_ffmpeg.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Aiff\fixture_none_mono.aifc" CopyToOutputDirectory="Always" />

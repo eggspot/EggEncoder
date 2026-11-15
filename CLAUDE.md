@@ -224,6 +224,26 @@ transform of any 4x4 block whose SAD is under the bound (`Quantizer.ZeroLevelSad
 guarantees every coefficient quantises to zero. `H264EncodeBenchmarks` times 1080x1920 encodes; an
 `EGGENCODER_H264_ENCODE_TARGET_FILE`-gated test checks the real-time target.
 
+### MPEG-2 video decoder (`src/EggEncoder/Codecs/Mpeg2/`)
+
+`docs/video-support-backlog.md` item 8, clean-room from ISO/IEC 13818-2 (MPEG-2's last US patent expired in 2018).
+`Mpeg2VideoDecoder` (public) takes an elementary stream in chunks of any size, splits it at start codes, and decodes a
+picture once the next picture/GOP/sequence start code arrives; a picture gets the timestamp of the chunk its picture
+start code came in, and I/P pictures are held one picture for display order. `Mpeg2Sequence`/`Mpeg2PictureHeader`
+parse the sequence header, sequence/display/quant-matrix extensions and picture coding extension (frame rate reduced
+to lowest terms; matrix BT.709 from the display extension, else BT.601 below 720 lines). `Mpeg2SliceDecoder` decodes
+macroblocks: Annex B VLCs (`Mpeg2Tables`, built into 2^n lookups by `Mpeg2Vlc` from the code strings, overlaps
+rejected at type init), skipped macroblocks (P: zero-vector forward; B: previous macroblock's prediction),
+frame/field motion vectors with f_code ranges and PMV halving for field vectors, intra DC prediction,
+B.14/B.15 coefficient tables, zigzag/alternate scan, linear/non-linear quantiser scale, inverse quantisation with
+saturation and mismatch control, frame/field DCT, half-pel prediction with clamped edges, bidirectional averaging.
+`Mpeg2Idct` is a double-precision separable IDCT (IEEE 1180 accuracy), so output matches ffmpeg within IDCT
+tolerance, not bit for bit. Refused: field pictures, dual-prime, 4:2:2/4:4:4, scalable extensions, D pictures, MPEG-1.
+Damaged data throws `InvalidDataException` (a bit-reader overrun is converted). Fixtures (ffmpeg's mpeg2video, 64x48):
+`progressive.m2v` (B-frames) and `interlaced.m2v` (field DCT/prediction, alternate scan, intra VLC table B.15,
+non-linear quantiser), each with ffmpeg's decode as `.yuv`; tests require PSNR > 40 dB on every frame. No MPEG-PS/TS
+demuxer yet.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`
