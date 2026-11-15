@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using EggEncoder.Video;
@@ -76,18 +77,30 @@ internal sealed class HalfPelPlanes
 
             var target = (row * Stride) + 0;
             var centerRow = frame.OffsetY + (y * stride) - Margin;
+            ref var tapStart = ref MemoryMarshal.GetReference(taps);
+            var row0 = (nuint)(Slot(y - 2) * tapStride);
+            var row1 = (nuint)(Slot(y - 1) * tapStride);
+            var row2 = (nuint)(Slot(y) * tapStride);
+            var row3 = (nuint)(Slot(y + 1) * tapStride);
+            var row4 = (nuint)(Slot(y + 2) * tapStride);
+            var row5 = (nuint)(Slot(y + 3) * tapStride);
             for (var x = 0; x < columns; x += 8)
             {
-                var b = Vector128.Create<short>(taps.Slice((Slot(y) * tapStride) + x, 8));
-                Store(Horizontal, target + x, Vector128.ShiftRightArithmetic(b + Vector128.Create((short)16), 5));
+                var column = (nuint)x;
+                var t0 = Vector128.LoadUnsafe(ref tapStart, row0 + column);
+                var t1 = Vector128.LoadUnsafe(ref tapStart, row1 + column);
+                var t2 = Vector128.LoadUnsafe(ref tapStart, row2 + column);
+                var t3 = Vector128.LoadUnsafe(ref tapStart, row3 + column);
+                var t4 = Vector128.LoadUnsafe(ref tapStart, row4 + column);
+                var t5 = Vector128.LoadUnsafe(ref tapStart, row5 + column);
+                Store(Horizontal, target + x, Vector128.ShiftRightArithmetic(t2 + Vector128.Create((short)16), 5));
                 var vertical = Load(source, centerRow + x - (2 * stride)) + Load(source, centerRow + x + (3 * stride))
                     - (Vector128.Create((short)5) * (Load(source, centerRow + x - stride) + Load(source, centerRow + x + (2 * stride))))
                     + (Vector128.Create((short)20) * (Load(source, centerRow + x) + Load(source, centerRow + x + stride)));
                 Store(Vertical, target + x, Vector128.ShiftRightArithmetic(vertical + Vector128.Create((short)16), 5));
-                var (low, high) = CenterTaps(taps, tapStride, x, y);
-                var lowShifted = Vector128.ShiftRightArithmetic(low + Vector128.Create(512), 10);
-                var highShifted = Vector128.ShiftRightArithmetic(high + Vector128.Create(512), 10);
-                Store(Center, target + x, Vector128.Narrow(Vector128.Min(Vector128.Max(lowShifted, Vector128<int>.Zero), Vector128.Create(255)), Vector128.Min(Vector128.Max(highShifted, Vector128<int>.Zero), Vector128.Create(255))));
+                var low = CenterTaps(Vector128.WidenLower(t0), Vector128.WidenLower(t1), Vector128.WidenLower(t2), Vector128.WidenLower(t3), Vector128.WidenLower(t4), Vector128.WidenLower(t5));
+                var high = CenterTaps(Vector128.WidenUpper(t0), Vector128.WidenUpper(t1), Vector128.WidenUpper(t2), Vector128.WidenUpper(t3), Vector128.WidenUpper(t4), Vector128.WidenUpper(t5));
+                Store(Center, target + x, Vector128.Narrow(low, high));
             }
         }
     }
@@ -105,20 +118,11 @@ internal sealed class HalfPelPlanes
     private static int Slot(int row) => ((row % 6) + 6) % 6;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (Vector128<int> Low, Vector128<int> High) CenterTaps(ReadOnlySpan<short> taps, int stride, int x, int y)
+    private static Vector128<int> CenterTaps(Vector128<int> t0, Vector128<int> t1, Vector128<int> t2, Vector128<int> t3, Vector128<int> t4, Vector128<int> t5)
     {
-        var low = Vector128<int>.Zero;
-        var high = Vector128<int>.Zero;
-        ReadOnlySpan<int> weights = [1, -5, 20, 20, -5, 1];
-        for (var k = 0; k < 6; k++)
-        {
-            var row = Vector128.Create<short>(taps.Slice((Slot(y - 2 + k) * stride) + x, 8));
-            var weight = Vector128.Create(weights[k]);
-            low += Vector128.WidenLower(row) * weight;
-            high += Vector128.WidenUpper(row) * weight;
-        }
-
-        return (low, high);
+        var sum = (t0 + t5) - (Vector128.Create(5) * (t1 + t4)) + (Vector128.Create(20) * (t2 + t3));
+        var shifted = Vector128.ShiftRightArithmetic(sum + Vector128.Create(512), 10);
+        return Vector128.Min(Vector128.Max(shifted, Vector128<int>.Zero), Vector128.Create(255));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

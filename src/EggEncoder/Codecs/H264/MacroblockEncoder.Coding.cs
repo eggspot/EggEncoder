@@ -50,6 +50,9 @@ internal sealed partial class MacroblockEncoder
         Array.Clear(_intra4x4Totals);
         var source = SourceY;
         var total = _lambda * Intra4x4MacroblockBits;
+        Span<int> above = stackalloc int[8];
+        Span<int> side = stackalloc int[4];
+        Span<byte> candidate = stackalloc byte[16];
         for (var block = 0; block < 16; block++)
         {
             var bx = MacroblockLayout.BlockX[block];
@@ -60,6 +63,7 @@ internal sealed partial class MacroblockEncoder
             var blockSource = source[((by * 4 * _source.StrideY) + (bx * 4))..];
             var bestMode = 2;
             var bestCost = int.MaxValue;
+            var corner = IntraPrediction.Gather4x4Neighbours(_recon, offset, _strideY, left, top, topLeft, topRight, above, side);
             for (var mode = 0; mode < 9; mode++)
             {
                 if (!Intra4x4ModeAvailable(mode, left, top, topLeft))
@@ -67,8 +71,8 @@ internal sealed partial class MacroblockEncoder
                     continue;
                 }
 
-                IntraPrediction.Predict4x4(_recon, offset, _strideY, mode, left, top, topLeft, topRight);
-                var cost = BlockCost.Satd(blockSource, _source.StrideY, _recon.AsSpan(offset), _strideY, 4, 4) + (_lambda * (mode == predicted ? 1 : 4));
+                IntraPrediction.Predict4x4(above, side, corner, mode, left, top, topLeft, candidate, 4);
+                var cost = BlockCost.Satd(blockSource, _source.StrideY, candidate, 4, 4, 4) + (_lambda * (mode == predicted ? 1 : 4));
                 if (cost < bestCost)
                 {
                     bestCost = cost;
@@ -76,7 +80,7 @@ internal sealed partial class MacroblockEncoder
                 }
             }
 
-            IntraPrediction.Predict4x4(_recon, offset, _strideY, bestMode, left, top, topLeft, topRight);
+            IntraPrediction.Predict4x4(above, side, corner, bestMode, left, top, topLeft, _recon.AsSpan(offset), _strideY);
             ResidualBlock(blockSource, _source.StrideY, _recon.AsSpan(offset), _strideY);
             ForwardTransform.Core4x4(_residual.AsSpan(0, 16), _coefficients);
             var count = Quantizer.Quantize4x4(_coefficients, _raster, _scanned, _qp, intra: true, 0);

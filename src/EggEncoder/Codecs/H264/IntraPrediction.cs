@@ -6,6 +6,12 @@ internal static class IntraPrediction
     {
         Span<int> above = stackalloc int[8];
         Span<int> side = stackalloc int[4];
+        var corner = Gather4x4Neighbours(plane, offset, stride, left, top, topLeft, topRight, above, side);
+        Predict4x4(above, side, corner, mode, left, top, topLeft, plane.AsSpan(offset), stride);
+    }
+
+    public static int Gather4x4Neighbours(byte[] plane, int offset, int stride, bool left, bool top, bool topLeft, bool topRight, Span<int> above, Span<int> side)
+    {
         if (top)
         {
             for (var x = 0; x < 4; x++)
@@ -27,7 +33,11 @@ internal static class IntraPrediction
             }
         }
 
-        var corner = topLeft ? plane[offset - stride - 1] : 0;
+        return topLeft ? plane[offset - stride - 1] : 0;
+    }
+
+    public static void Predict4x4(Span<int> above, Span<int> side, int corner, int mode, bool left, bool top, bool topLeft, Span<byte> output, int outputStride)
+    {
         switch (mode)
         {
             case 0:
@@ -36,7 +46,7 @@ internal static class IntraPrediction
                 {
                     for (var x = 0; x < 4; x++)
                     {
-                        plane[offset + (y * stride) + x] = (byte)above[x];
+                        output[(y * outputStride) + x] = (byte)above[x];
                     }
                 }
 
@@ -47,7 +57,7 @@ internal static class IntraPrediction
                 {
                     for (var x = 0; x < 4; x++)
                     {
-                        plane[offset + (y * stride) + x] = (byte)side[y];
+                        output[(y * outputStride) + x] = (byte)side[y];
                     }
                 }
 
@@ -71,7 +81,10 @@ internal static class IntraPrediction
                     dc = 128;
                 }
 
-                Fill(plane, offset, stride, 4, 4, dc);
+                for (var y = 0; y < 4; y++)
+                {
+                    output.Slice(y * outputStride, 4).Fill((byte)dc);
+                }
                 break;
             case 3:
                 Require(top, "diagonal down left");
@@ -79,7 +92,7 @@ internal static class IntraPrediction
                 {
                     for (var x = 0; x < 4; x++)
                     {
-                        plane[offset + (y * stride) + x] = (byte)(x == 3 && y == 3
+                        output[(y * outputStride) + x] = (byte)(x == 3 && y == 3
                             ? (above[6] + (3 * above[7]) + 2) >> 2
                             : (above[x + y] + (2 * above[x + y + 1]) + above[x + y + 2] + 2) >> 2);
                     }
@@ -106,7 +119,7 @@ internal static class IntraPrediction
                             value = (above[0] + (2 * corner) + side[0] + 2) >> 2;
                         }
 
-                        plane[offset + (y * stride) + x] = (byte)value;
+                        output[(y * outputStride) + x] = (byte)value;
                     }
                 }
 
@@ -136,7 +149,7 @@ internal static class IntraPrediction
                             value = (Left(side, corner, y - 1) + (2 * Left(side, corner, y - 2)) + Left(side, corner, y - 3) + 2) >> 2;
                         }
 
-                        plane[offset + (y * stride) + x] = (byte)value;
+                        output[(y * outputStride) + x] = (byte)value;
                     }
                 }
 
@@ -166,7 +179,7 @@ internal static class IntraPrediction
                             value = (Above(above, corner, x - 1) + (2 * Above(above, corner, x - 2)) + Above(above, corner, x - 3) + 2) >> 2;
                         }
 
-                        plane[offset + (y * stride) + x] = (byte)value;
+                        output[(y * outputStride) + x] = (byte)value;
                     }
                 }
 
@@ -178,7 +191,7 @@ internal static class IntraPrediction
                     for (var x = 0; x < 4; x++)
                     {
                         var i = x + (y >> 1);
-                        plane[offset + (y * stride) + x] = (byte)((y & 1) == 0
+                        output[(y * outputStride) + x] = (byte)((y & 1) == 0
                             ? (above[i] + above[i + 1] + 1) >> 1
                             : (above[i] + (2 * above[i + 1]) + above[i + 2] + 2) >> 2);
                     }
@@ -210,7 +223,7 @@ internal static class IntraPrediction
                             value = (side[y + (x >> 1)] + (2 * side[y + (x >> 1) + 1]) + side[y + (x >> 1) + 2] + 2) >> 2;
                         }
 
-                        plane[offset + (y * stride) + x] = (byte)value;
+                        output[(y * outputStride) + x] = (byte)value;
                     }
                 }
 

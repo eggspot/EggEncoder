@@ -373,6 +373,61 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
         }
 
+        [Fact]
+        public void Sa8d_Should_Equal_The_Rounded_Sum_Of_8x8_Hadamard_Magnitudes()
+        {
+            var random = new Random(13);
+            var hadamard = new int[8, 8];
+            for (var u = 0; u < 8; u++)
+            {
+                for (var k = 0; k < 8; k++)
+                {
+                    hadamard[u, k] = (System.Numerics.BitOperations.PopCount((uint)(u & k)) & 1) == 0 ? 1 : -1;
+                }
+            }
+
+            for (var round = 0; round < 100; round++)
+            {
+                var source = new byte[40 * 20];
+                var prediction = new byte[24 * 20];
+                random.NextBytes(source);
+                random.NextBytes(prediction);
+                if (round % 10 == 0)
+                {
+                    Array.Fill(source, (byte)255);
+                    Array.Fill(prediction, (byte)0);
+                }
+
+                var expected = 0;
+                for (var block = 0; block < 4; block++)
+                {
+                    var bx = (block & 1) * 8;
+                    var by = (block >> 1) * 8;
+                    var sum = 0;
+                    for (var u = 0; u < 8; u++)
+                    {
+                        for (var v = 0; v < 8; v++)
+                        {
+                            var coefficient = 0;
+                            for (var y = 0; y < 8; y++)
+                            {
+                                for (var x = 0; x < 8; x++)
+                                {
+                                    coefficient += hadamard[u, y] * hadamard[v, x] * (source[((by + y) * 40) + bx + x] - prediction[((by + y) * 24) + bx + x]);
+                                }
+                            }
+
+                            sum += Math.Abs(coefficient);
+                        }
+                    }
+
+                    expected += (sum + 2) >> 2;
+                }
+
+                BlockCost.Sa8d16x16(source, 40, prediction, 24).Should().Be(expected);
+            }
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
