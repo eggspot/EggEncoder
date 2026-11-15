@@ -373,7 +373,7 @@ Rules for every Phase 5 item, on top of the ones above:
     rendered once per frame size. Tests: placement for every alignment row and column, scaling with
     frame height, stacking, timing edges, BorderStyle 3, tags and line breaks, defaults, re-render on
     a size change.
-- [ ] **24. H.264 decode I** — `Codecs/H264/` (full SPS/PPS including VUI in new internal types; the
+- [x] **24. H.264 decode I** — `Codecs/H264/` (full SPS/PPS including VUI in new internal types; the
   public `H264SpsInfo` record is unchanged): I slices, CAVLC, intra 4x4/16x16/chroma prediction,
   I_PCM, dequantization and inverse transforms, deblocking, frame cropping. Refused with
   `NotSupportedException`: High 10 and above, 4:2:2/4:4:4, monochrome, interlaced (PAFF/MBAFF),
@@ -381,7 +381,21 @@ Rules for every Phase 5 item, on top of the ones above:
   offsets, constrained intra prediction, chroma QP offset; I_PCM hand-built; ground truth from
   `ffmpeg -f framemd5`.
   - **Depends on**: 20.
-  - Status: not started.
+  - Status: done. `Codecs/H264/`: `H264Decoder` (public; avcC or Annex B access units in,
+    cropped `VideoFrame`s out with the access unit's timestamp, `Width`/`Height`/`FrameRate`/
+    `ColorRange`/`ColorMatrix` from the active SPS) on internal `H264BitReader` (64-bit window,
+    Exp-Golomb, `more_rbsp_data`), `SequenceParameterSet`/`PictureParameterSet` (full syntax incl.
+    VUI, scaling lists with both fall-back rules; refusals as listed), `SliceHeader` (every field,
+    incl. reference list modification, prediction weights and reference marking for items 25-27),
+    `CavlcTables`/`CavlcResidual` (code tables read from the Recommendation's text, prefix-free by
+    test), `SliceDecoder` (I macroblocks: I_NxN 4x4, I_16x16, I_PCM; nC and intra mode prediction
+    across macroblock and slice edges, constrained intra), `IntraPrediction`, `Dequantizer`/
+    `InverseTransform`, `DeblockingFilter` (bS from intra, coefficients and motion; idc 0/1/2 and
+    offsets) and picture assembly with a copy-out of the cropped area (the decoded pictures keep a
+    32-pixel border for item 25). Bit-exact with ffmpeg on nine x264 streams (single and four
+    slices, deblocking off, offsets and idc 2 (slice headers rewritten by a script), constrained
+    intra, chroma QP offset, a cropped 66x50 picture, QP 4 and 48) and on hand-built I_PCM pictures;
+    20,000 mutated streams only ever throw `InvalidDataException`/`NotSupportedException`.
 - [ ] **25. H.264 decode II** — P slices, motion vector prediction, quarter-pel luma and
   eighth-pel chroma interpolation, multiple reference frames, weighted P prediction, the DPB's
   sliding window. MMCO, long-term references, reference list modification and POC type 1 are tested
