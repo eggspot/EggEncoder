@@ -1,15 +1,21 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.H264;
 
 internal sealed class CabacEncoder
 {
+    private const int WindowBits = 10;
+    private const int NoHeldByte = -1;
+
     private readonly byte[] _states = new byte[CabacTables.ContextCount];
     private BitWriter _writer = new();
-    private int _low;
+    private ulong _low;
     private int _range;
-    private int _outstanding;
-    private bool _firstBit;
+    private int _bitsAboveWindow;
+    private int _heldByte;
+    private int _heldFfBytes;
 
     public void InitializeContexts(SliceType type, int cabacInitIdc, int sliceQp)
     {
@@ -25,68 +31,51 @@ internal sealed class CabacEncoder
         _writer = writer;
         _low = 0;
         _range = 510;
-        _outstanding = 0;
-        _firstBit = true;
+        _bitsAboveWindow = -1;
+        _heldByte = NoHeldByte;
+        _heldFfBytes = 0;
     }
 
     public void EncodeDecision(int context, int bin)
     {
-        var state = _states[context];
-        int lps = CabacTables.RangeLps[((state >> 1) << 2) + ((_range >> 6) & 3)];
-        _range -= lps;
-        if (bin != (state & 1))
+        ref var state = ref _states[context];
+        int current = state;
+        int lps = CabacTables.RangeLps[((current >> 1) << 2) + ((_range >> 6) & 3)];
+        var range = _range - lps;
+        if (bin != (current & 1))
         {
-            _low += _range;
-            _range = lps;
-            _states[context] = CabacTables.NextStateLps[state];
+            _low += (ulong)range;
+            range = lps;
+            state = CabacTables.NextStateLps[current];
         }
         else
         {
-            _states[context] = CabacTables.NextStateMps[state];
+            state = CabacTables.NextStateMps[current];
         }
 
-        Renormalize();
+        Renormalize(range);
     }
 
     public void EncodeBypass(int bin)
     {
-        _low <<= 1;
-        if (bin != 0)
+        _low = (_low << 1) + (bin != 0 ? (ulong)_range : 0UL);
+        if (++_bitsAboveWindow >= 8)
         {
-            _low += _range;
-        }
-
-        if (_low >= 1024)
-        {
-            PutBit(1);
-            _low -= 1024;
-        }
-        else if (_low < 512)
-        {
-            PutBit(0);
-        }
-        else
-        {
-            _low -= 512;
-            _outstanding++;
+            WriteCompleteBytes();
         }
     }
 
     public void EncodeTerminate(int bin)
     {
-        _range -= 2;
-        if (bin != 0)
+        var range = _range - 2;
+        if (bin == 0)
         {
-            _low += _range;
-            _range = 2;
-            Renormalize();
-            PutBit((_low >> 9) & 1);
-            _writer.WriteBits((uint)(((_low >> 7) & 3) | 1), 2);
+            Renormalize(range);
+            return;
         }
-        else
-        {
-            Renormalize();
-        }
+
+        _low = (_low + (ulong)range) | 1;
+        Finish(_bitsAboveWindow + WindowBits);
     }
 
     public void EncodeExpGolombBypass(int value, int k)
@@ -105,45 +94,75 @@ internal sealed class CabacEncoder
         }
     }
 
-    private void Renormalize()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Renormalize(int range)
     {
-        while (_range < 256)
+        var shift = BitOperations.LeadingZeroCount((uint)range) - 23;
+        _range = range << shift;
+        _low <<= shift;
+        _bitsAboveWindow += shift;
+        if (_bitsAboveWindow >= 8)
         {
-            if (_low < 256)
-            {
-                PutBit(0);
-            }
-            else if (_low >= 512)
-            {
-                _low -= 512;
-                PutBit(1);
-            }
-            else
-            {
-                _low -= 256;
-                _outstanding++;
-            }
-
-            _range <<= 1;
-            _low <<= 1;
+            WriteCompleteBytes();
         }
     }
 
-    private void PutBit(int bit)
+    private void WriteCompleteBytes()
     {
-        if (_firstBit)
+        do
         {
-            _firstBit = false;
+            var position = WindowBits + _bitsAboveWindow - 8;
+            var chunk = (int)(_low >> position);
+            _low &= (1UL << position) - 1;
+            _bitsAboveWindow -= 8;
+            QueueByte(chunk);
         }
-        else
+        while (_bitsAboveWindow >= 8);
+    }
+
+    private void QueueByte(int chunk)
+    {
+        if (chunk == 0xFF)
         {
-            _writer.WriteBits((uint)bit, 1);
+            _heldFfBytes++;
+            return;
         }
 
-        while (_outstanding > 0)
+        ReleaseHeld(chunk >> 8);
+        _heldByte = chunk & 0xFF;
+    }
+
+    private void ReleaseHeld(int carry)
+    {
+        if (_heldByte != NoHeldByte)
         {
-            _writer.WriteBits((uint)(1 - bit), 1);
-            _outstanding--;
+            _writer.WriteBits((uint)((_heldByte + carry) & 0xFF), 8);
+        }
+
+        var ff = (uint)((0xFF + carry) & 0xFF);
+        for (; _heldFfBytes > 0; _heldFfBytes--)
+        {
+            _writer.WriteBits(ff, 8);
+        }
+
+        _heldByte = NoHeldByte;
+    }
+
+    private void Finish(int bits)
+    {
+        while (bits >= 8)
+        {
+            bits -= 8;
+            var chunk = (int)(_low >> bits);
+            _low &= (1UL << bits) - 1;
+            QueueByte(chunk);
+        }
+
+        var carry = (int)(_low >> bits);
+        ReleaseHeld(carry);
+        if (bits > 0)
+        {
+            _writer.WriteBits((uint)(_low & ((1UL << bits) - 1)), bits);
         }
     }
 }

@@ -11,19 +11,28 @@ namespace EggEncoder.Transform
 
         public void WriteBits(uint value, int bitCount)
         {
-            for (var i = bitCount - 1; i >= 0; i--)
+            if (bitCount > 32)
             {
-                var bit = (value >> i) & 1u;
-                _currentByte = (_currentByte << 1) | bit;
-                _bitsInCurrentByte++;
-
-                if (_bitsInCurrentByte == 8)
-                {
-                    AppendByte((byte)_currentByte);
-                    _currentByte = 0;
-                    _bitsInCurrentByte = 0;
-                }
+                WriteBitsOneByOne(value, bitCount);
+                return;
             }
+
+            if (bitCount <= 0)
+            {
+                return;
+            }
+
+            var masked = bitCount == 32 ? value : value & ((1u << bitCount) - 1);
+            var accumulated = ((ulong)_currentByte << bitCount) | masked;
+            var total = _bitsInCurrentByte + bitCount;
+            while (total >= 8)
+            {
+                total -= 8;
+                AppendByte((byte)(accumulated >> total));
+            }
+
+            _currentByte = (uint)(accumulated & ((1UL << total) - 1));
+            _bitsInCurrentByte = total;
         }
 
         public void WriteSignedBits(int value, int bitCount)
@@ -61,6 +70,14 @@ namespace EggEncoder.Transform
             }
 
             return result;
+        }
+
+        private void WriteBitsOneByOne(uint value, int bitCount)
+        {
+            for (var i = bitCount - 1; i >= 0; i--)
+            {
+                WriteBits((value >> i) & 1u, 1);
+            }
         }
 
         private void AppendByte(byte value)

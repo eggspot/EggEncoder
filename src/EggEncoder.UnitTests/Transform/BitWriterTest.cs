@@ -166,5 +166,33 @@ namespace EggEncoder.UnitTests.Transform
             reader.ReadBits(10).Should().Be(0x3FFu);
             reader.ReadBits(3).Should().Be(0x5u);
         }
+
+        [Fact]
+        public void WriteBits_Of_Any_Width_Should_Equal_Writing_The_Same_Bits_One_At_A_Time()
+        {
+            var random = new Random(11);
+            var whole = new BitWriter();
+            var single = new BitWriter();
+            for (var i = 0; i < 5000; i++)
+            {
+                var count = random.Next(0, 33);
+                var value = (uint)random.NextInt64(0, 1L << 32);
+                whole.WriteBits(value, count);
+                for (var bit = count - 1; bit >= 0; bit--)
+                {
+                    single.WriteBits((value >> bit) & 1u, 1);
+                }
+
+                whole.BitPosition.Should().Be(single.BitPosition);
+            }
+
+            whole.WriteBits(0, 45);
+            for (var bit = 0; bit < 45; bit++)
+            {
+                single.WriteBits(0, 1);
+            }
+
+            whole.ToArray().Should().Equal(single.ToArray());
+        }
     }
 }
