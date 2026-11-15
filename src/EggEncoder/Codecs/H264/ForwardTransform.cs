@@ -1,3 +1,6 @@
+using System.Runtime.Intrinsics;
+using System.Runtime.InteropServices;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace EggEncoder.Codecs.H264;
@@ -147,27 +150,20 @@ internal static class Quantizer
         [7282, 2893, 4559]
     ];
 
+    private static readonly int[][] RasterFactors = BuildRasterFactors();
+
     public static int Quantize4x4(ReadOnlySpan<int> coefficients, Span<short> raster, Span<short> scanned, int qp, bool intra, int first)
     {
         var shift = 15 + (qp / 6);
-        var rounding = intra ? (1 << shift) / 3 : (1 << shift) / 6;
-        var factors = Factors[qp % 6];
-        var nonzero = 0;
-        for (var scan = first; scan < 16; scan++)
+        var rounding = Vector128.Create(intra ? (1 << shift) / 3 : (1 << shift) / 6);
+        ref var factors = ref MemoryMarshal.GetArrayDataReference(RasterFactors[qp % 6]);
+        ref var source = ref MemoryMarshal.GetReference(coefficients[..16]);
+        ref var target = ref MemoryMarshal.GetReference(raster[..16]);
+        for (var i = 0; i < 16; i += 8)
         {
-            var position = MacroblockLayout.ZigZag4x4[scan];
-            var row = position >> 2;
-            var column = position & 3;
-            var factor = (row & 1) == 0 && (column & 1) == 0 ? factors[0] : (row & 1) == 1 && (column & 1) == 1 ? factors[1] : factors[2];
-            var value = coefficients[position];
-            var level = ((Math.Abs(value) * (long)factor) + rounding) >> shift;
-            var signed = (short)(value < 0 ? -level : level);
-            raster[position] = signed;
-            scanned[scan - first] = signed;
-            if (signed != 0)
-            {
-                nonzero++;
-            }
+            var low = QuantizeLanes(Vector128.LoadUnsafe(ref source, (nuint)i), Vector128.LoadUnsafe(ref factors, (nuint)i), rounding, shift);
+            var high = QuantizeLanes(Vector128.LoadUnsafe(ref source, (nuint)(i + 4)), Vector128.LoadUnsafe(ref factors, (nuint)(i + 4)), rounding, shift);
+            Vector128.Narrow(low, high).StoreUnsafe(ref target, (nuint)i);
         }
 
         if (first == 1)
@@ -175,7 +171,42 @@ internal static class Quantizer
             raster[0] = 0;
         }
 
-        return nonzero;
+        var zeros = Vector128.ExtractMostSignificantBits(Vector128.Equals(Vector128.LoadUnsafe(ref target), Vector128<short>.Zero))
+            | (Vector128.ExtractMostSignificantBits(Vector128.Equals(Vector128.LoadUnsafe(ref target, 8), Vector128<short>.Zero)) << 8);
+        var zigZag = MacroblockLayout.ZigZag4x4;
+        for (var scan = first; scan < 16; scan++)
+        {
+            scanned[scan - first] = raster[zigZag[scan]];
+        }
+
+        return 16 - BitOperations.PopCount(zeros);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> QuantizeLanes(Vector128<int> values, Vector128<int> factors, Vector128<int> rounding, int shift)
+    {
+        var sign = Vector128.ShiftRightArithmetic(values, 31);
+        var level = Vector128.ShiftRightLogical((Vector128.Abs(values) * factors) + rounding, shift);
+        return (level ^ sign) - sign;
+    }
+
+    private static int[][] BuildRasterFactors()
+    {
+        var tables = new int[Factors.Length][];
+        for (var remainder = 0; remainder < Factors.Length; remainder++)
+        {
+            var table = new int[16];
+            for (var position = 0; position < 16; position++)
+            {
+                var row = position >> 2;
+                var column = position & 3;
+                table[position] = (row & 1) == 0 && (column & 1) == 0 ? Factors[remainder][0] : (row & 1) == 1 && (column & 1) == 1 ? Factors[remainder][1] : Factors[remainder][2];
+            }
+
+            tables[remainder] = table;
+        }
+
+        return tables;
     }
 
     private static readonly int[][] Factors8x8 =

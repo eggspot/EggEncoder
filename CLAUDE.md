@@ -222,7 +222,15 @@ their own threads; output bytes don't depend on the thread count. `HalfPelPlanes
 reference's three half-pel planes once per frame for the sub-pel search. The P_Skip check skips the
 transform of any 4x4 block whose SAD is under the bound (`Quantizer.ZeroLevelSadBound`) that
 guarantees every coefficient quantises to zero. `H264EncodeBenchmarks` times 1080x1920 encodes; an
-`EGGENCODER_H264_ENCODE_TARGET_FILE`-gated test checks the real-time target.
+`EGGENCODER_H264_ENCODE_TARGET_FILE`-gated test checks the real-time target. `CabacEncoder` keeps the
+standard's arithmetic but writes whole bytes (bits above the 10-bit window held until a byte is
+complete, a byte that may still take a carry held with its run of 0xFF bytes); `CabacEncoderTest`
+compares it with a test-only copy of the standard's bit-serial process. `RowProgress` has a lock per
+row and wakes a waiter only when the progress it registered is reached. With
+`H264EncoderSettings.MaxDelayedFrames` > 0 (default 0) a frame's entropy writer keeps running while
+later frames are analysed (`PendingFrame` holds its syntax, CABAC state, bit writer and picture holds)
+and the frame comes out of a later `Encode` or `Flush`, in order; the composition renderer uses 2.
+Intra 4x4 analysis stops once its running cost reaches the cost it has to beat.
 
 ### MPEG-2 video decoder (`src/EggEncoder/Codecs/Mpeg2/`)
 

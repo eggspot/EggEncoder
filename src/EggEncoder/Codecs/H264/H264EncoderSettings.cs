@@ -45,6 +45,18 @@ public sealed record H264EncoderSettings
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; }
 
+    /// <summary>
+    /// How many encoded frames may still be in progress when <see cref="H264Encoder.Encode"/> returns, 0 to
+    /// <see cref="MaxDelayedFramesLimit"/>. With 0 (the default) each frame comes out before its
+    /// <see cref="H264Encoder.Encode"/> call returns; above 0 a frame's bitstream is written while later
+    /// frames are analysed, and comes out from a later <see cref="H264Encoder.Encode"/> or
+    /// <see cref="H264Encoder.Flush"/>. The output bytes are the same for every value.
+    /// </summary>
+    public int MaxDelayedFrames { get; init; }
+
+    /// <summary>The largest <see cref="MaxDelayedFrames"/> allowed.</summary>
+    public const int MaxDelayedFramesLimit = 8;
+
     /// <summary>Sample range written to the stream; limited (TV) range when <c>null</c>.</summary>
     public VideoColorRange? ColorRange { get; init; }
 

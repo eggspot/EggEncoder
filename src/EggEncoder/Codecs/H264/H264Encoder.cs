@@ -14,6 +14,7 @@ public sealed partial class H264Encoder : IDisposable
 {
     private const int Padding = H264Picture.Padding;
     private const int Log2MaxFrameNum = 8;
+    private const int WavefrontSpinRounds = 16;
 
     private readonly H264EncoderSettings _settings;
     private readonly VideoFramePool _pool = new();
@@ -26,11 +27,10 @@ public sealed partial class H264Encoder : IDisposable
     private readonly H264RateControl _rateControl;
     private readonly int _keyframeInterval;
     private readonly VideoFrame _source;
-    private readonly CabacEncoder? _cabac;
-    private readonly CabacNeighbourState? _cabacState;
-    private readonly MacroblockSyntax[] _syntaxes;
-    private readonly bool[] _skipped;
     private readonly int _parallelism;
+    private readonly int _maxDelayedFrames;
+    private readonly Queue<PendingFrame> _pending = new();
+    private readonly Stack<PendingFrame> _spareFrames = new();
     private H264Picture? _reference;
     private HalfPelPlanes? _halfPel;
     private long _frameIndex;
@@ -60,6 +60,11 @@ public sealed partial class H264Encoder : IDisposable
             throw new ArgumentException("ConstantRateFactor must be between 0 and 51", nameof(settings));
         }
 
+        if (settings.MaxDelayedFrames is < 0 or > H264EncoderSettings.MaxDelayedFramesLimit)
+        {
+            throw new ArgumentException($"MaxDelayedFrames must be between 0 and {H264EncoderSettings.MaxDelayedFramesLimit}", nameof(settings));
+        }
+
         _settings = settings;
         _keyframeInterval = settings.KeyframeInterval > 0 ? settings.KeyframeInterval : Math.Max(1, (int)Math.Round(2 * settings.FrameRate.FramesPerSecond));
         var range = settings.ColorRange ?? VideoColorRange.Limited;
@@ -73,19 +78,8 @@ public sealed partial class H264Encoder : IDisposable
         _dequantizer = new Dequantizer(_pps.ScalingListsFor(_sps));
         _rateControl = new H264RateControl(settings.ConstantRateFactor);
         _source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, range, matrix);
-        _syntaxes = new MacroblockSyntax[_sps.MacroblockCount];
-        for (var i = 0; i < _syntaxes.Length; i++)
-        {
-            _syntaxes[i] = new MacroblockSyntax();
-        }
-
-        _skipped = new bool[_sps.MacroblockCount];
         _parallelism = settings.MaxDegreeOfParallelism > 0 ? settings.MaxDegreeOfParallelism : Environment.ProcessorCount;
-        if (_pps.EntropyCodingCabac)
-        {
-            _cabac = new CabacEncoder();
-            _cabacState = new CabacNeighbourState(_sps.MacroblockCount);
-        }
+        _maxDelayedFrames = settings.MaxDelayedFrames;
     }
 
     /// <summary>The <c>avcC</c> record (SPS and PPS) a container needs to play the output.</summary>
@@ -100,7 +94,11 @@ public sealed partial class H264Encoder : IDisposable
 
     internal H264Picture? LastReconstruction => _reference;
 
-    /// <summary>Encodes one frame and hands the result to <paramref name="output"/> before returning.</summary>
+    /// <summary>
+    /// Encodes one frame. Encoded frames reach <paramref name="output"/> in input order: this frame's
+    /// before this call returns when <see cref="H264EncoderSettings.MaxDelayedFrames"/> is 0, otherwise
+    /// during a later <see cref="Encode"/> or <see cref="Flush"/>, at most that many frames later.
+    /// </summary>
     /// <exception cref="ArgumentException">The frame's size isn't the configured size.</exception>
     /// <exception cref="ObjectDisposedException">The encoder was disposed.</exception>
     public void Encode(VideoFrame frame, Action<H264EncodedFrame> output)
@@ -113,6 +111,7 @@ public sealed partial class H264Encoder : IDisposable
             throw new ArgumentException($"The frame is {frame.Width}x{frame.Height}, the encoder {_settings.Width}x{_settings.Height}", nameof(frame));
         }
 
+        HandOutFinishedFrames(output);
         CopySource(frame);
         var keyframe = _frameIndex % _keyframeInterval == 0;
         var qp = _rateControl.NextQp(keyframe, keyframe ? 0 : Complexity());
@@ -129,7 +128,7 @@ public sealed partial class H264Encoder : IDisposable
             IsIdr = keyframe
         };
         picture.ResetMacroblocks();
-        var payload = new List<byte>();
+        var pending = RentPendingFrame();
         try
         {
             var header = new SliceHeader
@@ -143,20 +142,39 @@ public sealed partial class H264Encoder : IDisposable
                 ReferenceCountL0 = 1
             };
             var references = keyframe ? Array.Empty<H264Picture>() : [_reference!];
-            var bits = new BitWriter();
-            WriteSliceHeader(bits, header, keyframe);
-            EncodeMacroblocks(picture, header, references, qp, keyframe, bits);
-            NalUnitWriter.AppendLengthPrefixed(payload, (header.NalReferenceIdc << 5) | (keyframe ? 5 : 1), bits.ToArray());
+            pending.Bits = new BitWriter();
+            pending.NalHeader = (header.NalReferenceIdc << 5) | (keyframe ? 5 : 1);
+            pending.IsKeyframe = keyframe;
+            pending.Timestamp = frame.Timestamp;
+            WriteSliceHeader(pending.Bits, header, keyframe);
+            EncodeMacroblocks(picture, header, references, qp, keyframe, pending);
+            picture.Hold();
+            pending.Pictures.Add(picture);
+            foreach (var reference in references)
+            {
+                reference.Hold();
+                pending.Pictures.Add(reference);
+            }
+
+            _pending.Enqueue(pending);
+            pending = null;
             ExtendBorders(picture.Frame);
             _halfPel = HalfPelPlanes.Build(picture, _parallelism, _halfPel);
         }
         catch
         {
-            picture.Dispose();
+            if (pending is not null)
+            {
+                _spareFrames.Push(pending);
+            }
+
+            picture.Hold();
+            picture.Release();
             throw;
         }
 
-        _reference?.Dispose();
+        picture.Hold();
+        _reference?.Release();
         _reference = picture;
         if (keyframe)
         {
@@ -165,14 +183,24 @@ public sealed partial class H264Encoder : IDisposable
 
         _frameNum = (_frameNum + 1) % (1 << Log2MaxFrameNum);
         _frameIndex++;
-        output(new H264EncodedFrame(payload.ToArray(), keyframe, frame.Timestamp, _settings.FrameRate.FrameDuration));
+        while (_pending.Count > _maxDelayedFrames)
+        {
+            HandOutOldestFrame(output);
+        }
+
+        HandOutFinishedFrames(output);
     }
 
-    /// <summary>Hands out frames still held back; this encoder holds none (it writes no B frames), so it does nothing.</summary>
+    /// <summary>Hands out, in order, every frame still held back (see <see cref="H264EncoderSettings.MaxDelayedFrames"/>).</summary>
+    /// <exception cref="ObjectDisposedException">The encoder was disposed.</exception>
     public void Flush(Action<H264EncodedFrame> output)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(output);
+        while (_pending.Count > 0)
+        {
+            HandOutOldestFrame(output);
+        }
     }
 
     /// <summary>Returns the encoder's buffers.</summary>
@@ -184,23 +212,81 @@ public sealed partial class H264Encoder : IDisposable
         }
 
         _disposed = true;
-        _reference?.Dispose();
+        while (_pending.TryDequeue(out var pending))
+        {
+            try
+            {
+                pending.Writer?.Wait();
+            }
+            catch (AggregateException)
+            {
+            }
+
+            pending.ReleasePictures();
+        }
+
+        _reference?.Release();
         _reference = null;
         _source.Dispose();
     }
 
-    private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, BitWriter bits)
+    private PendingFrame RentPendingFrame()
     {
+        if (_spareFrames.TryPop(out var spare))
+        {
+            return spare;
+        }
+
+        return new PendingFrame(_sps.MacroblockCount, _pps.EntropyCodingCabac);
+    }
+
+    private void HandOutFinishedFrames(Action<H264EncodedFrame> output)
+    {
+        while (_pending.TryPeek(out var oldest) && (oldest.Writer?.IsCompleted ?? true))
+        {
+            HandOutOldestFrame(output);
+        }
+    }
+
+    private void HandOutOldestFrame(Action<H264EncodedFrame> output)
+    {
+        var pending = _pending.Dequeue();
+        H264EncodedFrame encoded;
+        try
+        {
+            pending.Writer?.GetAwaiter().GetResult();
+            var nal = new List<byte>();
+            NalUnitWriter.AppendLengthPrefixed(nal, pending.NalHeader, pending.Bits!.ToArray());
+            encoded = new H264EncodedFrame(nal.ToArray(), pending.IsKeyframe, pending.Timestamp, _settings.FrameRate.FrameDuration);
+        }
+        finally
+        {
+            pending.ReleasePictures();
+            pending.Writer = null;
+            pending.Bits = null;
+            _spareFrames.Push(pending);
+        }
+
+        output(encoded);
+    }
+
+    private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, PendingFrame pending)
+    {
+        var bits = pending.Bits!;
+        var syntaxes = pending.Syntaxes;
+        var skipped = pending.Skipped;
+        var cabac = pending.Cabac;
+        var cabacState = pending.CabacState;
         var width = _sps.WidthInMacroblocks;
         var rows = _sps.HeightInMacroblocks;
         var workers = Math.Clamp(_parallelism, 1, rows);
-        var progress = new RowProgress(rows);
+        var progress = new RowProgress(rows, WavefrontSpinRounds);
         var nextRow = -1;
         var encoders = new MacroblockEncoder[workers + 1];
         var slices = new SliceDecoder[workers + 1];
         for (var i = 0; i <= workers; i++)
         {
-            slices[i] = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, _cabacState);
+            slices[i] = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, cabacState);
             encoders[i] = new MacroblockEncoder(slices[i], picture, _source, keyframe ? null : _reference, keyframe ? null : _halfPel, qp, _dequantizer, _pps.ChromaQpIndexOffset, _pps.Transform8x8Mode);
         }
 
@@ -236,14 +322,14 @@ public sealed partial class H264Encoder : IDisposable
                     }
 
                     var address = (row * width) + x;
-                    slices[worker].UseSyntax(_syntaxes[address]);
-                    _skipped[address] = encoders[worker].Analyse(address);
+                    slices[worker].UseSyntax(syntaxes[address]);
+                    skipped[address] = encoders[worker].Analyse(address);
                     progress.Report(row, x + 1);
                 }
             }
         }
 
-        void Write() => MacroblockEncoder.WriteSlice(bits, _cabac, header.Type, qp, encoders[workers], _syntaxes, _skipped, address => progress.WaitFor(address / width, (address % width) + 1));
+        void Write() => MacroblockEncoder.WriteSlice(bits, cabac, header.Type, qp, encoders[workers], syntaxes, skipped, address => progress.WaitFor(address / width, (address % width) + 1));
 
         void Deblock()
         {
@@ -262,24 +348,34 @@ public sealed partial class H264Encoder : IDisposable
             return;
         }
 
-        var tasks = new Task[workers + 2];
+        var tasks = new Task[workers + 1];
         for (var i = 0; i < workers; i++)
         {
             var worker = i;
             tasks[i] = Run(() => Analyse(worker));
         }
 
-        tasks[workers] = Run(Write);
-        tasks[workers + 1] = Run(Deblock);
+        tasks[workers] = Run(Deblock);
+        var writer = Run(Write);
         try
         {
             Task.WaitAll(tasks);
         }
         catch (AggregateException e)
         {
+            try
+            {
+                writer.Wait();
+            }
+            catch (AggregateException)
+            {
+            }
+
             var cause = e.InnerExceptions.FirstOrDefault(inner => inner is not OperationCanceledException) ?? e.InnerExceptions[0];
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cause).Throw();
         }
+
+        pending.Writer = writer;
     }
 
     private void CopySource(VideoFrame frame)
@@ -348,6 +444,55 @@ public sealed partial class H264Encoder : IDisposable
             first.CopyTo(buffer.AsSpan(offset - (y * stride) - padding, width + (2 * padding)));
             last.CopyTo(buffer.AsSpan(offset + ((height - 1 + y) * stride) - padding, width + (2 * padding)));
         }
+    }
+}
+
+internal sealed class PendingFrame
+{
+    public PendingFrame(int macroblockCount, bool cabac)
+    {
+        Syntaxes = new MacroblockSyntax[macroblockCount];
+        for (var i = 0; i < macroblockCount; i++)
+        {
+            Syntaxes[i] = new MacroblockSyntax();
+        }
+
+        Skipped = new bool[macroblockCount];
+        if (cabac)
+        {
+            Cabac = new CabacEncoder();
+            CabacState = new CabacNeighbourState(macroblockCount);
+        }
+    }
+
+    public MacroblockSyntax[] Syntaxes { get; }
+
+    public bool[] Skipped { get; }
+
+    public CabacEncoder? Cabac { get; }
+
+    public CabacNeighbourState? CabacState { get; }
+
+    public List<H264Picture> Pictures { get; } = new();
+
+    public BitWriter? Bits { get; set; }
+
+    public Task? Writer { get; set; }
+
+    public int NalHeader { get; set; }
+
+    public bool IsKeyframe { get; set; }
+
+    public TimeSpan Timestamp { get; set; }
+
+    public void ReleasePictures()
+    {
+        foreach (var picture in Pictures)
+        {
+            picture.Release();
+        }
+
+        Pictures.Clear();
     }
 }
 

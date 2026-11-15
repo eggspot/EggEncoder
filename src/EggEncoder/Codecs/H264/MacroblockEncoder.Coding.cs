@@ -42,7 +42,7 @@ internal sealed partial class MacroblockEncoder
         return bestCost;
     }
 
-    private int AnalyseIntra4x4()
+    private int AnalyseIntra4x4(int costToBeat)
     {
         var modes = _picture.IntraModes.AsSpan(_slice.Macroblock * 16, 16);
         var scratch = _intra4x4;
@@ -94,6 +94,10 @@ internal sealed partial class MacroblockEncoder
             scratch.PreviousIntraModeFlags[block] = bestMode == predicted;
             scratch.RemainingIntraModes[block] = (byte)(bestMode < predicted ? bestMode : bestMode - 1);
             total += bestCost;
+            if (total >= costToBeat)
+            {
+                return total;
+            }
         }
 
         return total;
