@@ -7,7 +7,7 @@ namespace EggEncoder.Codecs.H264;
 [SkipLocalsInit]
 internal static class InterPrediction
 {
-    public static void Luma(H264Picture reference, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride)
+    public static void Luma(H264Picture reference, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride, bool average = false)
     {
         var frame = reference.Frame;
         var pictureWidth = reference.WidthInMacroblocks * 16;
@@ -32,7 +32,7 @@ internal static class InterPrediction
 
         if (xFrac == 0 && yFrac == 0)
         {
-            CopyBlock(source, origin, stride, output, outputStride, width, height);
+            CopyBlock(source, origin, stride, output, outputStride, width, height, average);
             return;
         }
 
@@ -50,7 +50,7 @@ internal static class InterPrediction
                         b = RoundedAverage(b, Load(source, row + i + (xFrac >> 1), lanes));
                     }
 
-                    Store(output, (j * outputStride) + i, b, lanes);
+                    Store(output, (j * outputStride) + i, b, lanes, average);
                 }
             }
 
@@ -70,7 +70,7 @@ internal static class InterPrediction
                         h = RoundedAverage(h, Load(source, row + i + ((yFrac >> 1) * stride), lanes));
                     }
 
-                    Store(output, (j * outputStride) + i, h, lanes);
+                    Store(output, (j * outputStride) + i, h, lanes, average);
                 }
             }
 
@@ -88,7 +88,7 @@ internal static class InterPrediction
                 {
                     var b = HalfVector(source, row + (bRow * stride) + i, 1, lanes);
                     var h = HalfVector(source, row + i + hColumn, stride, lanes);
-                    Store(output, (j * outputStride) + i, RoundedAverage(b, h), lanes);
+                    Store(output, (j * outputStride) + i, RoundedAverage(b, h), lanes, average);
                 }
             }
 
@@ -139,12 +139,12 @@ internal static class InterPrediction
                     center = RoundedAverage(center, HalfVector(source, row + i + (xFrac >> 1), stride, lanes));
                 }
 
-                Store(output, (j * outputStride) + i, center, lanes);
+                Store(output, (j * outputStride) + i, center, lanes, average);
             }
         }
     }
 
-    public static void Chroma(H264Picture reference, bool cr, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride)
+    public static void Chroma(H264Picture reference, bool cr, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride, bool average = false)
     {
         var frame = reference.Frame;
         var pictureWidth = reference.WidthInMacroblocks * 8;
@@ -170,7 +170,7 @@ internal static class InterPrediction
 
         if (xFrac == 0 && yFrac == 0)
         {
-            CopyBlock(source, origin, stride, output, outputStride, width, height);
+            CopyBlock(source, origin, stride, output, outputStride, width, height, average);
             return;
         }
 
@@ -192,7 +192,7 @@ internal static class InterPrediction
                 var below = row + stride;
                 var sum = (Load(source, row, lanes) * weightA) + (Load(source, row + 1, lanes) * weightB)
                     + (Load(source, below, lanes) * weightC) + (Load(source, below + 1, lanes) * weightD) + round;
-                Store(output, j * outputStride, Vector128.ShiftRightLogical(sum, 6), lanes);
+                Store(output, j * outputStride, Vector128.ShiftRightLogical(sum, 6), lanes, average);
             }
 
             return;
@@ -204,7 +204,9 @@ internal static class InterPrediction
             for (var i = 0; i < width; i++)
             {
                 var index = row + i;
-                output[(j * outputStride) + i] = (byte)(((a * source[index]) + (b * source[index + 1]) + (c * source[index + stride]) + (d * source[index + stride + 1]) + 32) >> 6);
+                var value = ((a * source[index]) + (b * source[index + 1]) + (c * source[index + stride]) + (d * source[index + stride + 1]) + 32) >> 6;
+                ref var target = ref output[(j * outputStride) + i];
+                target = (byte)(average ? (target + value + 1) >> 1 : value);
             }
         }
     }
@@ -331,9 +333,14 @@ internal static class InterPrediction
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Store(Span<byte> output, int index, Vector128<short> values, int lanes)
+    private static void Store(Span<byte> output, int index, Vector128<short> values, int lanes, bool average = false)
     {
         var clamped = Vector128.Min(Vector128.Max(values, Vector128<short>.Zero), Vector128.Create((short)255)).AsUInt16();
+        if (average)
+        {
+            clamped = Vector128.ShiftRightLogical(clamped + Load(output, index, lanes).AsUInt16() + Vector128<ushort>.One, 1);
+        }
+
         var bytes = Vector128.Narrow(clamped, clamped).AsUInt64().ToScalar();
         if (lanes == 8)
         {
@@ -403,8 +410,14 @@ internal static class InterPrediction
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CopyBlock(ReadOnlySpan<byte> source, int origin, int stride, Span<byte> output, int outputStride, int width, int height)
+    private static void CopyBlock(ReadOnlySpan<byte> source, int origin, int stride, Span<byte> output, int outputStride, int width, int height, bool average = false)
     {
+        if (average)
+        {
+            AverageInto(output, outputStride, source[origin..], stride, width, height);
+            return;
+        }
+
         for (var j = 0; j < height; j++)
         {
             var from = source[(origin + (j * stride))..];

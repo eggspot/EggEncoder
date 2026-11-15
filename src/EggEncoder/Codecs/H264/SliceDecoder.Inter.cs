@@ -392,7 +392,12 @@ internal sealed partial class SliceDecoder
         var luma = buffer.AsSpan(lumaOffset + (y * lumaStride) + x);
         var cb = buffer.AsSpan(offsetU + ((y / 2) * chromaStride) + (x / 2));
         var cr = buffer.AsSpan(offsetV + ((y / 2) * chromaStride) + (x / 2));
-        if (partition.UsesL0 && partition.UsesL1)
+        if (partition.UsesL0 && partition.UsesL1 && UsesPlainAverage(partition.ReferenceL0, partition.ReferenceL1))
+        {
+            PredictFromList(0, partition.ReferenceL0, index, partition, luma, lumaStride, cb, cr, chromaStride);
+            PredictFromList(1, partition.ReferenceL1, index, partition, luma, lumaStride, cb, cr, chromaStride, average: true);
+        }
+        else if (partition.UsesL0 && partition.UsesL1)
         {
             Span<byte> luma1 = stackalloc byte[width * height];
             Span<byte> cb1 = stackalloc byte[width * height / 4];
@@ -410,7 +415,7 @@ internal sealed partial class SliceDecoder
         }
     }
 
-    private void PredictFromList(int list, int reference, int index, InterPartition partition, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride)
+    private void PredictFromList(int list, int reference, int index, InterPartition partition, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride, bool average = false)
     {
         var picture = (list == 0 ? _referencesL0 : _referencesL1)[reference];
         var vectors = _picture.MotionVectors[list];
@@ -423,9 +428,9 @@ internal sealed partial class SliceDecoder
         var lumaLines = y + (mvY >> 2) + height + 3;
         var chromaLines = (y / 2) + (mvY >> 3) + (height / 2) + 1;
         AwaitLines(picture, Math.Max(lumaLines, (2 * chromaLines) - 1));
-        InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma, lumaStride);
-        InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, chromaStride);
-        InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr, chromaStride);
+        InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma, lumaStride, average);
+        InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, chromaStride, average);
+        InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr, chromaStride, average);
     }
 
     private void ApplyWeights(int list, int reference, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride, int width, int height)

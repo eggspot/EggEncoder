@@ -541,6 +541,9 @@ internal sealed partial class SliceDecoder
         InterPrediction.Bipredict(first, firstStride, second, secondStride, width, height, log2Denominator, weight0, weight1, offset0, offset1);
     }
 
+    private bool UsesPlainAverage(int referenceL0, int referenceL1) =>
+        _header.Weights is null && (_pps.WeightedBipredictionIdc != 2 || ImplicitWeights(referenceL0, referenceL1) is var (weight0, weight1) && weight0 == weight1);
+
     private (int Weight0, int Weight1) ImplicitWeights(int referenceL0, int referenceL1)
     {
         var distance = _pocL1[referenceL1] - _pocL0[referenceL0];

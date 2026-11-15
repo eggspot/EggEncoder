@@ -153,6 +153,21 @@ once the rows are ready: serial 1.048 -> 0.947 s (High), 0.860 -> 0.723 s (Main)
 (Baseline); with frame threads 0.422 -> 0.386 s, 0.413 -> 0.367 s, Baseline unchanged (A/B, same
 session).
 
+This laptop runs other work (about 20% CPU in the background) and drifts with temperature, so later
+steps are measured with `abtool`: both builds loaded into one process in separate
+`AssemblyLoadContext`s, alternated run by run, the median ratio of adjacent pairs reported, the
+process at high priority and pinned to one core. An A/A run reads 0.99. Interpolating the second
+list straight into the frame with averaging (no temporary block, no separate pass) when bi-prediction
+is a plain average: 0.980 on the High profile stream. Allowing one picture in flight per logical
+processor (12 here) instead of at most eight: about 10% with frame threads. Same session, default
+threads:
+
+| Stream | `H264Decoder` | ffmpeg, default threads |
+|--------|-----:|-----:|
+| High profile, medium preset | 0.253 s | 0.098 s |
+| Main profile CABAC P | 0.207 s | 0.101 s |
+| Baseline CAVLC P | 0.202 s | 0.070 s |
+
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 
 Budgets from the video backlog's item 21 plan: the composition (item 31) needs about 15 frames a
