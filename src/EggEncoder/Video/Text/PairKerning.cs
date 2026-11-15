@@ -6,6 +6,7 @@ namespace EggEncoder.Video.Text;
 internal sealed class PairKerning
 {
     private const int MaxLookups = 4096;
+    private const int MaxCachedPairs = 65536;
 
     private readonly Dictionary<(int, int), int>? _pairs;
     private readonly List<FontDataReader[]>? _lookups;
@@ -127,7 +128,19 @@ internal sealed class PairKerning
             return 0;
         }
 
-        return _cache.GetOrAdd((left, right), static (pair, lookups) => FromLookups(lookups, pair.Item1, pair.Item2), _lookups);
+        if (_cache.TryGetValue((left, right), out var cached))
+        {
+            return cached;
+        }
+
+        if (_cache.Count >= MaxCachedPairs)
+        {
+            _cache.Clear();
+        }
+
+        var value = FromLookups(_lookups, left, right);
+        _cache[(left, right)] = value;
+        return value;
     }
 
     private static int FromLookups(List<FontDataReader[]> lookups, int left, int right)
