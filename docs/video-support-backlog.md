@@ -313,13 +313,28 @@ Rules for every Phase 5 item, on top of the ones above:
     `GetOutputSize` (so rotation can swap sides), `CanChangeFrameCount`, `Apply(frame, emit)`
     taking ownership of the frame, and a default `Flush`; `VideoFrameTransformPipeline` chains them
     like `PcmTransformPipeline`.
-- [ ] **21. Frame operations** — `Video/Filters/`: scale (bicubic, Lanczos; separable, SIMD), fit
+- [x] **21. Frame operations** — `Video/Filters/`: scale (bicubic, Lanczos; separable, SIMD), fit
   and pad to a canvas, crop, rotate/transpose by 90/180/270, frame-rate change by PTS
   (drop/duplicate), box blur, alpha-blended box, RGBA overlay, fade to/from a colour, crossfade —
   all in YUV. Tests: exact values on synthetic frames plus a PSNR floor against ffmpeg output
   (kernels and chroma siting differ).
   - **Depends on**: 20.
-  - Status: not started.
+  - Status: done. `ScaleTransform` (bilinear, bicubic Keys a=-0.6 = ffmpeg's default, Lanczos 3;
+    14-bit weights per input size, widened when shrinking; an optional source rectangle cropped
+    inside the scaler; chroma left-sited horizontally and centred vertically; rows then columns,
+    columns vectorised), `FitTransform` (contain + pad, or cover from the centred source rectangle,
+    even sizes on even canvases), `CropTransform`/`PadTransform` (positions rounded down to even, as
+    ffmpeg does on 4:2:0), `RotateTransform` (90/180/270 clockwise), `FrameRateTransform` (ffmpeg
+    `fps` with `round=near`, exact slot times from `VideoFrameRate`), `BoxBlurTransform` (running
+    sums, luma/chroma radius, passes, optional region), `FillBoxTransform`, `OverlayTransform` (RGBA
+    converted once per colour space), `VideoFadeTransform`, `VideoDraw` (rectangles, coverage masks
+    with one colour: what item 22 draws text with; chroma blended by the coverage of its luma
+    pixels, so odd positions are exact) and `VideoBlend` (crossfade, opaque picture in picture).
+    Shared: `VideoRectangle`; time windows are start-inclusive, end-exclusive; scale and blur take a
+    `maxDegreeOfParallelism` (1 by default). Against ffmpeg (2021-12-20 build) on a 64x48 test
+    picture checked in as raw YUV with ffmpeg's outputs: scale and cover at least 35 dB PSNR, boxblur
+    at least 40 dB, transpose identical. One 1080x1920 frame on one core of an i7-8850H: cover from
+    1920x1080 11.4 ms, radius-20 blur 7.2 ms, a 400x200 overlay 1.1 ms (`VideoFilterBenchmarks`).
 - [ ] **22. Text** — TrueType parser (`cmap` 4/12, `glyf` including composite glyphs such as stacked
   Vietnamese marks, `hmtx`, `kern` and basic GPOS pair kerning) and an anti-aliased scanline
   rasterizer; text normalized to NFC; the caller supplies the font bytes. Draws text with colour,

@@ -161,6 +161,11 @@ public class MediaService(IMediaEncoder mediaEncoder)
           <p class="feature-desc">Manual atom-tree walker reads duration, dimensions, and codec four-cc with no native dependency — plus decodes a mono AAC-LC audio track when one's present.</p>
         </div>
         <div class="feature-card">
+          <div class="feature-icon">&#127902;</div>
+          <div class="feature-title">Video Frames and Filters</div>
+          <p class="feature-desc"><code>VideoFrame</code> (Y'CbCr 4:2:0, pooled) and frame edits: scale, fit (contain or cover), crop, pad, rotate, frame-rate change, box blur, boxes, RGBA overlays, fades and crossfades — the first pieces of in-process video rendering. See <a href="Advanced-Features.html#video-frames">Advanced Features</a>.</p>
+        </div>
+        <div class="feature-card">
           <div class="feature-icon">&#128268;</div>
           <div class="feature-title">One-Line DI</div>
           <p class="feature-desc"><code>services.AddEggEncoder()</code> registers <code>IMediaEncoder</code> — no config required, one optional flag to silence logging.</p>

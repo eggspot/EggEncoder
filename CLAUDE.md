@@ -105,6 +105,20 @@ alpha) and `AlphaMask` (coverage) are overlay sources. `IVideoFrameTransform` mi
 the frame or disposes it and emits others; disposes it before throwing), default `Flush(emit)`;
 `VideoFrameTransformPipeline` chains them, a flushed frame running through the later transforms.
 
+Filters (`Video/Filters/`, backlog item 21) are `IVideoFrameTransform`s plus two static helpers.
+`ScaleTransform` uses the internal `PlaneScaler` (per-axis `AxisWeights` in 14-bit fixed point
+summing to 16384, kernel widened when shrinking, edge taps folded onto the edge sample; rows into an
+int16 intermediate (value << 6), then columns accumulated four vectors at a time and narrowed with
+`Vector.Narrow`); an optional source rectangle crops inside the scaler, and chroma is left-sited
+horizontally, centred vertically. `FitTransform.Plan` decides contain/cover sizes (even on even
+canvases). `CropTransform`/`PadTransform` round positions down to even. `FrameRateTransform` is
+ffmpeg `fps` `round=near`. `BoxBlurTransform` keeps its row sums between frames. `VideoDraw.Composite`
+is the one blending routine (generic over `ILayer`: solid, mask, image), blending each chroma sample
+by the coverage of its luma pixels; `FillBoxTransform`, `OverlayTransform` and `VideoDraw.BlendMask`
+(item 22's text) use it. Shared helpers live in `FrameTransformSupport` (time windows, owning `Apply`,
+row-band parallelism). Fixtures: `UnitTests/Video/Filters/*.yuv` (a 64x48 input and ffmpeg's
+outputs), PSNR floors in the tests; per-frame cost in `VideoFilterBenchmarks`.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`
