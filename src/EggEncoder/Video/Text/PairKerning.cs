@@ -138,9 +138,9 @@ internal sealed class PairKerning
             _cache.Clear();
         }
 
-        var value = FromLookups(_lookups, left, right);
-        _cache[(left, right)] = value;
-        return value;
+        var adjustment = FromLookups(_lookups, left, right);
+        _cache[(left, right)] = adjustment;
+        return adjustment;
     }
 
     private static int FromLookups(List<FontDataReader[]> lookups, int left, int right)
