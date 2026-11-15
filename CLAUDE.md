@@ -167,6 +167,18 @@ macroblock; `H264DecodeBenchmarks` measures a local file (`EGGENCODER_H264_BENCH
 64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
 `CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
 
+### H.264 encoder (`src/EggEncoder/Codecs/H264/`)
+
+Backlog item 28. `H264Encoder` (public, settings in `H264EncoderSettings`, output
+`H264EncodedFrame` with AVCC payloads, `DecoderConfiguration` for avcC) runs a `MacroblockEncoder`
+per frame: analysis by SATD (`BlockCost`), `MotionSearch` (hexagon + half/quarter pel),
+`ForwardTransform`/`Quantizer`, `CavlcWriter`, `ExpGolombWriter`/`NalUnitWriter`. It reconstructs
+through the decoder's `SliceDecoder` (hooks in `SliceDecoder.Encoding`: start a macroblock, fill
+`Syntax`, reconstruct; motion vector and intra mode prediction; nC) and `DeblockingFilter`, so the
+reconstruction equals what decoders produce; reference pictures get their borders replicated into
+the padding for motion search. Parameter sets are written, then parsed back with the decoder's
+parsers to drive the reconstruction. Not thread-safe; one per stream.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`

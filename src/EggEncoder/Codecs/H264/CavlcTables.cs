@@ -153,14 +153,17 @@ internal static class CavlcTables
 internal sealed class VlcTable
 {
     private readonly int[] _entries;
+    private readonly (uint Bits, int Length)[] _codes;
 
     public VlcTable(IReadOnlyList<(string Code, int Value)> codes)
     {
         MaxLength = codes.Max(c => c.Code.Length);
         _entries = new int[1 << MaxLength];
+        _codes = new (uint, int)[codes.Max(c => c.Value) + 1];
         foreach (var (code, value) in codes)
         {
             var bits = Convert.ToInt32(code, 2);
+            _codes[value] = ((uint)bits, code.Length);
             var shift = MaxLength - code.Length;
             for (var fill = 0; fill < 1 << shift; fill++)
             {
@@ -172,6 +175,11 @@ internal sealed class VlcTable
     public int MaxLength { get; }
 
     public static VlcTable FromSequence(string[] codes) => new(codes.Select((code, value) => (code, value)).ToList());
+
+    public (uint Bits, int Length) CodeFor(int value) =>
+        (uint)value < (uint)_codes.Length && _codes[value].Length > 0
+            ? _codes[value]
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "No code for this value");
 
     public int Read(H264BitReader reader)
     {

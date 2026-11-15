@@ -1,0 +1,325 @@
+using System.Diagnostics;
+using EggEncoder.Codecs.H264;
+using EggEncoder.Media;
+using EggEncoder.Transform;
+using EggEncoder.Video;
+using FluentAssertions;
+using static EggEncoder.UnitTests.Codecs.H264.H264TestStreams;
+
+namespace EggEncoder.UnitTests.Codecs.H264
+{
+    public class H264EncoderTest
+    {
+        private static readonly VideoFramePool Pool = new();
+
+        [Theory]
+        [InlineData(64, 48, H264Profile.Baseline, 18)]
+        [InlineData(64, 48, H264Profile.High, 30)]
+        [InlineData(66, 50, H264Profile.Main, 23)]
+        [InlineData(176, 144, H264Profile.High, 26)]
+        [InlineData(16, 16, H264Profile.Baseline, 40)]
+        [InlineData(96, 64, H264Profile.High, 4)]
+        public void Encoded_Stream_Should_Decode_To_The_Encoder_Reconstruction(int width, int height, H264Profile profile, double rateFactor)
+        {
+            var settings = new H264EncoderSettings
+            {
+                Width = width,
+                Height = height,
+                FrameRate = new VideoFrameRate(25),
+                ConstantRateFactor = rateFactor,
+                KeyframeInterval = 6,
+                Profile = profile
+            };
+
+            var (stream, reconstructions, keyframes) = Encode(settings, SyntheticFrames(width, height, 10));
+
+            keyframes.Should().Equal(true, false, false, false, false, false, true, false, false, false);
+            DecodeToMd5(stream).Should().Equal(reconstructions);
+        }
+
+        [Theory]
+        [InlineData(H264Profile.Baseline, 66, 50)]
+        [InlineData(H264Profile.High, 176, 144)]
+        public void Ffmpeg_Should_Decode_The_Output_To_The_Encoder_Reconstruction(H264Profile profile, int width, int height)
+        {
+            if (Environment.GetEnvironmentVariable("EGGENCODER_FFMPEG_ORACLE") != "1")
+            {
+                return;
+            }
+
+            var settings = new H264EncoderSettings { Width = width, Height = height, FrameRate = new VideoFrameRate(25), Profile = profile, KeyframeInterval = 5 };
+            var (stream, reconstructions, _) = Encode(settings, SyntheticFrames(width, height, 8));
+            var path = Path.Combine(Path.GetTempPath(), $"eggencoder-h264-{Guid.NewGuid():N}.h264");
+            try
+            {
+                File.WriteAllBytes(path, stream);
+                var startInfo = new ProcessStartInfo("ffmpeg", $"-v error -i \"{path}\" -f framemd5 -pix_fmt yuv420p -")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false
+                };
+                using var process = Process.Start(startInfo)!;
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+
+                process.ExitCode.Should().Be(0);
+                output.Split('\n').Where(l => l.Length > 0 && !l.StartsWith('#')).Select(l => l.Split(',')[^1].Trim()).Should().Equal(reconstructions);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void Quality_Should_Stay_Above_A_Psnr_Floor_And_Rise_With_A_Lower_Rate_Factor()
+        {
+            var frames = SyntheticFrames(176, 144, 8);
+            var high = Psnr(new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 18 }, frames);
+            var low = Psnr(new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 34 }, frames);
+
+            high.Should().BeGreaterThan(40);
+            low.Should().BeGreaterThan(22);
+            high.Should().BeGreaterThan(low + 4);
+        }
+
+        [Fact]
+        public void Encoding_The_Same_Frames_Twice_Should_Produce_The_Same_Bytes()
+        {
+            var frames = SyntheticFrames(176, 144, 6);
+            var settings = new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 26 };
+
+            Encode(settings, frames).Stream.Should().Equal(Encode(settings, frames).Stream);
+        }
+
+        [Fact]
+        public void Lower_Rate_Factor_Should_Produce_A_Larger_Stream()
+        {
+            var frames = SyntheticFrames(176, 144, 8);
+            var small = Encode(new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 34 }, frames).Stream.Length;
+            var large = Encode(new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 18 }, frames).Stream.Length;
+
+            large.Should().BeGreaterThan(small * 2);
+        }
+
+        [Fact]
+        public void Decoder_Configuration_Should_Describe_Profile_Level_Size_And_Timing()
+        {
+            using var encoder = new H264Encoder(new H264EncoderSettings
+            {
+                Width = 1080,
+                Height = 1920,
+                FrameRate = new VideoFrameRate(30000, 1001),
+                ColorRange = VideoColorRange.Full,
+                Profile = H264Profile.High
+            });
+
+            var configuration = encoder.DecoderConfiguration;
+            var info = H264SpsParser.Parse(configuration.SequenceParameterSets[0].Span);
+            info.Should().Be(new H264SpsInfo(100, 0, 40, 1, 8, 8, 1080, 1920));
+            configuration.NalLengthSize.Should().Be(4);
+            AvcDecoderConfigurationRecord.Parse(configuration.ToArray()).LevelIndication.Should().Be(40);
+            var sps = SequenceParameterSet.Parse(H264BitReader.FromNalPayload(configuration.SequenceParameterSets[0].Span[1..]));
+            sps.FrameRate.Should().Be(new VideoFrameRate(30000, 1001));
+            sps.Range.Should().Be(VideoColorRange.Full);
+            sps.ColorMatrix.Should().Be(VideoColorMatrix.Bt709);
+            sps.MaxNumberOfReorderFrames.Should().Be(0);
+            sps.Height.Should().Be(1920);
+        }
+
+        [Theory]
+        [InlineData(4, 3, 30.0, 10)]
+        [InlineData(11, 9, 30.0, 11)]
+        [InlineData(22, 18, 30.0, 13)]
+        [InlineData(80, 45, 30.0, 31)]
+        [InlineData(68, 120, 30.0, 40)]
+        [InlineData(120, 68, 60.0, 42)]
+        [InlineData(240, 135, 30.0, 51)]
+        public void ChooseLevel_Should_Pick_The_Smallest_Level_That_Holds_The_Stream(int widthInMacroblocks, int heightInMacroblocks, double fps, int expected)
+        {
+            H264Encoder.ChooseLevel(widthInMacroblocks, heightInMacroblocks, new VideoFrameRate((int)fps), 1).Should().Be(expected);
+        }
+
+        [Fact]
+        public void Odd_Sizes_And_Mismatched_Frames_Should_Be_Refused()
+        {
+            var settings = new H264EncoderSettings { Width = 63, Height = 48, FrameRate = new VideoFrameRate(25) };
+            FluentActions.Invoking(() => new H264Encoder(settings)).Should().Throw<ArgumentException>();
+            FluentActions.Invoking(() => new H264Encoder(settings with { Width = 64, ConstantRateFactor = 52 })).Should().Throw<ArgumentException>();
+            FluentActions.Invoking(() => new H264Encoder(settings with { Width = 9000 })).Should().Throw<ArgumentException>();
+
+            using var encoder = new H264Encoder(settings with { Width = 64 });
+            using var frame = Pool.Rent(32, 32);
+            encoder.Invoking(e => e.Encode(frame, _ => { })).Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Cavlc_Writer_Should_Write_What_The_Decoder_Reads()
+        {
+            var random = new Random(3);
+            foreach (var maxNumCoeff in new[] { 4, 15, 16 })
+            {
+                foreach (var nC in maxNumCoeff == 4 ? new[] { -1 } : new[] { 0, 1, 2, 3, 4, 7, 8, 16 })
+                {
+                    for (var round = 0; round < 200; round++)
+                    {
+                        var block = new short[16];
+                        var density = random.Next(1, 100);
+                        for (var i = 0; i < maxNumCoeff; i++)
+                        {
+                            if (random.Next(100) < density)
+                            {
+                                var magnitude = random.Next(10) switch
+                                {
+                                    < 5 => 1,
+                                    < 8 => random.Next(2, 20),
+                                    < 9 => random.Next(20, 3000),
+                                    _ => random.Next(3000, 32000)
+                                };
+                                block[i] = (short)(random.Next(2) == 0 ? magnitude : -magnitude);
+                            }
+                        }
+
+                        var writer = new BitWriter();
+                        var written = CavlcWriter.WriteBlock(writer, nC, maxNumCoeff, block);
+                        writer.WriteBits(1, 1);
+                        writer.ByteAlign();
+                        var read = new short[16];
+                        var total = CavlcResidual.ReadBlock(new H264BitReader(writer.ToArray()), nC, maxNumCoeff, read);
+
+                        total.Should().Be(written);
+                        read.Should().Equal(block);
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void Exp_Golomb_Lengths_Should_Match_What_Is_Written()
+        {
+            foreach (var value in new[] { 0, 1, 2, 3, 6, 7, 100, 65535, 1 << 20 })
+            {
+                var writer = new BitWriter();
+                writer.WriteUe((uint)value);
+                writer.BitPosition.Should().Be(ExpGolombWriter.UeLength((uint)value));
+                new H264BitReader([.. writer.ToArray(), 0x80]).ReadUe().Should().Be((uint)value);
+            }
+
+            foreach (var value in new[] { 0, 1, -1, 5, -5, 2047, -2048 })
+            {
+                var writer = new BitWriter();
+                writer.WriteSe(value);
+                writer.BitPosition.Should().Be(ExpGolombWriter.SeLength(value));
+                new H264BitReader([.. writer.ToArray(), 0x80]).ReadSe().Should().Be(value);
+            }
+        }
+
+        private static (byte[] Stream, List<string> Reconstructions, List<bool> Keyframes) Encode(H264EncoderSettings settings, List<VideoFrame> frames)
+        {
+            using var encoder = new H264Encoder(settings);
+            var stream = new List<byte>();
+            var configuration = encoder.DecoderConfiguration;
+            foreach (var nal in configuration.SequenceParameterSets.Concat(configuration.PictureParameterSets))
+            {
+                stream.AddRange([0, 0, 0, 1]);
+                stream.AddRange(nal.ToArray());
+            }
+
+            var reconstructions = new List<string>();
+            var keyframes = new List<bool>();
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, encoded =>
+                {
+                    stream.AddRange(AnnexBConverter.ToAnnexB(encoded.Payload.Span));
+                    keyframes.Add(encoded.IsKeyframe);
+                    reconstructions.Add(CroppedMd5(encoder.LastReconstruction!, settings.Width, settings.Height));
+                });
+            }
+
+            return ([.. stream], reconstructions, keyframes);
+        }
+
+        private static double Psnr(H264EncoderSettings settings, List<VideoFrame> frames)
+        {
+            using var encoder = new H264Encoder(settings);
+            double totalError = 0;
+            long samples = 0;
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, _ =>
+                {
+                    var reconstruction = encoder.LastReconstruction!.Frame;
+                    for (var y = 0; y < frame.Height; y++)
+                    {
+                        var a = frame.GetRow(VideoPlane.Y, y);
+                        var b = reconstruction.GetRow(VideoPlane.Y, y);
+                        for (var x = 0; x < frame.Width; x++)
+                        {
+                            var d = a[x] - b[x];
+                            totalError += d * d;
+                            samples++;
+                        }
+                    }
+                });
+            }
+
+            return 10 * Math.Log10(255.0 * 255.0 / (totalError / samples));
+        }
+
+        private static string CroppedMd5(H264Picture picture, int width, int height)
+        {
+            using var frame = Pool.Rent(width, height);
+            for (var y = 0; y < height; y++)
+            {
+                picture.Frame.GetRow(VideoPlane.Y, y)[..width].CopyTo(frame.GetRow(VideoPlane.Y, y));
+            }
+
+            foreach (var plane in new[] { VideoPlane.U, VideoPlane.V })
+            {
+                for (var y = 0; y < frame.ChromaHeight; y++)
+                {
+                    picture.Frame.GetRow(plane, y)[..frame.ChromaWidth].CopyTo(frame.GetRow(plane, y));
+                }
+            }
+
+            return Md5(frame);
+        }
+
+        internal static List<VideoFrame> SyntheticFrames(int width, int height, int count)
+        {
+            var random = new Random(width * 31 + height);
+            var frames = new List<VideoFrame>();
+            for (var index = 0; index < count; index++)
+            {
+                var frame = Pool.Rent(width, height);
+                for (var y = 0; y < height; y++)
+                {
+                    var row = frame.GetRow(VideoPlane.Y, y);
+                    for (var x = 0; x < width; x++)
+                    {
+                        var value = ((x + (2 * index)) * 3) + (y * 2) + random.Next(-6, 7);
+                        var inBox = x >= 8 + (3 * index) && x < 24 + (3 * index) && y >= 6 + index && y < 22 + index;
+                        row[x] = (byte)Math.Clamp(inBox ? 230 - value / 3 : value % 256, 0, 255);
+                    }
+                }
+
+                for (var y = 0; y < frame.ChromaHeight; y++)
+                {
+                    var u = frame.GetRow(VideoPlane.U, y);
+                    var v = frame.GetRow(VideoPlane.V, y);
+                    for (var x = 0; x < frame.ChromaWidth; x++)
+                    {
+                        u[x] = (byte)Math.Clamp(128 + ((x - y + index) * 2), 0, 255);
+                        v[x] = (byte)Math.Clamp(100 + (x * 3) + (y % 7), 0, 255);
+                    }
+                }
+
+                frame.Timestamp = TimeSpan.FromMilliseconds(40 * index);
+                frames.Add(frame);
+            }
+
+            return frames;
+        }
+    }
+}
