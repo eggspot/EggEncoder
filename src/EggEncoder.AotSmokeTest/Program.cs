@@ -758,6 +758,60 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("Composition: a clip without an extension, an end card, music, rendered to MP4", () =>
+    {
+        var clipPath = Path.Combine(workingDirectory, "clip");
+        using (var clipFile = File.Create(clipPath))
+        using (var h264 = new EggEncoder.Codecs.H264.H264Encoder(new EggEncoder.Codecs.H264.H264EncoderSettings { Width = 32, Height = 32, FrameRate = new EggEncoder.Video.VideoFrameRate(25) }))
+        using (var mp4Writer = new EggEncoder.Containers.Mp4.Mp4Writer(clipFile, leaveOpen: true, new MemoryStream()))
+        {
+            mp4Writer.Open(new EggEncoder.Media.MediaTrackSet([new EggEncoder.Media.MediaTrackInfo(0, EggEncoder.Media.MediaKind.Video, EggEncoder.Media.MediaCodec.H264, 1000, h264.DecoderConfiguration.ToArray(), 0, width: 32, height: 32)]));
+            using var picture = EggEncoder.Video.VideoFrame.Create(32, 32);
+            for (var index = 0; index < 5; index++)
+            {
+                picture.Fill(new EggEncoder.Video.YuvColor((byte)(60 + (index * 20)), 100, 160));
+                h264.Encode(picture, encoded => mp4Writer.Write(new EggEncoder.Media.MediaPacket(0, 40 * index, 40 * index, encoded.IsKeyframe, 0, encoded.Payload)));
+            }
+
+            mp4Writer.Complete();
+        }
+
+        var musicPath = Path.Combine(workingDirectory, "music.wav");
+        using (var wav = EggEncoder.Codecs.Wav.WavWriter.Create(musicPath, 2, 48000, 16, 4800))
+        {
+            var tone = new int[9600];
+            for (var i = 0; i < 4800; i++)
+            {
+                tone[2 * i] = tone[(2 * i) + 1] = (int)(8000 * Math.Sin(i * 0.05));
+            }
+
+            wav.WriteInterleavedSamples(tone, 4800);
+            wav.Finish();
+        }
+
+        var font = EggEncoder.Video.Text.TrueTypeFont.Load(Convert.FromHexString(
+            "00010000000B0080000300304F532F3245D846570000013800000060636D6170001EEDFF000001AC00000064676C7966527075FA0000021C000000846865616430A38B32000000BC000000366868656107330290000000F400000024686D74780CB2003200000198000000146B65726E0039FFBC000002A00000001E6C6F6361004B0074000002100000000C6D617870000C001400000118000000206E616D65CEF41F53000002C000000087706F73746950293A000003480000004500010000000100000EA7219F5F0F3CF5000103E800000000E71EA3CB00000000E71EA3CBFFCE0000038402BC000000030002000000000000000100000320FF38005A03840000FFCE03B600010000000000000000000000000000000500010000000500040001000C00030002000000000000000000000000000200020003028A0190000500040000000000000000000000000000000000000000000000000000000000000000000000010200000000000000000000003F3F3F3F00000061FFFF02EEFF0600640384012C00000000000000000000000000000020000001F40032025800000226000002BC00000384000000000003000000030000001C000300010000001C0003000A0000003C00040020000000040004000100000064FFFF00000061FFFFFFA0000100000000000C00000000002800000000000000020000006100000064000000010001F6000001F600000000010000000D001900250032004200010032000001C2019000030000331121113201900190FE700000010000000001F401F4000300003111211101F401F4FE0C00010000000001F401F4000300003110201101F401F4FE0CFFFF00000000025802BC00270001006400C8000E000200002000FFFFFFCE0000038402BC00260003CE00008700010384000000004000C0000000000000010000001A00010002000C0001000000010002FF9C000200010028000000000004003600010000000000010014000000010000000000020007001400030001040900010028001B0003000104090002000E0043456767456E636F6465722053796E746865746963526567756C61720045006700670045006E0063006F006400650072002000530079006E0074006800650074006900630052006500670075006C006100720000020000000000000000000000000000000000000000000000000000000000000005000001020103010401050673717561726505637572766504636F6D70066E6573746564000000"));
+        var composition = new EggEncoder.Video.Composition.VideoComposition
+        {
+            Width = 48,
+            Height = 32,
+            FrameRate = new EggEncoder.Video.VideoFrameRate(25),
+            Scenes = [new EggEncoder.Video.Composition.CompositionScene { Source = clipPath }],
+            Music = new EggEncoder.Video.Composition.CompositionMusic { Source = musicPath },
+            EndCard = new EggEncoder.Video.Composition.CompositionEndCard { Text = "ab", Duration = TimeSpan.FromSeconds(0.2) },
+            Font = font,
+            MaxDegreeOfParallelism = 2
+        };
+        using var output = new MemoryStream();
+        var result = composition.Render(output);
+        if (result.FrameCount != 10 || !result.HasAudio || result.Thumbnail[0] != 0xFF || output.Length < 200)
+        {
+            throw new InvalidOperationException("Composition check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }

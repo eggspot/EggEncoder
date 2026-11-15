@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EggEncoder is a .NET audio encoding/decoding toolkit built around a single `IMediaEncoder` abstraction (`Probe`, `ConvertFile`, `CutFile`) implemented entirely in-process by `NativeEncoder` — pure .NET + P/Invoke codec bindings, no external process, no ffmpeg dependency. Originally extracted from a music distribution platform's internal encoder project (which also had an ffmpeg-shell-out engine; that engine was dropped when EggEncoder became native-only).
 
-Video rendering (H.264 decode/encode, frame editing, text, MP4 writing) is in progress as Phase 5 of
-`docs/video-support-backlog.md`; until its items land, the description above is still accurate.
+It also renders video (Phase 5 of `docs/video-support-backlog.md`): H.264 decode and encode, frame
+editing, text and subtitles, JPEG frame grabs, MP4 reading and writing, and `VideoComposition`, which
+builds a short H.264 + AAC MP4 from clips, music and text with no ffmpeg.
 
 ## Commands
 
@@ -89,6 +90,19 @@ Transform instances carry cross-block state (e.g. `ResamplingTransform`'s fracti
 
 **Float PCM** (`Pcm/FloatSampleConverter.cs`): the pipeline itself is exclusively `int[]`-based — there's no `IPcmTransform` for float, since that would mean reworking every transform's shared contract. Instead `FloatSampleConverter.FromFloat`/`ToFloat` convert at the application boundary, using the same -1.0..1.0 ↔ 32-bit-int-native-range scale `WavReader`/`WavWriter` already use for float WAV I/O; `float.NaN` maps to 0 (silence) rather than the unspecified result of a raw `(int)double.NaN` cast, and `float.PositiveInfinity`/`NegativeInfinity` clamp to ±1.0. `AudioCutter.ReadWavAsFloat`/`WriteWavFromFloat` wrap this for the WAV case. A float WAV *source* has always decoded transparently into int PCM through `Convert`/`Cut`/`Mix`/`Concatenate` (`WavReader.IsFloatFormat` handles this on read); for a float WAV *destination*, `WavSampleFormat.Float32` (`Codecs/WavSampleFormat.cs`) can be passed to those same entry points (`Convert`/`Cut` via `CutOptions.DestinationWavFormat`/`Mix`/`Concatenate`) — it requires the destination's bit depth to already be 32 and throws `NotSupportedException` against a non-WAV destination. The default, `WavSampleFormat.Integer`, is unchanged from before this option existed.
 
+### Video composition (`src/EggEncoder/Video/Composition/`)
+
+Backlog item 31. `VideoComposition` (public record; `CompositionScene`, `CompositionMusic`,
+`CompositionEndCard`, `CompositionResult`) validates, then `CompositionRenderer` (internal) runs:
+`CompositionTimeline.Plan` (frame ranges per scene from cumulative durations, `NearestFrameIndex`),
+`CompositionAudio.Build` (scene audio cut and placed, music looped/ducked, `PcmMixer`, then
+`LoudnessNormalizer`), the AAC packets, then video: `CompositionFrameSource` on a producer task
+(decode via `Mp4VideoReader`, `ColorConvertTransform` to BT.709 limited, `FitTransform`, overlays,
+nearest-time frame picking, `SubtitleBurnInTransform`, end card) feeding a bounded queue to the
+`H264Encoder` and `Mp4Writer`. Overlays must not change the frame count. `Media/MediaFormatSniffer`
+maps leading bytes to the extension the library dispatches on; `PcmAudio.Decode` sniffs names without
+one. Tests build clips with `TestUtilities/SyntheticClip`.
+
 ### Video frames (`src/EggEncoder/Video/`)
 
 Backlog item 20, the picture type every Phase 5 video item shares. `VideoFrame`: planar Y'CbCr 4:2:0,
@@ -115,7 +129,8 @@ canvases). `CropTransform`/`PadTransform` round positions down to even. `FrameRa
 ffmpeg `fps` `round=near`. `BoxBlurTransform` keeps its row sums between frames. `VideoDraw.Composite`
 is the one blending routine (generic over `ILayer`: solid, mask, image), blending each chroma sample
 by the coverage of its luma pixels; `FillBoxTransform`, `OverlayTransform` and `VideoDraw.BlendMask`
-(item 22's text) use it. Shared helpers live in `FrameTransformSupport` (time windows, owning `Apply`,
+(item 22's text) use it. `ColorConvertTransform` converts range and matrix through R'G'B'
+(`YuvColor.ConversionMatrix`). Shared helpers live in `FrameTransformSupport` (time windows, owning `Apply`,
 row-band parallelism). Fixtures: `UnitTests/Video/Filters/*.yuv` (a 64x48 input and ffmpeg's
 outputs), PSNR floors in the tests; per-frame cost in `VideoFilterBenchmarks`.
 
