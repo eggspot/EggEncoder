@@ -89,27 +89,47 @@ internal static class BlockCost
             return Vector128.Sum(sum) >> 1;
         }
 
-        var total = 0;
-        Span<int> difference = stackalloc int[16];
+        var total = Vector128<int>.Zero;
         for (var by = 0; by < height; by += 4)
         {
             for (var bx = 0; bx < width; bx += 4)
             {
-                for (var y = 0; y < 4; y++)
-                {
-                    var sourceRow = source.Slice(((by + y) * sourceStride) + bx, 4);
-                    var predictionRow = prediction.Slice(((by + y) * predictionStride) + bx, 4);
-                    for (var x = 0; x < 4; x++)
-                    {
-                        difference[(y * 4) + x] = sourceRow[x] - predictionRow[x];
-                    }
-                }
-
-                total += Hadamard4x4Sum(difference);
+                total += Satd4x4Lanes(source[((by * sourceStride) + bx)..], sourceStride, prediction[((by * predictionStride) + bx)..], predictionStride);
             }
         }
 
-        return total >> 1;
+        return Vector128.Sum(total) >> 1;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Satd4x4Lanes(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
+    {
+        var d0 = DifferenceRow(source, 0, prediction, 0);
+        var d1 = DifferenceRow(source, sourceStride, prediction, predictionStride);
+        var d2 = DifferenceRow(source, 2 * sourceStride, prediction, 2 * predictionStride);
+        var d3 = DifferenceRow(source, 3 * sourceStride, prediction, 3 * predictionStride);
+        var a = d0 + d1;
+        var b = d0 - d1;
+        var c = d2 + d3;
+        var e = d2 - d3;
+        return Vector128.Abs(HadamardLanes(a + c)) + Vector128.Abs(HadamardLanes(b + e)) + Vector128.Abs(HadamardLanes(a - c)) + Vector128.Abs(HadamardLanes(b - e));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> DifferenceRow(ReadOnlySpan<byte> source, int sourceIndex, ReadOnlySpan<byte> prediction, int predictionIndex)
+    {
+        var s = Vector128.WidenLower(Vector128.WidenLower(Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.AsRef(in source[sourceIndex]))).AsByte()));
+        var p = Vector128.WidenLower(Vector128.WidenLower(Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.AsRef(in prediction[predictionIndex]))).AsByte()));
+        return s.AsInt32() - p.AsInt32();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> HadamardLanes(Vector128<int> x)
+    {
+        var oddLanes = Vector128.Create(0, -1, 0, -1);
+        var upperLanes = Vector128.Create(0, 0, -1, -1);
+        var pairs = ((x ^ oddLanes) - oddLanes) + Vector128.Shuffle(x, Vector128.Create(1, 0, 3, 2));
+        return ((pairs ^ upperLanes) - upperLanes) + Vector128.Shuffle(pairs, Vector128.Create(2, 3, 0, 1));
     }
 
     public static int Sa8d16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
@@ -198,33 +218,5 @@ internal static class BlockCost
         var pairs = Vector128.Shuffle(u, Vector128.Create((short)2, 3, 0, 1, 6, 7, 4, 5));
         var w = Vector128.ConditionalSelect(lowPairs, u + pairs, u - pairs);
         return Vector128.Abs(w).AsUInt16();
-    }
-
-    private static int Hadamard4x4Sum(Span<int> d)
-    {
-        Span<int> rows = stackalloc int[16];
-        for (var i = 0; i < 4; i++)
-        {
-            var a = d[(i * 4) + 0] + d[(i * 4) + 1];
-            var b = d[(i * 4) + 0] - d[(i * 4) + 1];
-            var c = d[(i * 4) + 2] + d[(i * 4) + 3];
-            var e = d[(i * 4) + 2] - d[(i * 4) + 3];
-            rows[(i * 4) + 0] = a + c;
-            rows[(i * 4) + 1] = b + e;
-            rows[(i * 4) + 2] = a - c;
-            rows[(i * 4) + 3] = b - e;
-        }
-
-        var sum = 0;
-        for (var j = 0; j < 4; j++)
-        {
-            var a = rows[j] + rows[4 + j];
-            var b = rows[j] - rows[4 + j];
-            var c = rows[8 + j] + rows[12 + j];
-            var e = rows[8 + j] - rows[12 + j];
-            sum += Math.Abs(a + c) + Math.Abs(b + e) + Math.Abs(a - c) + Math.Abs(b - e);
-        }
-
-        return sum;
     }
 }
