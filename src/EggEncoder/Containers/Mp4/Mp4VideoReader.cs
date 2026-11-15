@@ -40,8 +40,19 @@ namespace EggEncoder.Containers.Mp4
 
         /// <summary>Opens the file at <paramref name="path"/>.</summary>
         /// <inheritdoc cref="Mp4VideoReader(Stream, bool, VideoFramePool?)"/>
-        public static Mp4VideoReader Open(string path, VideoFramePool? pool = null) =>
-            new(File.OpenRead(path), leaveOpen: false, pool);
+        public static Mp4VideoReader Open(string path, VideoFramePool? pool = null)
+        {
+            var stream = File.OpenRead(path);
+            try
+            {
+                return new Mp4VideoReader(stream, leaveOpen: false, pool);
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
+        }
 
         /// <summary>The decoded picture size before rotation.</summary>
         public (int Width, int Height) CodedSize => (_track.Width, _track.Height);
