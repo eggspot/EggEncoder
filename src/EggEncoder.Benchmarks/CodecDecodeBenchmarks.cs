@@ -10,12 +10,6 @@ using EggEncoder.Codecs.Wma;
 
 namespace EggEncoder.Benchmarks
 {
-    // Pure decode throughput for this project's own from-scratch (no native binary, no external
-    // process) codec rewrites -- docs/managed-codec-rewrite-plan.md's own FLAC/WavPack/TTA, plus
-    // MP3 (still NLayer-backed on decode; see docs/external-dependency-removal-plan.md). Unlike
-    // AudioCutterBenchmarks' own "Convert" benchmarks (which measure WAV decode + MP3/FLAC encode
-    // together), this isolates each codec's own decode alone, and covers WavPack/TTA, which that
-    // file doesn't benchmark at all.
     [MemoryDiagnoser]
     public class CodecDecodeBenchmarks
     {
@@ -69,8 +63,6 @@ namespace EggEncoder.Benchmarks
                 _wmaPath = Path.Combine(Path.GetTempPath(), $"bench_decode_{Guid.NewGuid():N}.wma");
                 WmaEncoder.Encode(_wmaPath, interleaved, Channels, SampleRate);
 
-                // AAC encode is mono-only (AacFrameEncoder's own scope), so this one fixture is the
-                // left channel alone -- its numbers are per mono stream, not comparable 1:1 with the rest.
                 var mono = new short[TotalFrames];
                 for (var frame = 0; frame < TotalFrames; frame++)
                 {
@@ -106,7 +98,7 @@ namespace EggEncoder.Benchmarks
             return total;
         }
 
-        [Benchmark(Description = "Mp3Decoder: decode 10s stereo/16-bit (NLayer-backed)")]
+        [Benchmark(Description = "Mp3Decoder: decode 10s stereo/16-bit")]
         public long DecodeMp3()
         {
             long total = 0;

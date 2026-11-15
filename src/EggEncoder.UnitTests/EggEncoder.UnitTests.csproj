@@ -102,6 +102,12 @@
     <None Include="Codecs\Mp3\no_xing.mp3" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mp3\tone.mp3" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Mp3\vbr_q4.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\lsf_22050_stereo.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\mpeg25_8000_mono.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\mpeg25_11025_stereo.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\mono_44100.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\transients_44100.mp3" CopyToOutputDirectory="Always" />
+    <None Include="Codecs\Mp3\layer2.mp3" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wma\tone_mono.wma" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wma\tone_mono_groundtruth.pcm" CopyToOutputDirectory="Always" />
     <None Include="Codecs\Wma\tone_stereo.wma" CopyToOutputDirectory="Always" />

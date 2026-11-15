@@ -71,7 +71,7 @@ backlog item exists for them; this section is the permanent record of that decis
 | Package | Used by | What it does | Replacement |
 |---|---|---|---|
 | `Concentus` | `Codecs/Opus/OpusEncoderSession.cs`, `Codecs/Opus/OpusDecoder.cs` | Full Opus codec (SILK speech + CELT music layers, RFC 6716) | Phase 4 below |
-| `NLayer` | `Codecs/Mp3/Mp3Decoder.cs` | MPEG-1/2/2.5 Layer III decode | Phase 1 below |
+| ~~`NLayer`~~ (removed) | `Codecs/Mp3/Mp3Decoder.cs` | MPEG-1/2/2.5 Layer III decode | Phase 1 below: done |
 | `NVorbis` | `Codecs/Vorbis/VorbisDecoder.cs` | Ogg Vorbis decode | Phase 2 below |
 | `OggVorbisEncoder` | `Codecs/Vorbis/VorbisEncoderSession.cs` | Ogg Vorbis encode | Phase 3 below |
 | `Microsoft.Extensions.DependencyInjection.Abstractions` | `ServiceCollectionExtensions.cs` | `IServiceCollection` contract | Kept — see decision above |
@@ -90,6 +90,20 @@ this codebase.
 ---
 
 ## Phase 1 — MP3 decode (replaces `NLayer`)
+
+**Status: done (1a-1e).** `Mp3Decoder` now runs an in-house decoder written in one piece
+(`Mp3StreamDecoder`, `Mp3LayerIIIDecoder`, `Mp3Imdct`, `Mp3DecoderTables`, `Mp3HuffmanLookup`,
+`MpegAudioHeader`): MPEG-1/2/2.5, the bit reservoir, MS and intensity stereo, short and mixed blocks,
+CRC-protected frames (the CRC is skipped, not checked), the Xing/Info/VBRI frame skipped. Intensity
+stereo and mixed blocks follow the standards but no encoder available here writes them (LAME doesn't),
+so unlike everything else they are not checked against ffmpeg. The partial pieces described below
+(`Mp3HuffmanDecoder`, `Mp3Requantizer`, `Mp3ScaleFactorDecoder`, `Mp3HybridFilter`,
+`Mp3SynthesisFilter`, `Mp3FrameHeaderParser`, `Mp3SideInfoParser`, `Mp3ScaleFactorTables`) were
+replaced by it and deleted with their tests. Checked against ffmpeg on every sample of nine files
+(MPEG-1 CBR/VBR joint stereo, no-Xing, mono, transients with short blocks, MPEG-2 22.05 kHz and
+MPEG-2.5 11.025/8 kHz): within 2 LSB. Not decoded: Layer I/II (NLayer did; refused with
+`NotSupportedException`). Long files are decoded in parallel 48-frame segments with byte-identical
+output; see `docs/benchmarks.md` for the speed against ffmpeg. The notes below are the history.
 
 ### What's reusable from the existing in-house MP3 encoder (and what genuinely isn't)
 
@@ -133,7 +147,7 @@ defaults, which routinely use all four of those features). **The owner's explici
 match `NLayer`'s real-world compatibility, built incrementally via the sub-items below, not a
 narrower "decodes our own output" scope.
 
-- [ ] **1a. MPEG-1 Layer III core decode** — frame header + side info parsing (real
+- [x] **1a. MPEG-1 Layer III core decode** — frame header + side info parsing (real
   `main_data_begin`, a rolling bit-reservoir buffer of previous frames' unused main data bytes),
   real scalefactor decode (`scalefac_compress` 0-15 → `slen1`/`slen2` via the spec's own published
   table, `scfsi` for granule 1 reusing granule 0's scalefactors per band when set), `big_values` +
@@ -220,22 +234,22 @@ narrower "decodes our own output" scope.
     assembly (`main_data_begin` actually reused across frames, not just parsed) remains the one
     not-yet-started piece of this sub-item, and is now the thing blocking a `Mp3Decoder.Decode`
     cutover — none of this decode chain is wired in yet; `NLayer` remains the active decoder.
-- [ ] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
+- [x] **1b. Joint stereo (MS + intensity) reconstruction** — decodes `mode_extension` for both
   joint-stereo bits (MS stereo's sum/difference reconstruction per channel, intensity stereo's
   scalefactor-band-driven panning reconstruction above the `intensity_stereo_bound`).
   - **Depends on**: 1a.
-- [ ] **1c. Short & mixed block decode** — `window_switching_flag`/`block_type`/`mixed_block_flag`,
+- [x] **1c. Short & mixed block decode** — `window_switching_flag`/`block_type`/`mixed_block_flag`,
   the three-short-window shape + `subblock_gain` in requantization, reorder (short-block
   scalefactor-band coefficients are coded in a different frequency/window interleaving than long
   blocks and must be reordered before the hybrid filter), and the alternate (short) window shape
   for the hybrid filter's own IMDCT+overlap-add.
   - **Depends on**: 1a (can be developed in parallel with 1b; both depend only on 1a).
-- [ ] **1d. MPEG-2/2.5 (LSF) support** — one granule per frame instead of two, the LSF-specific
+- [x] **1d. MPEG-2/2.5 (LSF) support** — one granule per frame instead of two, the LSF-specific
   scalefactor compression table (different from MPEG-1's), no `scfsi`. `Mp3Probe` already detects
   MPEG-2/2.5 headers (`_mpeg2SampleRates`/`_mpeg25SampleRates`/`_mpeg2Layer3BitrateKbps`); decode
   does not yet need to.
   - **Depends on**: 1a (can be developed in parallel with 1b/1c).
-- [ ] **1e. Cutover — swap `Mp3Decoder.Decode` to the in-house decoder, remove `NLayer`** — only
+- [x] **1e. Cutover — swap `Mp3Decoder.Decode` to the in-house decoder, remove `NLayer`** — only
   once 1a-1d are all merged and verified. Re-run every existing MP3 test (`Mp3DecoderTest`,
   `Mp3ProbeTest`, `Mp3EncoderSnrTest`, `AotSmokeTest`'s own MP3 round trip) against the new decoder
   before removing the `PackageReference`; add a regression test per real fixture confirming

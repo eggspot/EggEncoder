@@ -38,19 +38,20 @@ every one of them (decorrelation weight update, the entropy coder's class/tail/c
 is the direct mathematical inverse of this same already-documented decode-side knowledge, derived
 by this project itself rather than by consulting any encoder implementation.
 
-## NLayer — managed MP3 decoder
+## MP3 decoding — clean-room acknowledgment (no code copied)
 
-- **Project**: [NLayer](https://github.com/naudio/NLayer)
-- **License**: MIT / LGPL dual-licensed (used here under MIT)
-- **How it's used**: Referenced as a standard NuGet `PackageReference` for MP3 decoding
-  (`Codecs/Mp3/Mp3Decoder.cs`); no source is vendored. Its own decoder source
-  (`NLayer/Decoder/*.cs`) was also read at arm's length, read-only, as a test oracle while
-  debugging the managed MP3 **encoder** below (`git log`-visible under `feat/managed-mp3-encoder`)
-  — to cross-check this project's own Huffman table transcription and understand decode-side
-  framing expectations (bit reservoir, `part2_3_length`/`part3end`, region boundaries). No NLayer
-  source was copied; only independently-rederived facts (confirmed correct by mechanical,
-  bit-for-bit comparison, not by inspection) fed back into the encoder's own, separately-written
-  code.
+`Codecs/Mp3/Mp3StreamDecoder.cs`, `Mp3LayerIIIDecoder.cs`, `Mp3Imdct.cs`, `Mp3DecoderTables.cs`,
+`Mp3HuffmanLookup.cs` and `MpegAudioHeader.cs` were written from ISO/IEC 11172-3 (MPEG-1 Layer III:
+frame and side-information syntax, bit reservoir, scalefactors, Huffman decoding, requantisation, joint
+stereo, reordering, alias reduction, IMDCT and windows, the synthesis filter bank and its window) and
+ISO/IEC 13818-3 (the lower sampling rates: one granule per frame, the scalefactor compression and
+intensity stereo of MPEG-2), with the MPEG-2.5 rates as published in the MP3 literature. The Huffman
+codes come from this project's encoder tables (`Mp3HuffmanTables`, transcribed from the standard).
+ffmpeg was used only as a black box: its decoded output is the test reference. These files replace the
+NLayer NuGet package, which this project used for MP3 decoding until then. NLayer's decoder source was
+read once, at arm's length, while this project's MP3 encoder was being verified (its `NLayer/Decoder/*.cs`
+as a test oracle for the Huffman table transcription and the bit-reservoir framing); no NLayer code was
+copied into the encoder or the decoder.
 
 ## AAC-LC stereo decode — clean-room acknowledgment (no code copied)
 
@@ -140,7 +141,7 @@ derivations only. No source from any MP3 **encoder** (LAME, GroovyCodecs, shine,
 encoder, or any other) was read or copied. Real `lame`/`ffmpeg` CLI builds were used, black-box
 only (as independent binaries, never their source), to cross-validate bitstream structure during
 development — the same arm's-length methodology already established for WavPack above. NLayer's
-own **decoder** source was read as a test oracle per the note above; this is explicitly a
+own **decoder** source was read as a test oracle per the MP3 decoding note above; this is explicitly a
 decode-side-only exception load-bearing for verification, not an encoder-algorithm source.
 
 ## MP3 encoder-delay/padding metadata ("LAME tag") — clean-room acknowledgment (byte layout read from FFmpeg's real source, no code copied)
@@ -219,7 +220,8 @@ feature needs depends on them.
   (`Codecs/Vorbis/VorbisEncoderSession.cs`); no source is vendored. As with NVorbis, there is no
   native `libvorbisenc` fallback option to guard against — it's pure managed only.
 
-**Concentus/NLayer/NVorbis/OggVorbisEncoder are all scheduled for removal** — see
+**Concentus/NVorbis/OggVorbisEncoder are all scheduled for removal** (NLayer, the former MP3 decoder,
+already is) — see
 `docs/external-dependency-removal-plan.md` for the phased plan replacing each with a from-scratch
 EggEncoder implementation, the owner's own decision once the native-binary removal above was
 complete.
