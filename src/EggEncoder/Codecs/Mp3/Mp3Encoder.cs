@@ -60,6 +60,67 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
+        /// <summary>The variable-bit-rate quality <see cref="EncodeVbr"/> and <see cref="OpenVbrSession"/> use by default.</summary>
+        public const int DefaultVbrQuality = 4;
+
+        private static readonly int[] VbrTargetGains = [138, 142, 146, 150, 154, 158, 162, 166, 170, 174];
+
+        /// <summary>
+        /// Encodes a WAV file to a variable-bit-rate MP3: each frame uses the lowest MPEG-1 Layer III bitrate (32 to
+        /// 320 kb/s) that quantises it at least as finely as <paramref name="quality"/> asks for, and the first frame
+        /// carries a Xing header with the frame count, byte count and a seek table.
+        /// </summary>
+        /// <param name="sourceWavFilePath">The WAV file to encode.</param>
+        /// <param name="destMp3FilePath">The MP3 file to write.</param>
+        /// <param name="quality">0 (best, largest) to 9 (smallest), like LAME's <c>-V</c> scale.</param>
+        /// <param name="tags">ID3v2 text frames to write, or null.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="quality"/> is outside 0-9.</exception>
+        /// <exception cref="NotSupportedException">A sample rate other than 32000, 44100 or 48000 Hz, or more than two channels.</exception>
+        public static void EncodeVbr(string sourceWavFilePath, string destMp3FilePath, int quality = DefaultVbrQuality, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            using var wavReader = WavReader.Open(sourceWavFilePath);
+            using var session = OpenVbrSession(destMp3FilePath, wavReader.Channels, wavReader.SampleRate, wavReader.BitsPerSample, quality, tags);
+            var interleavedBuffer = new int[FramesPerBlock * wavReader.Channels];
+            int framesRead;
+            while ((framesRead = wavReader.ReadInterleavedSamples(interleavedBuffer, FramesPerBlock)) > 0)
+            {
+                session.WriteInterleavedSamples(interleavedBuffer, framesRead);
+            }
+
+            session.Finish();
+        }
+
+        /// <summary>Opens a variable-bit-rate MP3 encoding session; see <see cref="EncodeVbr"/>.</summary>
+        /// <param name="destMp3FilePath">The MP3 file to write.</param>
+        /// <param name="channels">1 or 2.</param>
+        /// <param name="sampleRate">32000, 44100 or 48000 Hz.</param>
+        /// <param name="bitsPerSample">8, 16, 24 or 32.</param>
+        /// <param name="quality">0 (best, largest) to 9 (smallest), like LAME's <c>-V</c> scale.</param>
+        /// <param name="tags">ID3v2 text frames to write, or null.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="quality"/> is outside 0-9.</exception>
+        /// <exception cref="NotSupportedException">A sample rate other than 32000, 44100 or 48000 Hz, or more than two channels.</exception>
+        public static Mp3EncoderSession OpenVbrSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int quality = DefaultVbrQuality, IReadOnlyDictionary<string, string>? tags = null)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(quality, 0);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(quality, VbrTargetGains.Length - 1);
+            var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
+            var destStream = File.Create(destMp3FilePath);
+            if (tagBytes is not null)
+            {
+                destStream.Write(tagBytes);
+            }
+
+            try
+            {
+                return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, 128, VbrTargetGains[quality]);
+            }
+            catch
+            {
+                destStream.Dispose();
+                throw;
+            }
+        }
+
         internal static int ChooseEncodedSampleRate(int sourceSampleRate)
         {
             if (sourceSampleRate is 32000 or 44100 or 48000)
@@ -81,18 +142,21 @@ namespace EggEncoder.Codecs.Mp3
         private readonly Mp3FrameEncoder _frameEncoder;
         private readonly List<int> _pendingInterleaved = [];
         private readonly long _infoTagFrameOffset;
+        private readonly bool _variableBitRate;
+        private readonly List<long> _frameOffsets = [];
 
         private int _audioFrameCount;
         private long _totalByteCount;
         private bool _finished;
         private bool _disposed;
 
-        internal Mp3EncoderSession(FileStream destStream, int channels, int sampleRate, int bitsPerSample, int bitRateKbps)
+        internal Mp3EncoderSession(FileStream destStream, int channels, int sampleRate, int bitsPerSample, int bitRateKbps, int? vbrTargetGain = null)
         {
             _destStream = destStream;
             _channels = channels;
             _bitsPerSampleShift = bitsPerSample - 16;
-            _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps);
+            _variableBitRate = vbrTargetGain is not null;
+            _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps, vbrTargetGain);
 
             _infoTagFrameOffset = destStream.Position;
             var placeholderInfoTagFrame = _frameEncoder.BuildInfoTagFrame(frameCount: 0, byteCount: 0, startPadSamples: 0, endPadSamples: 0);
@@ -151,7 +215,7 @@ namespace EggEncoder.Codecs.Mp3
             const int flushFrameSamples = FrameSamples;
             var startPad = Mp3Encoder.EncoderDelaySamples;
             var endPad = naturalPaddingFrames + flushFrameSamples - startPad;
-            var finalInfoTagFrame = _frameEncoder.BuildInfoTagFrame(_audioFrameCount, (int)_totalByteCount, startPad, endPad);
+            var finalInfoTagFrame = _frameEncoder.BuildInfoTagFrame(_audioFrameCount, (int)_totalByteCount, startPad, endPad, _variableBitRate ? BuildSeekTable() : null);
 
             _destStream.Seek(_infoTagFrameOffset, SeekOrigin.Begin);
             _destStream.Write(finalInfoTagFrame);
@@ -169,8 +233,22 @@ namespace EggEncoder.Codecs.Mp3
             _destStream.Dispose();
         }
 
+        private byte[] BuildSeekTable()
+        {
+            var table = new byte[100];
+            for (var i = 0; i < table.Length; i++)
+            {
+                var frame = Math.Min(_frameOffsets.Count - 1, (int)((long)i * _frameOffsets.Count / 100));
+                var offset = frame < 0 ? 0 : _frameOffsets[frame];
+                table[i] = (byte)Math.Min(255, offset * 256 / Math.Max(1, _totalByteCount));
+            }
+
+            return table;
+        }
+
         private void EncodeFrame()
         {
+            _frameOffsets.Add(_totalByteCount);
             var frameBytes = _frameEncoder.EncodeFrame(CollectionsMarshal.AsSpan(_pendingInterleaved)[..(FrameSamples * _channels)]);
             _destStream.Write(frameBytes);
             _pendingInterleaved.RemoveRange(0, FrameSamples * _channels);
