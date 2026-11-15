@@ -338,6 +338,14 @@ and `HasAudio`. Fixtures (ffmpeg-made, ffprobe ground truth in `Mp4FileSourceTes
 `h264_aac_rotated.mp4` (x264 B-frames, stereo AAC, rotate=90), `hevc.mp4`, `vp9_aac.mp4` (VP9 is
 skipped).
 
+`Mp4VideoReader` (backlog item 30) decodes the first H.264 track through `H264Decoder` into frames
+in display order, rotated upright by the track's rotation (`RotateTransform`), from the last keyframe
+at or before a start time; `GrabFrame`/`GrabJpeg` take the first frame at or after a time (else the
+last). `Codecs/Jpeg/JpegEncoder` (baseline JFIF, 4:2:0, full-range BT.601, standard Annex K Huffman
+tables, quality on ffmpeg's `-q:v` scale: DC 8, other entries MPEG-1 default intra matrix x scale / 8)
+converts other ranges and matrices with `YuvColor.ConversionMatrix`; `TestUtilities/BaselineJpegDecoder`
+is the test oracle.
+
 Item 2: `Mp4Writer : IMediaPacketSink` (sync core + async wrappers like `FlvWriter`) writes a
 faststart MP4 (`ftyp`, `moov`, `mdat`) from packets, holding payloads in a scratch stream until
 `Complete` (`Mp4WriterLayout` works out durations, edit lists and 0.5 s chunks; `Mp4MoovBuilder`

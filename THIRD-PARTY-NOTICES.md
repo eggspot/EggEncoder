@@ -101,6 +101,14 @@ licensed under the SIL Open Font License, Version 1.1 (no Reserved Font Name); t
 of the NuGet package. The other test fonts (`synthetic.ttf`, `synthetic-gpos.ttf`) were made for this
 project.
 
+## JPEG encoding — clean-room acknowledgment (no code copied)
+
+`Codecs/Jpeg/*.cs` was written from ITU-T Recommendation T.81 (the baseline process, the JFIF APP0
+segment, and the example Huffman tables of Annex K, which the encoder uses as they are) and the
+default intra quantiser matrix of ISO/IEC 11172-2. The way the `-q:v` scale maps onto the
+quantisation table was read from the table ffmpeg writes into its output files (a black box); no
+source of ffmpeg, libjpeg or any other JPEG codec was read or copied.
+
 ## H.264 decoding — clean-room acknowledgment (no code copied)
 
 `Codecs/H264/*.cs` was written from ITU-T Recommendation H.264 (the 03/2005 edition and the 2003

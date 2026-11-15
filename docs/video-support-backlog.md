@@ -503,11 +503,20 @@ Rules for every Phase 5 item, on top of the ones above:
     8x8 transform changed nothing on that clip, and x264 gains nothing from it there either. Left
     for later: intra 8x8, 16x8/8x16/8x8 partitions, B frames, a parallel entropy stage (slices),
     and the speed target.
-- [ ] **30. JPEG frame grab** — a baseline JPEG encoder (full range, quality mapped from ffmpeg's
+- [x] **30. JPEG frame grab** — a baseline JPEG encoder (full range, quality mapped from ffmpeg's
   `-q:v` scale and stated), tested with a small decoder in the test project. A scene-change score
   is deferred: only film analysis uses it, and films need codecs outside this phase.
   - **Depends on**: 20.
-  - Status: not started.
+  - Status: done. `Codecs.Jpeg.JpegEncoder` writes baseline JFIF, 4:2:0, full-range BT.601 (frames in
+    another range or matrix are converted), with the standard Huffman tables of T.81 Annex K. The
+    quality parameter is ffmpeg's `-q:v` scale (1-31, default 3): one table for all components, DC
+    fixed at 8, every other entry the MPEG-1 default intra matrix times the scale over 8, rounded
+    down; the test checks the table for 3 against the one ffmpeg writes. ffmpeg also optimises its
+    Huffman tables per image, so its files are a little smaller. `Containers.Mp4.Mp4VideoReader`
+    decodes an MP4's H.264 track into upright frames in display order (`ReadFrames(startAt)`) and
+    grabs one (`GrabFrame`: the first frame at or after a time, else the last; `GrabJpeg`). Tested
+    with a baseline decoder in the test project and, with `EGGENCODER_FFMPEG_ORACLE=1`, against
+    ffmpeg's decode (within 1 per sample).
 - [ ] **31. Composition API** — `Video/Composition/VideoComposition`: scenes (clip, seek/trim, fit,
   overlays, per-track volumes), concatenation, looped music with ducking, loudness normalization,
   end text and subtitles, written to MP4 frame by frame, cancellable, with progress. Inputs without

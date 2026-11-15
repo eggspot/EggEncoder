@@ -34,6 +34,28 @@ public readonly record struct YuvColor(byte Y, byte U, byte V)
         return (ToByte(255 * red), ToByte(255 * green), ToByte(255 * blue));
     }
 
+    internal static double[] ConversionMatrix(VideoColorMatrix from, VideoColorMatrix to)
+    {
+        var result = new double[9];
+        var (kr, kb) = Coefficients(from);
+        var (krOut, kbOut) = Coefficients(to);
+        for (var column = 0; column < 3; column++)
+        {
+            var luma = column == 0 ? 1.0 : 0;
+            var cb = column == 1 ? 1.0 : 0;
+            var cr = column == 2 ? 1.0 : 0;
+            var red = luma + (2 * (1 - kr) * cr);
+            var blue = luma + (2 * (1 - kb) * cb);
+            var green = (luma - (kr * red) - (kb * blue)) / (1 - kr - kb);
+            var outLuma = (krOut * red) + ((1 - krOut - kbOut) * green) + (kbOut * blue);
+            result[column] = outLuma;
+            result[3 + column] = (blue - outLuma) / (2 * (1 - kbOut));
+            result[6 + column] = (red - outLuma) / (2 * (1 - krOut));
+        }
+
+        return result;
+    }
+
     internal static (double Kr, double Kb) Coefficients(VideoColorMatrix matrix) => matrix switch
     {
         VideoColorMatrix.Bt601 => (0.299, 0.114),
