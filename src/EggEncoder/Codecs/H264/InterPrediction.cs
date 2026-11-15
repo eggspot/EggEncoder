@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace EggEncoder.Codecs.H264;
@@ -326,9 +327,10 @@ internal static class InterPrediction
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<short> Load(ReadOnlySpan<byte> source, int index, int lanes)
     {
+        ref var at = ref Unsafe.Add(ref MemoryMarshal.GetReference(source), index);
         var raw = lanes == 8
-            ? Vector128.CreateScalar(BinaryPrimitives.ReadUInt64LittleEndian(source[index..])).AsByte()
-            : Vector128.CreateScalar(BinaryPrimitives.ReadUInt32LittleEndian(source[index..])).AsByte();
+            ? Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref at)).AsByte()
+            : Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref at)).AsByte();
         return Vector128.WidenLower(raw).AsInt16();
     }
 
@@ -342,13 +344,14 @@ internal static class InterPrediction
         }
 
         var bytes = Vector128.Narrow(clamped, clamped).AsUInt64().ToScalar();
+        ref var at = ref Unsafe.Add(ref MemoryMarshal.GetReference(output), index);
         if (lanes == 8)
         {
-            BinaryPrimitives.WriteUInt64LittleEndian(output[index..], bytes);
+            Unsafe.WriteUnaligned(ref at, bytes);
         }
         else
         {
-            BinaryPrimitives.WriteUInt32LittleEndian(output[index..], (uint)bytes);
+            Unsafe.WriteUnaligned(ref at, (uint)bytes);
         }
     }
 
@@ -364,18 +367,19 @@ internal static class InterPrediction
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<short> LoadWords(ReadOnlySpan<short> source, int index) =>
-        Vector128.Create(source.Slice(index, Vector128<short>.Count));
+        Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source), (nuint)index);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void StoreWords(Span<short> output, int index, Vector128<short> values, int lanes)
     {
+        ref var at = ref Unsafe.Add(ref MemoryMarshal.GetReference(output), index);
         if (lanes == 8)
         {
-            values.CopyTo(output[index..]);
+            values.StoreUnsafe(ref at);
         }
         else
         {
-            BinaryPrimitives.WriteUInt64LittleEndian(System.Runtime.InteropServices.MemoryMarshal.AsBytes(output[index..]), values.AsUInt64().ToScalar());
+            Unsafe.WriteUnaligned(ref Unsafe.As<short, byte>(ref at), values.AsUInt64().ToScalar());
         }
     }
 
