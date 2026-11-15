@@ -111,12 +111,26 @@ the motion rule, no bounds checks in the sample filter) brought it to:
 
 For comparison, ffmpeg's decoder (hand-written SIMD assembly) on the same files and machine: 0.33 s,
 0.28 s and 0.16 s with one thread, 0.11 s, 0.10 s and 0.08 s with its default frame threads. The
-renderer needs well under one core for real-time 1080p decode, so frame threading is left for later.
+renderer needs well under one core for real-time 1080p decode.
 
 Later, deblocking moved to a second thread running a row behind decoding (best of 6-8 runs in a
 scratch harness, same machine): 1.025 s (59 fps), 0.825 s (73 fps) and 0.526 s (114 fps) for the
 same three streams. On the decoding thread, inter prediction is now about 44% and CABAC residual
 decoding about 24% of the time.
+
+Then frame threads: several pictures decode at once, each waiting on its references' deblocked rows
+(scratch harness, best of 8 runs, ffmpeg timed in the same session since this laptop's speed drifts
+with temperature):
+
+| Stream | One picture at a time | Default frame threads | ffmpeg, 1 thread | ffmpeg, default threads |
+|--------|-----:|-----:|-----:|-----:|
+| High profile, medium preset | 1.195 s | 0.410 s | 0.382 s | 0.115 s |
+| Main profile CABAC P | 0.935 s | 0.314 s | 0.315 s | 0.109 s |
+| Baseline CAVLC P | 0.599 s | 0.224 s | 0.176 s | 0.082 s |
+
+Scaling stops near 3x on this 6-core laptop: with every core busy each thread runs about 1.6 times
+slower than alone (all-core clocks and hyper-threads). Spinning before a blocking wait cost about
+10%, so the decoder's progress counters block at once. The per-thread decode speed is now the limit.
 
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 

@@ -17,6 +17,11 @@ internal sealed partial class SliceDecoder
     private readonly int[] _dequantized = new int[64];
     private readonly H264Picture[] _referencesL0;
     private readonly H264Picture[] _referencesL1;
+    private readonly int[] _pocL0;
+    private readonly int[] _pocL1;
+    private readonly bool[] _longTermL0;
+    private readonly bool[] _longTermL1;
+    private readonly int _currentPoc;
     private readonly bool[] _motionAssigned = new bool[16];
     private readonly CabacDecoder? _cabac;
     private readonly CabacNeighbourState? _cabacState;
@@ -25,7 +30,9 @@ internal sealed partial class SliceDecoder
     private int _mbX;
     private int _mbY;
 
-    public RowProgress? Progress { get; init; }
+    public RowProgress? Progress { get; set; }
+
+    public int FirstMacroblock => _header.FirstMacroblock;
 
     public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer, H264Picture[] referencesL0, H264Picture[] referencesL1, CabacDecoder? cabac = null, CabacNeighbourState? cabacState = null)
     {
@@ -33,6 +40,9 @@ internal sealed partial class SliceDecoder
         _cabacState = cabacState;
         _referencesL0 = referencesL0;
         _referencesL1 = referencesL1;
+        (_pocL0, _longTermL0) = Snapshot(referencesL0);
+        (_pocL1, _longTermL1) = Snapshot(referencesL1);
+        _currentPoc = picture.PicOrderCount;
         _picture = picture;
         _sps = sps;
         _pps = pps;
@@ -42,6 +52,30 @@ internal sealed partial class SliceDecoder
         _dequantizer = dequantizer;
         _width = sps.WidthInMacroblocks;
         _qp = pps.InitialQp + header.QpDelta;
+    }
+
+    private static (int[] Poc, bool[] LongTerm) Snapshot(H264Picture[] references)
+    {
+        var poc = new int[references.Length];
+        var longTerm = new bool[references.Length];
+        for (var i = 0; i < references.Length; i++)
+        {
+            if (references[i] is { } picture)
+            {
+                poc[i] = picture.PicOrderCount;
+                longTerm[i] = picture.IsLongTerm;
+            }
+        }
+
+        return (poc, longTerm);
+    }
+
+    private static void AwaitLines(H264Picture picture, int lines)
+    {
+        if (picture.Progress is { } progress)
+        {
+            progress.WaitFor(0, Math.Min(lines, picture.HeightInMacroblocks * 16));
+        }
     }
 
     public void Decode()

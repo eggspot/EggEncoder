@@ -159,18 +159,29 @@ length-prefixed or Annex B), parses parameter sets into `SequenceParameterSet`/
 `PictureParameterSet` (internal; `Media.H264SpsParser` stays the small public probe), starts an
 `H264Picture` (padded `VideoFrame` from the pool + per-macroblock arrays: kind, slice number, QP,
 intra modes, CAVLC totals, motion vectors and reference ids per 4x4/8x8) on the first slice and
-decodes each slice with `SliceDecoder` (parse one macroblock into `MacroblockSyntax`, then
-reconstruct it). `DeblockingFilter` runs on a second thread a row behind decoding: the slice decoder
-reports each macroblock row through a `RowProgress`, row r is filtered once row r+1 is decoded (intra
-prediction reads unfiltered samples), and slice parameters sit in a per-picture array; slices out of
-raster order, or a single-core machine, deblock the whole picture at the end. The cropped area is then
-copied into a fresh frame for the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
+sets each slice up as a `SliceDecoder` (parse one macroblock into `MacroblockSyntax`, then
+reconstruct it) in a `PictureDecodeJob`. Frame threads: the calling thread parses headers, builds
+reference lists, marks and stores the picture in the DPB (the same order as decoding one picture at a
+time), then the job decodes on a LongRunning task, up to `maxDegreeOfParallelism` pictures at once
+(constructor argument; default one per core, at most eight; 1 decodes on the calling thread). The
+`SliceDecoder` constructor snapshots every reference's POC and long-term flag and the current POC,
+since later marking (MMCO, MMCO5's POC reset) runs before earlier jobs finish. `H264Picture.Progress`
+counts final luma lines (16r+13 after deblocking row r, the next row's edge still changes the rest);
+inter prediction waits on it for the lines its vector reaches (6-tap and chroma margins included) and
+direct modes for the co-located row. Inside a job `DeblockingFilter` runs on a second thread a row
+behind decoding: row r is filtered once row r+1 is decoded (intra prediction reads unfiltered
+samples); slices out of raster order, or a single-core machine, deblock the whole picture at the end.
+Output waits in a FIFO until its picture is decoded, so frames come out a few calls later; a job's
+error surfaces when it is retired (oldest first), and then every job is cancelled, the DPB cleared and
+decoding resumes at the next IDR. Pictures carry a hold count changed only on the calling thread
+(DPB, pending output, jobs and their references). The cropped area is copied into a fresh frame for
+the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
 SP/SI, data partitioning, lossless. Items 24-25 decode I and P slices with CAVLC: `SliceDecoder.Inter` parses
 P partitions into `MacroblockSyntax.Partitions`, predicts motion vectors from neighbours in partition
 decoding order (`_motionAssigned`), and `InterPrediction` interpolates straight from the reference
 picture (a clamped copy only for blocks touching its edge). `DecodedPictureBuffer` owns reference
 marking (sliding window, MMCO), POC (types 0/1/2), list initialisation/modification and bumping;
-pictures it drops come back through `TakeReleased` and are disposed after output is copied.
+pictures it drops come back through `TakeReleased` and lose their DPB hold.
 Item 26 adds CABAC: `CabacDecoder` (engine + context init from
 `CabacTables`, generated from the Recommendation's Tables 9-12..9-33/9-44/9-45) and
 `SliceDecoder.Cabac`, which parses into the same `MacroblockSyntax` (`StartIntraMacroblock`/

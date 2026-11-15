@@ -1,22 +1,23 @@
+using System.Runtime.ExceptionServices;
 using EggEncoder.Video;
 
 namespace EggEncoder.Codecs.H264;
 
 public sealed partial class H264Decoder
 {
-    private SliceFilterParameters[] _sliceFilters = [];
-    private int _sliceCount;
-    private int _nextMacroblock;
-    private bool _inOrder;
-    private RowProgress? _decoded;
-    private Task? _deblocking;
+    private const int MaxDefaultParallelism = 8;
+
     private readonly Dictionary<int, (PictureParameterSet Pps, SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
     private readonly DecodedPictureBuffer _buffer = new();
-    private readonly CabacDecoder _cabac = new();
     private readonly MacroblockArrayPool _arrayPool = new();
-    private CabacNeighbourState? _cabacState;
-    private H264Picture? _current;
+    private readonly Stack<SliceEntropyContext> _entropyContexts = new();
+    private readonly Queue<PictureDecodeJob> _jobs = new();
+    private readonly Queue<H264Picture> _pendingOutput = new();
+    private PictureDecodeJob? _current;
     private SliceHeader? _currentFirstSlice;
+
+    private static int ResolveParallelism(int maxDegreeOfParallelism) =>
+        maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Math.Clamp(Environment.ProcessorCount, 1, MaxDefaultParallelism);
 
     private void DecodeSlice(H264BitReader reader, int nalUnitType, int referenceIdc, TimeSpan timestamp)
     {
@@ -30,99 +31,13 @@ public sealed partial class H264Decoder
             throw new InvalidDataException("H.264: one access unit holds slices of more than one picture");
         }
 
+        var job = _current!;
         var dequantizer = DequantizerFor(pps, sps);
-        if (_sliceCount >= _sliceFilters.Length)
-        {
-            throw new InvalidDataException("H.264: a picture holds more slices than macroblocks");
-        }
-
-        var sliceNumber = _sliceCount++;
-        _sliceFilters[sliceNumber] = new SliceFilterParameters(header.DisableDeblockingFilterIdc, header.FilterOffsetA, header.FilterOffsetB, pps.ChromaQpIndexOffset, pps.SecondChromaQpIndexOffset);
-        _inOrder &= header.FirstMacroblock == _nextMacroblock;
         var referencesL0 = header.Type == SliceType.I ? [] : header.Type == SliceType.P
-            ? _buffer.ReferenceListP(_current!, header, sps)
-            : _buffer.ReferenceListB(_current!, header, sps, 0);
-        var referencesL1 = header.Type == SliceType.B ? _buffer.ReferenceListB(_current!, header, sps, 1) : [];
-        if (pps.EntropyCodingCabac && _cabacState?.MacroblockCount != sps.MacroblockCount)
-        {
-            _cabacState = new CabacNeighbourState(sps.MacroblockCount);
-        }
-
-        var slice = new SliceDecoder(_current!, sps, pps, header, sliceNumber, reader, dequantizer, referencesL0, referencesL1, _cabac, _cabacState)
-        {
-            Progress = _inOrder ? _decoded : null
-        };
-        slice.Decode();
-        if (_inOrder)
-        {
-            _nextMacroblock = slice.Macroblock;
-            _decoded?.Report(0, _nextMacroblock);
-        }
-    }
-
-    private void StartDeblocking(H264Picture picture, SequenceParameterSet sps)
-    {
-        _decoded = null;
-        _deblocking = null;
-        if (Environment.ProcessorCount < 2)
-        {
-            return;
-        }
-
-        var decoded = new RowProgress(1);
-        var filters = _sliceFilters;
-        var width = sps.WidthInMacroblocks;
-        var rows = sps.HeightInMacroblocks;
-        var count = sps.MacroblockCount;
-        _decoded = decoded;
-        _deblocking = Task.Run(() =>
-        {
-            for (var row = 0; row < rows; row++)
-            {
-                decoded.WaitFor(0, Math.Min((row + 2) * width, count));
-                DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
-            }
-        });
-    }
-
-    private void StopDeblocking()
-    {
-        if (_deblocking is not { } task)
-        {
-            return;
-        }
-
-        _decoded!.Cancel();
-        try
-        {
-            task.Wait();
-        }
-        catch (AggregateException)
-        {
-        }
-
-        _deblocking = null;
-        _decoded = null;
-    }
-
-    private void FinishDeblocking(H264Picture picture)
-    {
-        if (_deblocking is not { } task)
-        {
-            DeblockingFilter.Apply(picture, _sliceFilters);
-            return;
-        }
-
-        _decoded!.Report(0, picture.WidthInMacroblocks * picture.HeightInMacroblocks);
-        try
-        {
-            task.GetAwaiter().GetResult();
-        }
-        finally
-        {
-            _deblocking = null;
-            _decoded = null;
-        }
+            ? _buffer.ReferenceListP(job.Picture, header, sps)
+            : _buffer.ReferenceListB(job.Picture, header, sps, 0);
+        var referencesL1 = header.Type == SliceType.B ? _buffer.ReferenceListB(job.Picture, header, sps, 1) : [];
+        job.AddSlice(sps, pps, header, reader, dequantizer, referencesL0, referencesL1);
     }
 
     private void StartPicture(SliceHeader header, SequenceParameterSet sps, TimeSpan timestamp)
@@ -133,24 +48,16 @@ public sealed partial class H264Decoder
         }
 
         _activeSequenceSet = sps;
-        _current = new H264Picture(_pool, sps, _arrayPool);
-        _current.PictureId = _buffer.NewPictureId();
-        _current.ResetMacroblocks();
-        _current.Timestamp = timestamp;
-        _current.IsIdr = header.IsIdr;
-        _current.FrameNum = header.FrameNum;
-        _current.IsReference = header.NalReferenceIdc != 0;
+        var picture = new H264Picture(_pool, sps, _arrayPool) { Progress = new RowProgress(1, spinRounds: 0) };
+        picture.PictureId = _buffer.NewPictureId();
+        picture.ResetMacroblocks();
+        picture.Timestamp = timestamp;
+        picture.IsIdr = header.IsIdr;
+        picture.FrameNum = header.FrameNum;
+        picture.IsReference = header.NalReferenceIdc != 0;
         _currentFirstSlice = header;
-        if (_sliceFilters.Length != sps.MacroblockCount)
-        {
-            _sliceFilters = new SliceFilterParameters[sps.MacroblockCount];
-        }
-
-        _sliceCount = 0;
-        _nextMacroblock = 0;
-        _inOrder = true;
-        StartDeblocking(_current, sps);
-        _buffer.ComputePicOrderCount(_current, header, sps);
+        _current = new PictureDecodeJob(picture, _entropyContexts.TryPop(out var context) ? context : new SliceEntropyContext());
+        _buffer.ComputePicOrderCount(picture, header, sps);
     }
 
     private Dequantizer DequantizerFor(PictureParameterSet pps, SequenceParameterSet sps)
@@ -165,57 +72,114 @@ public sealed partial class H264Decoder
         return dequantizer;
     }
 
-    private void FinishPicture(Action<VideoFrame> output)
+    private void FinishPicture()
     {
-        var picture = _current;
-        if (picture is null)
+        var job = _current;
+        if (job is null)
         {
             return;
         }
 
+        while (_jobs.Count >= _parallelism)
+        {
+            RetireOldestJob();
+        }
+
         _current = null;
-        var sps = _activeSequenceSet!;
+        var picture = job.Picture;
         var header = _currentFirstSlice!;
+        IEnumerable<H264Picture> output;
         try
         {
-            if (Array.IndexOf(picture.Kinds, MacroblockKind.NotDecoded) >= 0)
-            {
-                throw new InvalidDataException("H.264: the slices of a picture don't cover every macroblock");
-            }
-
-            FinishDeblocking(picture);
-            _buffer.Mark(picture, header, sps);
+            _buffer.Mark(picture, header, picture.Sequence);
+            output = _buffer.Store(picture, header, picture.Sequence);
         }
         catch
         {
-            StopDeblocking();
-            picture.Dispose();
+            _entropyContexts.Push(job.Context);
+            picture.Release();
             throw;
         }
 
-        Emit(_buffer.Store(picture, header, sps), output);
+        foreach (var ready in output)
+        {
+            ready.Hold();
+            _pendingOutput.Enqueue(ready);
+        }
+
+        job.Start(_parallelism == 1);
+        _jobs.Enqueue(job);
     }
 
-    private void Emit(IEnumerable<H264Picture> pictures, Action<VideoFrame> output)
+    private void RetireOldestJob()
     {
-        try
+        var job = _jobs.Peek();
+        job.Wait();
+        if (job.Error is { } error)
         {
-            foreach (var picture in pictures)
-            {
-                output(CopyForOutput(picture, _activeSequenceSet!));
-            }
+            CancelAndDropPictures();
+            ExceptionDispatchInfo.Throw(error is OperationCanceledException ? new InvalidDataException("H.264: a reference picture failed to decode") : error);
         }
-        finally
+
+        _jobs.Dequeue();
+        job.ReleaseHolds();
+        _entropyContexts.Push(job.Context);
+    }
+
+    private void RetireFinishedJobs()
+    {
+        while (_jobs.TryPeek(out var job) && job.IsCompleted)
         {
-            foreach (var released in _buffer.TakeReleased())
-            {
-                released.Dispose();
-            }
+            RetireOldestJob();
         }
     }
 
-    private VideoFrame CopyForOutput(H264Picture picture, SequenceParameterSet sps)
+    private void EmitDecoded(Action<VideoFrame> output)
     {
+        RetireFinishedJobs();
+        while (_pendingOutput.TryPeek(out var picture) && picture.IsDecoded)
+        {
+            _pendingOutput.Dequeue();
+            try
+            {
+                output(CopyForOutput(picture));
+            }
+            finally
+            {
+                picture.Release();
+            }
+        }
+
+        ReleaseDroppedPictures();
+    }
+
+    private void FlushPictures(Action<VideoFrame> output)
+    {
+        while (_jobs.Count > 0)
+        {
+            RetireOldestJob();
+        }
+
+        foreach (var picture in _buffer.Flush())
+        {
+            picture.Hold();
+            _pendingOutput.Enqueue(picture);
+        }
+
+        EmitDecoded(output);
+    }
+
+    private void ReleaseDroppedPictures()
+    {
+        foreach (var released in _buffer.TakeReleased())
+        {
+            released.Release();
+        }
+    }
+
+    private VideoFrame CopyForOutput(H264Picture picture)
+    {
+        var sps = picture.Sequence;
         var frame = _pool.Rent(sps.Width, sps.Height, sps.Range, sps.ColorMatrix);
         var source = picture.Frame;
         var left = 2 * sps.CropLeft;
@@ -237,19 +201,37 @@ public sealed partial class H264Decoder
 
     private void AbandonPicture()
     {
-        StopDeblocking();
-        _current?.Dispose();
+        if (_current is not { } job)
+        {
+            return;
+        }
+
         _current = null;
+        _entropyContexts.Push(job.Context);
+        job.Picture.Release();
     }
 
-    private void FlushPictures(Action<VideoFrame> output) => Emit(_buffer.Flush(), output);
-
-    private void ReleasePictures()
+    private void CancelAndDropPictures()
     {
-        _buffer.Clear();
-        foreach (var released in _buffer.TakeReleased())
+        AbandonPicture();
+        foreach (var job in _jobs)
         {
-            released.Dispose();
+            job.Cancel();
         }
+
+        while (_jobs.TryDequeue(out var job))
+        {
+            job.Wait();
+            job.ReleaseHolds();
+            _entropyContexts.Push(job.Context);
+        }
+
+        while (_pendingOutput.TryDequeue(out var picture))
+        {
+            picture.Release();
+        }
+
+        _buffer.Clear();
+        ReleaseDroppedPictures();
     }
 }

@@ -95,10 +95,12 @@ internal sealed class H264Picture : IDisposable
 
     private readonly MacroblockArrays _arrays;
     private readonly MacroblockArrayPool? _arrayPool;
+    private int _holds = 1;
     private bool _disposed;
 
     public H264Picture(VideoFramePool pool, SequenceParameterSet sps, MacroblockArrayPool? arrayPool = null)
     {
+        Sequence = sps;
         WidthInMacroblocks = sps.WidthInMacroblocks;
         HeightInMacroblocks = sps.HeightInMacroblocks;
         var count = WidthInMacroblocks * HeightInMacroblocks;
@@ -118,6 +120,12 @@ internal sealed class H264Picture : IDisposable
     }
 
     public VideoFrame Frame { get; }
+
+    public SequenceParameterSet Sequence { get; }
+
+    public RowProgress? Progress { get; init; }
+
+    public bool IsDecoded => Progress is null || Progress.HasReached(0, HeightInMacroblocks * 16);
 
     public int WidthInMacroblocks { get; }
 
@@ -175,6 +183,16 @@ internal sealed class H264Picture : IDisposable
     {
         Array.Clear(Kinds);
         Array.Fill(SliceNumbers, -1);
+    }
+
+    public void Hold() => _holds++;
+
+    public void Release()
+    {
+        if (--_holds == 0)
+        {
+            Dispose();
+        }
     }
 
     public void Dispose()
