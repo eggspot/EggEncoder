@@ -111,6 +111,19 @@ No source of ffmpeg, x264, openh264, the JM reference decoder or any other decod
 copied. ffmpeg and x264 were used only as black boxes: x264 to make the test streams, ffmpeg to
 produce the per-frame MD5 sums the tests compare against.
 
+## H.264 encoding — clean-room acknowledgment (no code copied)
+
+The encoder side of `Codecs/H264/` (`H264Encoder`, `MacroblockEncoder`, `CabacEncoder`,
+`SliceDecoder.CabacWriting`, `ForwardTransform`, `MotionSearch`, `BlockCost`, `HalfPelPlanes`) was
+written from the same Recommendation: the CABAC encoding engine and binarisations of clause 9.3,
+and forward transforms that invert its inverse transforms. The forward quantisation factors are the
+standard values the H.264 literature publishes (2^n divided by the Recommendation's dequantisation
+scale and the transform's norm, checked by round trips through the decoder). The decisions around
+them (SATD/SA8D costs, coefficient decimation scores, a hexagon motion search, dead-zone rounding)
+are general, published encoder techniques. No source of x264, openh264, the JM reference encoder or
+ffmpeg was read or copied; x264 and ffmpeg were used only as black boxes, to compare sizes and to
+decode the output.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke
