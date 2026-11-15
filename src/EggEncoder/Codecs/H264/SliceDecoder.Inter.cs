@@ -326,6 +326,11 @@ internal sealed partial class SliceDecoder
                 return (c.X, c.Y);
         }
 
+        return MedianPrediction(a, b, c, reference);
+    }
+
+    private static (int X, int Y) MedianPrediction((bool Available, int Reference, int X, int Y) a, (bool Available, int Reference, int X, int Y) b, (bool Available, int Reference, int X, int Y) c, int reference)
+    {
         var matches = (a.Reference == reference ? 1 : 0) + (b.Reference == reference ? 1 : 0) + (c.Reference == reference ? 1 : 0);
         if (matches == 1)
         {
