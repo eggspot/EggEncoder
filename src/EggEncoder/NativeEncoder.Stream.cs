@@ -17,19 +17,6 @@ using EggEncoder.Waveform;
 
 namespace EggEncoder
 {
-    // Stream-based Probe overload (docs/feature-roadmap.md item 1) -- covers every format whose own
-    // Reader/Decoder class has been adapted for a Stream source so far: WAV/AIFF/AU/CAF (FileStream-
-    // field-widened-to-Stream, each requiring CanSeek since their own header parse relies on
-    // Stream.Position/Seek throughout), FLAC/AAC/WavPack/Opus/WMA (read-fully-into-byte[], no seek
-    // needed), TTA (read-strictly-sequentially, also no seek needed), and Vorbis (requires CanSeek --
-    // confirmed directly, by feeding NVorbis's own VorbisReader a non-seekable stream and observing
-    // it throw; unlike every other codec here, NVorbis's own constructor already has first-class
-    // non-disposing support via closeOnDispose: false, so no "widen"/"read fully into memory"
-    // adaptation was needed for Vorbis at all), and MOV/MP4 (the same CanSeek-requiring
-    // "FileStream-widened-to-Stream" treatment WAV/AIFF/AU/CAF already got, via MovProbe.Probe(Stream)/
-    // MovDecoder.Decode(Stream, ...)), and MP3 (read-fully-into-byte[], like FLAC/AAC -- which is
-    // also what sidesteps NLayer's own MpegFile(Stream) constructor always disposing the stream it's
-    // given: NLayer only ever sees a MemoryStream this type created, never the caller's own).
     public partial class NativeEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
@@ -80,11 +67,6 @@ namespace EggEncoder
             return Probe(source, format);
         }
 
-        // A non-seekable source (e.g. a live HTTP response body) genuinely doesn't have a byte count
-        // to report up front -- 0 is this type's own established "unknown" convention for a numeric
-        // ProbeResult field (see DurationSeconds's own `sampleRate > 0 ? ... : 0` fallback above),
-        // rather than throwing and failing the whole probe over one field a non-seekable source simply
-        // cannot provide.
         private static long GetStreamLength(Stream stream) => stream.CanSeek ? stream.Length : 0;
 
         private static ProbeResult ProbeWavStream(Stream source)
@@ -129,9 +111,6 @@ namespace EggEncoder
 
         private static ProbeResult ProbeMp3Stream(Stream source)
         {
-            // Read the caller's stream exactly once (it may not be seekable), then give Mp3Probe
-            // and the decode each their own MemoryStream view of the same bytes -- Mp3Probe needs
-            // absolute seeks, and NLayer disposes whatever stream it's handed.
             byte[] fileBytes;
             using (var memoryStream = new MemoryStream())
             {
@@ -148,9 +127,6 @@ namespace EggEncoder
                 waveformCalculator.AddBlock(block);
             });
 
-            // A seekable source reports its full Length, the same as every other format here (see
-            // GetStreamLength); a non-seekable one still has a real byte count, unlike every other
-            // format, since it was just buffered in full.
             return BuildMp3ProbeResult(mp3ProbeResult, source.CanSeek ? source.Length : fileBytes.Length, waveformCalculator);
         }
 
@@ -516,14 +492,6 @@ namespace EggEncoder
             };
         }
 
-        // The Stream-based counterpart to NativeEncoder.cs's own path-based ProbeVideo -- same
-        // MovProbe/MovDecoder composition (video metadata plus, if present, a decodable mono AAC-LC
-        // audio track's own waveform/level data), via TryDecodeAudioTrackCore's shared delegate shape
-        // so that "decode, degrade to null on any failure, map to DecodedAudioTrack" logic isn't
-        // duplicated here. Unlike the path-based overload, there is no file extension to distinguish
-        // a MOV container from an MP4 one -- AudioFormat.Mov covers both -- so this always reports
-        // "mov"/"QuickTime / MOV", the same default the path-based overload itself falls back to for
-        // any extension other than ".mp4".
         private static ProbeResult ProbeMovStream(Stream source)
         {
             var movProbeResult = MovProbe.Probe(source);

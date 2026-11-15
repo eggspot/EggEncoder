@@ -49,8 +49,6 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         [Fact]
         public void Decode_Stream_Should_Not_Dispose_The_Callers_Stream()
         {
-            // NLayer's own MpegFile(Stream) always disposes the stream it's handed -- this guards
-            // that it only ever sees Mp3Decoder's own buffer, never the caller's stream.
             using var stream = new MemoryStream(File.ReadAllBytes(Path.GetFullPath("Codecs/Mp3/tone.mp3")));
 
             DecodeAll(stream);
@@ -64,8 +62,6 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var fixturePath = Path.GetFullPath("Codecs/Mp3/tone.mp3");
             var (_, pathSamples) = Mp3TestDecoder.DecodeAll(fixturePath);
 
-            // A leading run of unrelated bytes the caller has already consumed (e.g. a container
-            // header of its own) -- decode must treat the current position as the file's start.
             var prefix = new byte[333];
             Array.Fill(prefix, (byte)0xAB);
             using var stream = new MemoryStream([.. prefix, .. File.ReadAllBytes(fixturePath)]);
