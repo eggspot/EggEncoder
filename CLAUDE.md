@@ -163,7 +163,9 @@ per macroblock) keeps what context selection reads from neighbours. Item 27 (Hig
 straight into the frame (16-bit vector lanes for the 6-tap and bilinear filters and implicit
 weights), uniform B_Skip/B_Direct_16x16 macroblocks predict once as 16x16, per-picture macroblock
 arrays come from `MacroblockArrayPool`, and `DeblockingFilter` works from a coefficient bitmask per
-macroblock; `H264DecodeBenchmarks` measures a local file (`EGGENCODER_H264_BENCHMARK_FILE`).
+macroblock; `H264DecodeBenchmarks` measures a local file (`EGGENCODER_H264_BENCHMARK_FILE`). Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
+`CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
 
 ### H.264 encoder (`src/EggEncoder/Codecs/H264/`)
 
@@ -175,9 +177,7 @@ through the decoder's `SliceDecoder` (hooks in `SliceDecoder.Encoding`: start a 
 `Syntax`, reconstruct; motion vector and intra mode prediction; nC) and `DeblockingFilter`, so the
 reconstruction equals what decoders produce; reference pictures get their borders replicated into
 the padding for motion search. Parameter sets are written, then parsed back with the decoder's
-parsers to drive the reconstruction. Not thread-safe; one per stream. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
-64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
-`CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
+parsers to drive the reconstruction. Not thread-safe; one per stream.
 
 ### Media packet model (`src/EggEncoder/Media/`)
 
