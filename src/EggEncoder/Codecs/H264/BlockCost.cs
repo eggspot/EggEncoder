@@ -75,6 +75,60 @@ internal static class BlockCost
         return total >> 1;
     }
 
+    public static int Sa8d16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
+    {
+        var total = 0;
+        Span<int> d = stackalloc int[64];
+        for (var block = 0; block < 4; block++)
+        {
+            var bx = (block & 1) * 8;
+            var by = (block >> 1) * 8;
+            for (var y = 0; y < 8; y++)
+            {
+                for (var x = 0; x < 8; x++)
+                {
+                    d[(y * 8) + x] = source[((by + y) * sourceStride) + bx + x] - prediction[((by + y) * predictionStride) + bx + x];
+                }
+            }
+
+            for (var y = 0; y < 8; y++)
+            {
+                Hadamard8(d.Slice(y * 8, 8), 1);
+            }
+
+            var sum = 0;
+            for (var x = 0; x < 8; x++)
+            {
+                Hadamard8(d[x..], 8);
+                for (var y = 0; y < 8; y++)
+                {
+                    sum += Math.Abs(d[x + (y * 8)]);
+                }
+            }
+
+            total += (sum + 2) >> 2;
+        }
+
+        return total;
+    }
+
+    private static void Hadamard8(Span<int> v, int step)
+    {
+        for (var span = 1; span < 8; span <<= 1)
+        {
+            for (var i = 0; i < 8; i += span << 1)
+            {
+                for (var j = i; j < i + span; j++)
+                {
+                    var a = v[j * step];
+                    var b = v[(j + span) * step];
+                    v[j * step] = a + b;
+                    v[(j + span) * step] = a - b;
+                }
+            }
+        }
+    }
+
     private static Vector128<int> Satd8x4(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
     {
         var r0 = Difference(source, prediction);

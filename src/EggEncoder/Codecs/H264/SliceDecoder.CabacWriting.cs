@@ -225,10 +225,33 @@ internal sealed partial class SliceDecoder
             }
         }
 
+        if (syntax.Transform8x8)
+        {
+            Span<short> levels = stackalloc short[64];
+            for (var block8 = 0; block8 < 4; block8++)
+            {
+                if ((syntax.CodedBlockPatternLuma & (1 << block8)) == 0)
+                {
+                    continue;
+                }
+
+                var coefficients = syntax.LumaCoefficients.AsSpan(block8 * 64, 64);
+                for (var i = 0; i < 64; i++)
+                {
+                    levels[i] = coefficients[MacroblockLayout.ZigZag8x8[i]];
+                }
+
+                var bx = (block8 & 1) * 2;
+                var by = (block8 >> 1) * 2;
+                _codedBlockFlags |= (1 << ((by * 4) + bx)) | (1 << ((by * 4) + bx + 1)) | (1 << (((by + 1) * 4) + bx)) | (1 << (((by + 1) * 4) + bx + 1));
+                EncodeCoefficients8x8(cabac, levels);
+            }
+        }
+
         var ac = syntax.Kind == MacroblockKind.Intra16x16;
         var category = ac ? 1 : 2;
         var coefficientCount = ac ? 15 : 16;
-        for (var block = 0; block < 16; block++)
+        for (var block = 0; block < 16 && !syntax.Transform8x8; block++)
         {
             if ((syntax.CodedBlockPatternLuma & (1 << (block >> 2))) == 0)
             {
@@ -305,6 +328,33 @@ internal sealed partial class SliceDecoder
         }
     }
 
+    private static void EncodeCoefficients8x8(CabacEncoder cabac, ReadOnlySpan<short> scanned)
+    {
+        var last = 63;
+        while (last > 0 && scanned[last] == 0)
+        {
+            last--;
+        }
+
+        for (var i = 0; i < 63; i++)
+        {
+            var significant = scanned[i] != 0;
+            cabac.EncodeDecision(Significant8x8Offset + Significant8x8Increments[i], significant ? 1 : 0);
+            if (!significant)
+            {
+                continue;
+            }
+
+            cabac.EncodeDecision(LastSignificant8x8Offset + LastSignificant8x8Increments[i], i == last ? 1 : 0);
+            if (i == last)
+            {
+                break;
+            }
+        }
+
+        EncodeLevels(cabac, CoefficientAbsLevel8x8Offset, 4, scanned, last);
+    }
+
     private static void EncodeCoefficients(CabacEncoder cabac, int category, int count, ReadOnlySpan<short> scanned)
     {
         var significantBase = SignificantCoefficientOffset + SignificantOffsets[category];
@@ -333,9 +383,13 @@ internal sealed partial class SliceDecoder
             }
         }
 
+        EncodeLevels(cabac, levelBase, category == 3 ? 3 : 4, scanned, last);
+    }
+
+    private static void EncodeLevels(CabacEncoder cabac, int levelBase, int maximumGreater, ReadOnlySpan<short> scanned, int last)
+    {
         var greaterThanOne = 0;
         var equalToOne = 0;
-        var maximumGreater = category == 3 ? 3 : 4;
         for (var i = last; i >= 0; i--)
         {
             if (scanned[i] == 0)

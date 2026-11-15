@@ -10,11 +10,17 @@ internal sealed partial class MacroblockEncoder
     private static readonly int[] IntraCodeNumbers = Invert(MacroblockLayout.IntraCodedBlockPattern);
     private static readonly int[] InterCodeNumbers = Invert(MacroblockLayout.InterCodedBlockPattern);
     private static readonly byte[] DecimationScores = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    private static readonly byte[] DecimationScores8x8 =
+    [
+        3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
 
     private readonly SliceDecoder _slice;
     private readonly H264Picture _picture;
     private readonly VideoFrame _source;
     private readonly H264Picture? _reference;
+    private readonly bool _transform8x8;
     private readonly HalfPelPlanes? _halfPel;
     private readonly int _qp;
     private readonly int _chromaQp;
@@ -38,8 +44,9 @@ internal sealed partial class MacroblockEncoder
     private int _offsetU;
     private int _offsetV;
 
-    public MacroblockEncoder(SliceDecoder slice, H264Picture picture, VideoFrame source, H264Picture? reference, HalfPelPlanes? halfPel, int qp, Dequantizer dequantizer, int chromaQpOffset)
+    public MacroblockEncoder(SliceDecoder slice, H264Picture picture, VideoFrame source, H264Picture? reference, HalfPelPlanes? halfPel, int qp, Dequantizer dequantizer, int chromaQpOffset, bool transform8x8)
     {
+        _transform8x8 = transform8x8;
         _halfPel = halfPel;
         _slice = slice;
         _picture = picture;
@@ -265,7 +272,9 @@ internal sealed partial class MacroblockEncoder
         }
     }
 
-    private static int DecimationScore(ReadOnlySpan<short> scanned)
+    private static int DecimationScore(ReadOnlySpan<short> scanned) => DecimationScore(scanned, DecimationScores);
+
+    private static int DecimationScore(ReadOnlySpan<short> scanned, ReadOnlySpan<byte> scores)
     {
         var index = scanned.Length - 1;
         while (index >= 0 && scanned[index] == 0)
@@ -288,7 +297,7 @@ internal sealed partial class MacroblockEncoder
                 run++;
             }
 
-            score += DecimationScores[run];
+            score += scores[run];
         }
 
         return score;

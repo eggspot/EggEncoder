@@ -260,6 +260,50 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Transform_And_Quantisation_Should_Round_Trip_Through_The_Decoder_At_Low_Qp(bool eightByEight)
+        {
+            var random = new Random(5);
+            var dequantizer = new Dequantizer(ScalingLists.FlatSet());
+            var size = eightByEight ? 8 : 4;
+            for (var round = 0; round < 200; round++)
+            {
+                var residual = new int[size * size];
+                for (var i = 0; i < residual.Length; i++)
+                {
+                    residual[i] = random.Next(-60, 61);
+                }
+
+                var coefficients = new int[64];
+                var raster = new short[64];
+                var scanned = new short[64];
+                var dequantized = new int[64];
+                var plane = new byte[size * size];
+                Array.Fill(plane, (byte)128);
+                if (eightByEight)
+                {
+                    ForwardTransform.Core8x8(residual, coefficients);
+                    Quantizer.Quantize8x8(coefficients, raster, scanned, 4, intra: false);
+                    dequantizer.Dequantize8x8(raster, dequantized, 4, 1);
+                    InverseTransform.Add8x8(dequantized, plane, 0, 8);
+                }
+                else
+                {
+                    ForwardTransform.Core4x4(residual, coefficients);
+                    Quantizer.Quantize4x4(coefficients, raster, scanned, 4, intra: false, 0);
+                    dequantizer.Dequantize4x4(raster, dequantized, 4, 3, keepDc: false);
+                    InverseTransform.Add4x4(dequantized, plane, 0, 4);
+                }
+
+                for (var i = 0; i < residual.Length; i++)
+                {
+                    (plane[i] - 128 - residual[i]).Should().BeInRange(-2, 2);
+                }
+            }
+        }
+
         [Fact]
         public void Exp_Golomb_Lengths_Should_Match_What_Is_Written()
         {

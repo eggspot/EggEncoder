@@ -143,7 +143,7 @@ public sealed partial class H264Encoder
         bits.WriteFlag(false);
         if (settings.Profile == H264Profile.High)
         {
-            bits.WriteFlag(false);
+            bits.WriteFlag(true);
             bits.WriteFlag(false);
             bits.WriteSe(0);
         }

@@ -201,7 +201,7 @@ public sealed partial class H264Encoder : IDisposable
         for (var i = 0; i <= workers; i++)
         {
             slices[i] = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, _cabacState);
-            encoders[i] = new MacroblockEncoder(slices[i], picture, _source, keyframe ? null : _reference, keyframe ? null : _halfPel, qp, _dequantizer, _pps.ChromaQpIndexOffset);
+            encoders[i] = new MacroblockEncoder(slices[i], picture, _source, keyframe ? null : _reference, keyframe ? null : _halfPel, qp, _dequantizer, _pps.ChromaQpIndexOffset, _pps.Transform8x8Mode);
         }
 
         SliceFilterParameters[] filters = [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)];
