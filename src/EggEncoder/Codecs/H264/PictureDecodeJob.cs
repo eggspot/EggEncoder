@@ -182,11 +182,20 @@ internal sealed class PictureDecodeJob
         return Task.Factory.StartNew(
             () =>
             {
-                for (var row = 0; row < rows; row++)
+                var masks = System.Buffers.ArrayPool<int>.Shared.Rent(count);
+                try
                 {
-                    decoded.WaitFor(0, Math.Min((row + 2) * width, count));
-                    DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
-                    picture.Progress?.Report(0, (16 * row) + 13);
+                    for (var row = 0; row < rows; row++)
+                    {
+                        decoded.WaitFor(0, Math.Min((row + 2) * width, count));
+                        DeblockingFilter.ComputeEdgeMasks(picture, masks, row, row + 1);
+                        DeblockingFilter.FilterRows(picture, filters, masks, row, row + 1);
+                        picture.Progress?.Report(0, (16 * row) + 13);
+                    }
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<int>.Shared.Return(masks);
                 }
             },
             CancellationToken.None,

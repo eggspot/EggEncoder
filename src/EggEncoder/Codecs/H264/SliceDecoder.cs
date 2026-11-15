@@ -30,6 +30,11 @@ internal sealed partial class SliceDecoder
     private int _mbX;
     private int _mbY;
 
+    private const int NeighbourNotCached = int.MinValue;
+
+    private readonly int[] _neighbourCache = new int[6];
+    private bool _cacheNeighbours;
+
     public RowProgress? Progress { get; set; }
 
     public int FirstMacroblock => _header.FirstMacroblock;
@@ -80,6 +85,7 @@ internal sealed partial class SliceDecoder
 
     public void Decode()
     {
+        _cacheNeighbours = true;
         if (_pps.EntropyCodingCabac)
         {
             DecodeCabac();
@@ -169,6 +175,7 @@ internal sealed partial class SliceDecoder
         }
 
         _mbY = _macroblock / _width;
+        _neighbourCache.AsSpan().Fill(NeighbourNotCached);
         _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16).Clear();
         _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8).Clear();
         _picture.SliceNumbers[_macroblock] = -1;
@@ -430,6 +437,23 @@ internal sealed partial class SliceDecoder
     }
 
     private int NeighbourMacroblock(int dx, int dy)
+    {
+        if (!_cacheNeighbours || dy > 0 || (dx | dy) == 0 || dx > 1)
+        {
+            return FindNeighbourMacroblock(dx, dy);
+        }
+
+        var slot = ((dy + 1) * 3) + dx + 1;
+        ref var cached = ref _neighbourCache[slot];
+        if (cached == NeighbourNotCached)
+        {
+            cached = FindNeighbourMacroblock(dx, dy);
+        }
+
+        return cached;
+    }
+
+    private int FindNeighbourMacroblock(int dx, int dy)
     {
         var x = _mbX + dx;
         var y = _mbY + dy;
