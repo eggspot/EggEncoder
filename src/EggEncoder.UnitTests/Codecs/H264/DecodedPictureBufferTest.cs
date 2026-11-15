@@ -116,6 +116,22 @@ namespace EggEncoder.UnitTests.Codecs.H264
         }
 
         [Fact]
+        public void Sliding_Window_Should_Drop_The_Oldest_Reference_After_A_List_Was_Built_For_An_Earlier_Picture()
+        {
+            var sps = Sps(maxRefs: 2);
+            var buffer = new DecodedPictureBuffer();
+            Decode(buffer, sps, Header(0, idr: true));
+            var one = Decode(buffer, sps, Header(1)).Picture;
+            buffer.ReferenceListP(one, Header(2), sps);
+            var two = Decode(buffer, sps, Header(2)).Picture;
+            var three = Decode(buffer, sps, Header(3)).Picture;
+
+            one.IsReference.Should().BeFalse();
+            two.IsReference.Should().BeTrue();
+            three.IsReference.Should().BeTrue();
+        }
+
+        [Fact]
         public void Mmco_1_Should_Unmark_A_Short_Term_Picture_By_PicNum()
         {
             var sps = Sps(maxRefs: 3);

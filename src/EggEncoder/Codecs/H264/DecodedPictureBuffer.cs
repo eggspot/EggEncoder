@@ -36,7 +36,6 @@ internal sealed class DecodedPictureBuffer
         else if (_previousHadMemoryManagement5)
         {
             _previousPocMsb = 0;
-            _previousPocLsb = 0;
             _previousFrameNumOffset = 0;
         }
 
@@ -121,13 +120,7 @@ internal sealed class DecodedPictureBuffer
     public H264Picture[] ReferenceListP(H264Picture current, SliceHeader header, SequenceParameterSet sps)
     {
         var maxFrameNum = 1 << sps.Log2MaxFrameNum;
-        foreach (var picture in _pictures)
-        {
-            if (picture.IsReference && !picture.IsLongTerm)
-            {
-                picture.FrameNumWrap = picture.FrameNum > header.FrameNum ? picture.FrameNum - maxFrameNum : picture.FrameNum;
-            }
-        }
+        UpdateFrameNumWrap(header.FrameNum, maxFrameNum);
 
         var initial = _pictures.Where(p => p.IsReference && !p.IsLongTerm).OrderByDescending(p => p.FrameNumWrap)
             .Concat(_pictures.Where(p => p.IsReference && p.IsLongTerm).OrderBy(p => p.LongTermFrameIndex))
@@ -154,10 +147,7 @@ internal sealed class DecodedPictureBuffer
             }
         }
 
-        foreach (var picture in shortTerm)
-        {
-            picture.FrameNumWrap = picture.FrameNum > header.FrameNum ? picture.FrameNum - maxFrameNum : picture.FrameNum;
-        }
+        UpdateFrameNumWrap(header.FrameNum, maxFrameNum);
 
         return Modify(initial, list == 0 ? header.ModificationsL0 : header.ModificationsL1, list == 0 ? header.ReferenceCountL0 : header.ReferenceCountL1, header.FrameNum, maxFrameNum);
     }
@@ -200,6 +190,7 @@ internal sealed class DecodedPictureBuffer
         }
         else
         {
+            UpdateFrameNumWrap(header.FrameNum, maxFrameNum);
             SlidingWindow(sps);
         }
 
@@ -302,6 +293,17 @@ internal sealed class DecodedPictureBuffer
         }
     }
 
+    private void UpdateFrameNumWrap(int currentFrameNum, int maxFrameNum)
+    {
+        foreach (var picture in _pictures)
+        {
+            if (picture.IsReference && !picture.IsLongTerm)
+            {
+                picture.FrameNumWrap = picture.FrameNum > currentFrameNum ? picture.FrameNum - maxFrameNum : picture.FrameNum;
+            }
+        }
+    }
+
     private void SlidingWindow(SequenceParameterSet sps)
     {
         var shortTerm = _pictures.Where(p => p.IsReference && !p.IsLongTerm).ToList();
@@ -314,11 +316,7 @@ internal sealed class DecodedPictureBuffer
 
     private void ApplyMemoryManagement(H264Picture current, SliceHeader header, MemoryManagementOperation operation, int maxFrameNum)
     {
-        foreach (var picture in _pictures.Where(p => p.IsReference && !p.IsLongTerm))
-        {
-            picture.FrameNumWrap = picture.FrameNum > header.FrameNum ? picture.FrameNum - maxFrameNum : picture.FrameNum;
-        }
-
+        UpdateFrameNumWrap(header.FrameNum, maxFrameNum);
         switch (operation.Operation)
         {
             case 1:
@@ -359,8 +357,11 @@ internal sealed class DecodedPictureBuffer
                 current.FrameNum = 0;
                 _previousFrameNum = 0;
                 _previousReferenceFrameNum = 0;
-                current.PicOrderCount -= Math.Min(current.TopPicOrderCount, current.BottomPicOrderCount);
-                current.TopPicOrderCount = current.PicOrderCount;
+                var lowest = Math.Min(current.TopPicOrderCount, current.BottomPicOrderCount);
+                current.TopPicOrderCount -= lowest;
+                current.BottomPicOrderCount -= lowest;
+                current.PicOrderCount = 0;
+                _previousPocLsb = current.TopPicOrderCount;
                 break;
             case 6:
                 Unmark(_pictures.FirstOrDefault(p => p.IsReference && p.IsLongTerm && p.LongTermFrameIndex == operation.LongTermFrameIndex));
