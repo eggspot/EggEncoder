@@ -1,12 +1,5 @@
 namespace EggEncoder.Codecs.WavPack
 {
-    // Writes one complete, standalone WavPack block (32-byte header + metadata sub-blocks +
-    // compressed bitstream) for a chunk of interleaved PCM samples -- the inverse of
-    // WavPackBlockHeader.Parse/WavPackMetadataSubBlock.ReadAll/WavPackBlockDecoder.Decode. Always a
-    // single combined block covering all channels (both "initial" and "final" in its own
-    // sequence), never WavPack's multi-channel block-splitting feature -- this project's own
-    // decoder has to tolerate that shape (see WavPackDecoder.cs's own doc comment on why), but
-    // nothing requires an encoder to produce it.
     internal static class WavPackBlockWriter
     {
         public static byte[] WriteBlock(int[][] channelSamples, int channels, int bitsPerSample, int sampleRate, long blockIndex, long totalSamples)
@@ -33,13 +26,13 @@ namespace EggEncoder.Codecs.WavPack
                 | (channels == 1 ? 0x4u : 0)
                 | ((uint)magnitude << 18)
                 | ((uint)sampleRateIndex << 23)
-                | 0x800 // initial block of sequence
-                | 0x1000; // final block of sequence
+                | 0x800
+                | 0x1000;
 
             var block = new List<byte>(32 + metadata.Count);
             block.AddRange("wvpk"u8.ToArray());
             var ckSizeOffset = block.Count;
-            block.AddRange(new byte[4]); // ckSize, patched below once known
+            block.AddRange(new byte[4]);
             WriteUInt16(block, 0x410);
             block.Add((byte)(blockIndex >> 32));
             block.Add((byte)(totalSamples >> 32));
