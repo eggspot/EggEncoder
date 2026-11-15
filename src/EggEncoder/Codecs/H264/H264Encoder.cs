@@ -15,6 +15,7 @@ public sealed partial class H264Encoder : IDisposable
     private const int Padding = H264Picture.Padding;
     private const int Log2MaxFrameNum = 8;
     private const int WavefrontSpinRounds = 16;
+    private const int ReferenceWaitSpinRounds = 0;
 
     private readonly H264EncoderSettings _settings;
     private readonly VideoFramePool _pool = new();
@@ -155,7 +156,7 @@ public sealed partial class H264Encoder : IDisposable
             pending.IsKeyframe = keyframe;
             pending.Timestamp = frame.Timestamp;
             pending.Planes = HalfPelPlanes.ForFrame(picture.Frame, pending.Planes);
-            pending.Lines = new RowProgress(1, WavefrontSpinRounds);
+            pending.Lines = new RowProgress(1, ReferenceWaitSpinRounds);
             WriteSliceHeader(pending.Bits, header, keyframe);
             picture.Hold();
             pending.Pictures.Add(picture);

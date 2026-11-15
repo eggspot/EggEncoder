@@ -42,17 +42,10 @@ internal sealed class CabacEncoder
         int current = state;
         int lps = CabacTables.RangeLps[((current >> 1) << 2) + ((_range >> 6) & 3)];
         var range = _range - lps;
-        if (bin != (current & 1))
-        {
-            _low += (ulong)range;
-            range = lps;
-            state = CabacTables.NextStateLps[current];
-        }
-        else
-        {
-            state = CabacTables.NextStateMps[current];
-        }
-
+        var lpsMask = -((bin ^ current) & 1);
+        _low += (ulong)(uint)(range & lpsMask);
+        range = (lps & lpsMask) | (range & ~lpsMask);
+        state = CabacTables.NextStateForBin[(current << 1) | bin];
         Renormalize(range);
     }
 
