@@ -224,6 +224,13 @@ internal sealed class DecodedPictureBuffer
 
         RemoveUnused(output);
         var capacity = sps.DecodedPictureBufferSize;
+        if (!current.IsReference && _pictures.Count >= capacity && !_pictures.Any(p => p.NeedsOutput && p.PicOrderCount < current.PicOrderCount))
+        {
+            output.Add(current);
+            _released.Add(current);
+            return output;
+        }
+
         while (_pictures.Count >= capacity)
         {
             if (!Bump(output))

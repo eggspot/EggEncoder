@@ -157,7 +157,9 @@ Item 26 adds CABAC: `CabacDecoder` (engine + context init from
 `CabacTables`, generated from the Recommendation's Tables 9-12..9-33/9-44/9-45) and
 `SliceDecoder.Cabac`, which parses into the same `MacroblockSyntax` (`StartIntraMacroblock`/
 `StartInterMacroblockP`/`AddSubPartitions` are shared with CAVLC); `CabacNeighbourState` (decoder-owned,
-per macroblock) keeps what context selection reads from neighbours. B/High (27) extends `SliceDecoder`. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+per macroblock) keeps what context selection reads from neighbours. Item 27 (High profile) adds
+`SliceDecoder.Bipredictive` (B mb/sub types, spatial/temporal direct, bi-prediction weights), the
+8x8 transform in both entropy modes and `IntraPrediction8x8`. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
 64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
 `CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
 

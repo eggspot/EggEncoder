@@ -46,6 +46,8 @@ internal sealed class MacroblockSyntax
 
     public readonly bool[] ChromaDcCoded = new bool[2];
 
+    public readonly bool[] LumaBlock8x8Coded = new bool[4];
+
     public void ClearResidual()
     {
         Array.Clear(LumaCoefficients);
@@ -54,6 +56,7 @@ internal sealed class MacroblockSyntax
         Array.Clear(ChromaAc);
         Array.Clear(LumaBlockCoded);
         Array.Clear(ChromaAcBlockCoded);
+        Array.Clear(LumaBlock8x8Coded);
         LumaDcCoded = false;
         ChromaDcCoded[0] = false;
         ChromaDcCoded[1] = false;
@@ -83,6 +86,7 @@ internal struct InterPartition
     public int MvdL1Y;
     public bool UsesL0;
     public bool UsesL1;
+    public bool Direct;
 }
 
 internal static class MacroblockLayout

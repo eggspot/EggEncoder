@@ -438,11 +438,26 @@ Rules for every Phase 5 item, on top of the ones above:
     stream (60 frames, three references, made locally) decodes byte-identical to ffmpeg at about
     28 fps on one core of an i7-8850H (ffmpeg with one thread: about 150 fps); a performance pass
     follows item 27.
-- [ ] **27. H.264 decode IV (High profile)** — B slices with spatial and temporal direct modes,
+- [x] **27. H.264 decode IV (High profile)** — B slices with spatial and temporal direct modes,
   weighted bi-prediction, 8x8 transform and intra 8x8, scaling matrices, output reordering.
   Synthetic fixtures only; real camera and AI-model clips through the local-path test.
   - **Depends on**: 26.
-  - Status: not started.
+  - Status: done. B slices with CAVLC and CABAC (`SliceDecoder.Bipredictive`): every B mb_type and
+    sub_mb_type, both reference lists, B_Skip/B_Direct_16x16/B_Direct_8x8 with spatial direct
+    (MinPositive references, colZeroFlag) and temporal direct (co-located motion from list 1's
+    first picture, `DistScaleFactor`), with and without `direct_8x8_inference_flag`;
+    bi-prediction with default, explicit (`weighted_bipred_idc` 1) and implicit (2) weights. The 8x8
+    transform (CAVLC as four interleaved 4x4 reads, CABAC with Table 9-43's context map),
+    `transform_size_8x8_flag` with the partition-size rule, intra 8x8 prediction with reference
+    sample filtering (`IntraPrediction8x8`), and scaling matrices from the SPS and PPS. The DPB now
+    outputs a non-reference picture straight away when it is full and the picture comes first in
+    output order (C.4.5.3). Bit-exact with ffmpeg on fourteen streams: eleven from x264 (intra 8x8
+    with CABAC and CAVLC, P with 8x8 transform, B-pyramids with spatial direct and implicit weights
+    in CABAC and CAVLC, temporal direct with and without a pyramid, a still scene, custom and JVT
+    scaling matrices, a cropped picture) and three with rewritten headers (explicit weighted
+    bi-prediction; spatial and temporal direct without 8x8 inference). A 1080p High profile stream
+    (60 frames, x264 medium preset) decodes byte-identical to ffmpeg, about 14 fps on one core of an
+    i7-8850H (ffmpeg with one thread: about 110 fps); the performance pass is next.
 - [ ] **28. H.264 encode I** — I and P frames, CAVLC, intra mode decision (SAD/SATD), hexagon search
   with quarter-pel refinement, deblocking, CRF-like rate control, a correct `level_idc`, VUI timing,
   SAR 1:1, SPS cropping for sizes that aren't multiples of 16. Tests: encoder reconstruction equals

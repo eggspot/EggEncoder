@@ -60,7 +60,15 @@ internal sealed partial class SliceDecoder
                 for (var i = 0; i < skipRun; i++)
                 {
                     BeginMacroblock();
-                    DecodeSkippedMacroblock();
+                    if (_header.Type == SliceType.B)
+                    {
+                        DecodeSkippedMacroblockB();
+                    }
+                    else
+                    {
+                        DecodeSkippedMacroblock();
+                    }
+
                     _macroblock++;
                 }
 
@@ -89,7 +97,15 @@ internal sealed partial class SliceDecoder
             }
             else
             {
-                throw new NotSupportedException("H.264: B slices are not supported yet");
+                var mbType = (int)_reader.ReadUe(48, "mb_type");
+                if (mbType < 23)
+                {
+                    ParseInterMacroblockB(mbType);
+                }
+                else
+                {
+                    ParseIntraMacroblock(mbType - 23);
+                }
             }
 
             ReconstructMacroblock();
@@ -161,12 +177,8 @@ internal sealed partial class SliceDecoder
 
         if (syntax.Kind == MacroblockKind.IntraNxN)
         {
-            if (_pps.Transform8x8Mode && _reader.ReadFlag())
-            {
-                throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
-            }
-
-            for (var block = 0; block < 16; block++)
+            syntax.Transform8x8 = _pps.Transform8x8Mode && _reader.ReadFlag();
+            for (var block = 0; block < (syntax.Transform8x8 ? 4 : 16); block++)
             {
                 syntax.PreviousIntraModeFlags[block] = _reader.ReadFlag();
                 if (!syntax.PreviousIntraModeFlags[block])
@@ -198,6 +210,11 @@ internal sealed partial class SliceDecoder
         var lumaTotals = _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16);
         var chromaTotals = _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8);
         Span<short> scanned = stackalloc short[16];
+        if (syntax.Transform8x8)
+        {
+            ReadLumaResidual8x8Cavlc(lumaTotals, scanned);
+        }
+
         if (syntax.Kind == MacroblockKind.Intra16x16)
         {
             scanned.Clear();
@@ -206,7 +223,7 @@ internal sealed partial class SliceDecoder
             scanned.CopyTo(syntax.LumaDc);
         }
 
-        for (var block = 0; block < 16; block++)
+        for (var block = 0; block < 16 && !syntax.Transform8x8; block++)
         {
             var bx = MacroblockLayout.BlockX[block];
             var by = MacroblockLayout.BlockY[block];
@@ -271,6 +288,51 @@ internal sealed partial class SliceDecoder
                     coefficients[MacroblockLayout.ZigZag4x4[i + 1]] = scanned[i];
                 }
             }
+        }
+    }
+
+    private void ReadLumaResidual8x8Cavlc(Span<byte> lumaTotals, Span<short> scanned)
+    {
+        var syntax = _syntax;
+        Span<short> levels = stackalloc short[64];
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            if ((syntax.CodedBlockPatternLuma & (1 << block8)) == 0)
+            {
+                continue;
+            }
+
+            levels.Clear();
+            var any = false;
+            for (var part = 0; part < 4; part++)
+            {
+                var block = (block8 * 4) + part;
+                var bx = MacroblockLayout.BlockX[block];
+                var by = MacroblockLayout.BlockY[block];
+                scanned.Clear();
+                var total = CavlcResidual.ReadBlock(_reader, LumaNc(bx, by), 16, scanned);
+                lumaTotals[(by * 4) + bx] = (byte)total;
+                any |= total > 0;
+                for (var i = 0; i < 16; i++)
+                {
+                    levels[(4 * i) + part] = scanned[i];
+                }
+            }
+
+            if (any)
+            {
+                StoreLuma8x8(block8, levels);
+            }
+        }
+    }
+
+    private void StoreLuma8x8(int block8, ReadOnlySpan<short> levels)
+    {
+        _syntax.LumaBlock8x8Coded[block8] = true;
+        var coefficients = _syntax.LumaCoefficients.AsSpan(block8 * 64, 64);
+        for (var i = 0; i < 64; i++)
+        {
+            coefficients[MacroblockLayout.ZigZag8x8[i]] = levels[i];
         }
     }
 

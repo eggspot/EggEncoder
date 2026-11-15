@@ -63,9 +63,9 @@ internal sealed partial class SliceDecoder
         var pattern = MacroblockLayout.InterCodedBlockPattern[_reader.ReadUe(47, "coded_block_pattern")];
         syntax.CodedBlockPatternLuma = pattern & 15;
         syntax.CodedBlockPatternChroma = pattern >> 4;
-        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && UsesOnly8x8Partitions() && _reader.ReadFlag())
+        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && NoPartitionSmallerThan8x8())
         {
-            throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
+            syntax.Transform8x8 = _reader.ReadFlag();
         }
 
         if (syntax.CodedBlockPatternLuma > 0 || syntax.CodedBlockPatternChroma > 0)
@@ -92,7 +92,7 @@ internal sealed partial class SliceDecoder
         for (var i = 0; i < 4; i++)
         {
             var first = syntax.PartitionCount;
-            AddSubPartitions(i);
+            AddSubPartitions(i, syntax.SubMacroblockTypes[i]);
             for (var p = first; p < syntax.PartitionCount; p++)
             {
                 syntax.Partitions[p].ReferenceL0 = references[i];
@@ -103,11 +103,11 @@ internal sealed partial class SliceDecoder
         }
     }
 
-    private void AddSubPartitions(int index)
+    private void AddSubPartitions(int index, int shape)
     {
         var x = (index & 1) * 2;
         var y = (index >> 1) * 2;
-        switch (_syntax.SubMacroblockTypes[index])
+        switch (shape)
         {
             case 0:
                 AddPartition(x, y, 2, 2, index);
@@ -174,15 +174,41 @@ internal sealed partial class SliceDecoder
     private void ReconstructInter(byte[] buffer, int lumaOffset, int lumaStride, int offsetU, int offsetV, int chromaStride)
     {
         var syntax = _syntax;
+        _spatialDirectReady = false;
         for (var p = 0; p < syntax.PartitionCount; p++)
         {
             ref var partition = ref syntax.Partitions[p];
-            var (mvX, mvY) = syntax.Kind == MacroblockKind.PSkip
-                ? PredictSkipMotion()
-                : PredictMotion(ref partition, 0);
-            mvX += partition.MvdL0X;
-            mvY += partition.MvdL0Y;
-            AssignMotion(ref partition, 0, partition.ReferenceL0, mvX, mvY);
+            if (partition.Direct)
+            {
+                DeriveDirectMotion(ref partition);
+            }
+            else if (syntax.Kind == MacroblockKind.PSkip)
+            {
+                var (mvX, mvY) = PredictSkipMotion();
+                AssignMotion(ref partition, 0, 0, mvX, mvY);
+            }
+            else
+            {
+                if (partition.UsesL0)
+                {
+                    var (mvX, mvY) = PredictMotion(ref partition, 0);
+                    AssignMotion(ref partition, 0, partition.ReferenceL0, mvX + partition.MvdL0X, mvY + partition.MvdL0Y);
+                }
+
+                if (partition.UsesL1)
+                {
+                    var (mvX, mvY) = PredictMotion(ref partition, 1);
+                    AssignMotion(ref partition, 1, partition.ReferenceL1, mvX + partition.MvdL1X, mvY + partition.MvdL1Y);
+                }
+            }
+
+            for (var y = partition.Y; y < partition.Y + partition.Height; y++)
+            {
+                for (var x = partition.X; x < partition.X + partition.Width; x++)
+                {
+                    _motionAssigned[(y * 4) + x] = true;
+                }
+            }
         }
 
         for (var p = 0; p < syntax.PartitionCount; p++)
@@ -190,7 +216,11 @@ internal sealed partial class SliceDecoder
             PredictPartition(ref syntax.Partitions[p], buffer, lumaOffset, lumaStride, offsetU, offsetV, chromaStride);
         }
 
-        if (syntax.CodedBlockPatternLuma != 0)
+        if (syntax.Transform8x8)
+        {
+            AddLumaResidual8x8(buffer, lumaOffset, lumaStride, 1);
+        }
+        else if (syntax.CodedBlockPatternLuma != 0)
         {
             for (var block = 0; block < 16; block++)
             {
@@ -230,10 +260,6 @@ internal sealed partial class SliceDecoder
                 var index = (_macroblock * 16) + (y * 4) + x;
                 vectors[2 * index] = (short)mvX;
                 vectors[(2 * index) + 1] = (short)mvY;
-                if (list == 0)
-                {
-                    _motionAssigned[(y * 4) + x] = true;
-                }
             }
         }
 
@@ -357,10 +383,25 @@ internal sealed partial class SliceDecoder
         var lumaBlock = luma[..(width * height)];
         var cbBlock = cb[..(width * height / 4)];
         var crBlock = cr[..(width * height / 4)];
-        var reference = partition.UsesL0 ? partition.ReferenceL0 : partition.ReferenceL1;
-        var list = partition.UsesL0 ? 0 : 1;
-        PredictFromList(list, reference, index, partition, lumaBlock, cbBlock, crBlock);
-        ApplyWeights(list, reference, lumaBlock, cbBlock, crBlock);
+        if (partition.UsesL0 && partition.UsesL1)
+        {
+            Span<byte> luma1 = stackalloc byte[256];
+            Span<byte> cb1 = stackalloc byte[64];
+            Span<byte> cr1 = stackalloc byte[64];
+            var luma1Block = luma1[..(width * height)];
+            var cb1Block = cb1[..(width * height / 4)];
+            var cr1Block = cr1[..(width * height / 4)];
+            PredictFromList(0, partition.ReferenceL0, index, partition, lumaBlock, cbBlock, crBlock);
+            PredictFromList(1, partition.ReferenceL1, index, partition, luma1Block, cb1Block, cr1Block);
+            CombineBipredicted(partition.ReferenceL0, partition.ReferenceL1, lumaBlock, cbBlock, crBlock, luma1Block, cb1Block, cr1Block);
+        }
+        else
+        {
+            var reference = partition.UsesL0 ? partition.ReferenceL0 : partition.ReferenceL1;
+            var list = partition.UsesL0 ? 0 : 1;
+            PredictFromList(list, reference, index, partition, lumaBlock, cbBlock, crBlock);
+            ApplyWeights(list, reference, lumaBlock, cbBlock, crBlock);
+        }
         var x = partition.X * 4;
         var y = partition.Y * 4;
         for (var row = 0; row < height; row++)
@@ -392,7 +433,7 @@ internal sealed partial class SliceDecoder
 
     private void ApplyWeights(int list, int reference, Span<byte> luma, Span<byte> cb, Span<byte> cr)
     {
-        if (_header.Weights is not { } weights || _header.Type != SliceType.P)
+        if (_header.Weights is not { } weights)
         {
             return;
         }
