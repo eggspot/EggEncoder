@@ -372,35 +372,57 @@ internal static class InterPrediction
 
     public static void AverageInto(Span<byte> first, int firstStride, ReadOnlySpan<byte> second, int secondStride, int width, int height)
     {
+        if (height <= 0)
+        {
+            return;
+        }
+
+        var target = first[..(((height - 1) * firstStride) + width)];
+        var source = second[..(((height - 1) * secondStride) + width)];
+        ref var targetRow = ref MemoryMarshal.GetReference(target);
+        ref var sourceRow = ref MemoryMarshal.GetReference(source);
+        switch (width)
+        {
+            case 16:
+                for (var j = 0; j < height; j++)
+                {
+                    RoundedByteAverage(Vector128.LoadUnsafe(ref targetRow), Vector128.LoadUnsafe(ref sourceRow)).StoreUnsafe(ref targetRow);
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+            case 8:
+                for (var j = 0; j < height; j++)
+                {
+                    var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref targetRow)).AsByte();
+                    var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref sourceRow)).AsByte();
+                    Unsafe.WriteUnaligned(ref targetRow, RoundedByteAverage(a, b).AsUInt64().ToScalar());
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+            case 4:
+                for (var j = 0; j < height; j++)
+                {
+                    var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref targetRow)).AsByte();
+                    var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref sourceRow)).AsByte();
+                    Unsafe.WriteUnaligned(ref targetRow, RoundedByteAverage(a, b).AsUInt32().ToScalar());
+                    targetRow = ref Unsafe.Add(ref targetRow, firstStride);
+                    sourceRow = ref Unsafe.Add(ref sourceRow, secondStride);
+                }
+
+                return;
+        }
+
         for (var j = 0; j < height; j++)
         {
-            var target = first.Slice(j * firstStride, width);
-            var source = second.Slice(j * secondStride, width);
-            ref var targetStart = ref MemoryMarshal.GetReference(target);
-            ref var sourceStart = ref MemoryMarshal.GetReference(source);
-            var i = 0;
-            for (; i + 16 <= width; i += 16)
+            var targetLine = target.Slice(j * firstStride, width);
+            var sourceLine = source.Slice(j * secondStride, width);
+            for (var i = 0; i < width; i++)
             {
-                RoundedByteAverage(Vector128.LoadUnsafe(ref targetStart, (nuint)i), Vector128.LoadUnsafe(ref sourceStart, (nuint)i)).StoreUnsafe(ref targetStart, (nuint)i);
-            }
-
-            for (; i + 8 <= width; i += 8)
-            {
-                var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref targetStart, i))).AsByte();
-                var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref sourceStart, i))).AsByte();
-                Unsafe.WriteUnaligned(ref Unsafe.Add(ref targetStart, i), RoundedByteAverage(a, b).AsUInt64().ToScalar());
-            }
-
-            for (; i + 4 <= width; i += 4)
-            {
-                var a = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref targetStart, i))).AsByte();
-                var b = Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref sourceStart, i))).AsByte();
-                Unsafe.WriteUnaligned(ref Unsafe.Add(ref targetStart, i), RoundedByteAverage(a, b).AsUInt32().ToScalar());
-            }
-
-            for (; i < width; i++)
-            {
-                target[i] = (byte)((target[i] + source[i] + 1) >> 1);
+                targetLine[i] = (byte)((targetLine[i] + sourceLine[i] + 1) >> 1);
             }
         }
     }
