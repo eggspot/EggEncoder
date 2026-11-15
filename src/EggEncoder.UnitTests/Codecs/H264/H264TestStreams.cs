@@ -63,9 +63,11 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
         }
 
-        public static List<string> DecodeToMd5(byte[] annexB)
+        public static List<string> DecodeToMd5(byte[] annexB) => DecodeToMd5(annexB, 0);
+
+        public static List<string> DecodeToMd5(byte[] annexB, int maxDegreeOfParallelism)
         {
-            using var decoder = new H264Decoder();
+            using var decoder = new H264Decoder(null, maxDegreeOfParallelism);
             var hashes = new List<string>();
             var index = 0;
             foreach (var unit in AccessUnits(annexB))

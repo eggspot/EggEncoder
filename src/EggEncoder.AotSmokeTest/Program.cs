@@ -488,16 +488,20 @@ try
             }
         }
 
+        void Collect(EggEncoder.Video.VideoFrame frame)
+        {
+            frames++;
+            width = frame.Width;
+            frame.Dispose();
+        }
+
         for (var k = 0; k < starts.Count; k++)
         {
             var end = k + 1 < starts.Count ? starts[k + 1] : stream.Length;
-            decoder.Decode(stream.AsSpan(starts[k], end - starts[k]), TimeSpan.Zero, frame =>
-            {
-                frames++;
-                width = frame.Width;
-                frame.Dispose();
-            });
+            decoder.Decode(stream.AsSpan(starts[k], end - starts[k]), TimeSpan.Zero, Collect);
         }
+
+        decoder.Flush(Collect);
 
         if (frames != 3 || width != 64 || decoder.Height != 48)
         {

@@ -40,6 +40,8 @@ namespace EggEncoder.UnitTests.Codecs.H264
                 decoder.Decode(units[i], TimeSpan.FromSeconds(i), frames.Add);
             }
 
+            decoder.Flush(frames.Add);
+
             (decoder.Width, decoder.Height).Should().Be((66, 50));
             decoder.ColorMatrix.Should().Be(VideoColorMatrix.Bt601);
             decoder.ColorRange.Should().Be(VideoColorRange.Limited);
@@ -59,14 +61,18 @@ namespace EggEncoder.UnitTests.Codecs.H264
             using var decoder = new H264Decoder(record);
             var hashes = new List<string>();
 
+            void Collect(VideoFrame frame)
+            {
+                hashes.Add(Md5(frame));
+                frame.Dispose();
+            }
+
             foreach (var unit in units)
             {
-                decoder.Decode(AnnexBConverter.ToLengthPrefixed(unit), TimeSpan.Zero, f =>
-                {
-                    hashes.Add(Md5(f));
-                    f.Dispose();
-                });
+                decoder.Decode(AnnexBConverter.ToLengthPrefixed(unit), TimeSpan.Zero, Collect);
             }
+
+            decoder.Flush(Collect);
 
             hashes.Should().Equal(DecodeToMd5(annexB));
         }
@@ -80,6 +86,7 @@ namespace EggEncoder.UnitTests.Codecs.H264
             VideoFrame? frame = null;
 
             decoder.Decode(stream, TimeSpan.Zero, f => frame = f);
+            decoder.Flush(f => frame = f);
 
             frame.Should().NotBeNull();
             for (var mb = 0; mb < 6; mb++)
@@ -107,11 +114,14 @@ namespace EggEncoder.UnitTests.Codecs.H264
 
             using var decoder = new H264Decoder();
             string? hash = null;
-            decoder.Decode(stream, TimeSpan.Zero, f =>
+            void Collect(VideoFrame frame)
             {
-                hash = Md5(f);
-                f.Dispose();
-            });
+                hash = Md5(frame);
+                frame.Dispose();
+            }
+
+            decoder.Decode(stream, TimeSpan.Zero, Collect);
+            decoder.Flush(Collect);
 
             hash.Should().Be("86f8c70e4c410a7f360ceaa2ee8838e7");
         }

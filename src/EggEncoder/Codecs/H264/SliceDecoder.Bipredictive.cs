@@ -307,8 +307,8 @@ internal sealed partial class SliceDecoder
         }
 
         var colocatedZero = false;
-        var colocated = ColocatedPicture;
-        if (!colocated.IsLongTerm)
+        _ = ColocatedPicture;
+        if (!_longTermL1[0])
         {
             var (reference, mvX, mvY, _) = ColocatedMotion(partition.X, partition.Y);
             colocatedZero = reference == 0 && mvX is >= -1 and <= 1 && mvY is >= -1 and <= 1;
@@ -404,20 +404,23 @@ internal sealed partial class SliceDecoder
             }
         }
 
-        var picture0 = _referencesL0[referenceL0] ?? throw new InvalidDataException("H.264: a macroblock refers to a missing reference picture");
-        var picture1 = ColocatedPicture;
+        if (_referencesL0[referenceL0] is null)
+        {
+            throw new InvalidDataException("H.264: a macroblock refers to a missing reference picture");
+        }
+
         int mvL0X;
         int mvL0Y;
         int mvL1X;
         int mvL1Y;
-        var distance = picture1.PicOrderCount - picture0.PicOrderCount;
-        if (picture0.IsLongTerm || distance == 0)
+        var distance = _pocL1[0] - _pocL0[referenceL0];
+        if (_longTermL0[referenceL0] || distance == 0)
         {
             (mvL0X, mvL0Y, mvL1X, mvL1Y) = (mvColX, mvColY, 0, 0);
         }
         else
         {
-            var scale = DistanceScaleFactor(_picture.PicOrderCount - picture0.PicOrderCount, distance);
+            var scale = DistanceScaleFactor(_currentPoc - _pocL0[referenceL0], distance);
             mvL0X = ((scale * mvColX) + 128) >> 8;
             mvL0Y = ((scale * mvColY) + 128) >> 8;
             mvL1X = mvL0X - mvColX;
@@ -443,6 +446,7 @@ internal sealed partial class SliceDecoder
     private (int Reference, int MvX, int MvY, int PictureId) ColocatedMotion(int x, int y)
     {
         var colocated = ColocatedPicture;
+        AwaitLines(colocated, 16 * (_mbY + 1));
         if (colocated.IsIntra(_macroblock))
         {
             return (-1, 0, 0, 0);
@@ -529,15 +533,13 @@ internal sealed partial class SliceDecoder
 
     private (int Weight0, int Weight1) ImplicitWeights(int referenceL0, int referenceL1)
     {
-        var picture0 = _referencesL0[referenceL0];
-        var picture1 = _referencesL1[referenceL1];
-        var distance = picture1.PicOrderCount - picture0.PicOrderCount;
-        if (distance == 0 || picture0.IsLongTerm || picture1.IsLongTerm)
+        var distance = _pocL1[referenceL1] - _pocL0[referenceL0];
+        if (distance == 0 || _longTermL0[referenceL0] || _longTermL1[referenceL1])
         {
             return (32, 32);
         }
 
-        var scale = DistanceScaleFactor(_picture.PicOrderCount - picture0.PicOrderCount, distance) >> 2;
+        var scale = DistanceScaleFactor(_currentPoc - _pocL0[referenceL0], distance) >> 2;
         return scale is < -64 or > 128 ? (32, 32) : (64 - scale, scale);
     }
 }

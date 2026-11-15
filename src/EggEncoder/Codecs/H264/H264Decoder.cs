@@ -8,7 +8,10 @@ namespace EggEncoder.Codecs.H264;
 /// access unit (one coded picture) per <see cref="Decode"/> call; frames come out cropped to the stream's display size,
 /// carrying the access unit's timestamp and the stream's colour range and matrix. Interlaced streams, 4:2:2/4:4:4,
 /// more than 8 bits, slice groups and SP/SI slices are refused with <see cref="NotSupportedException"/>; damaged data
-/// throws <see cref="InvalidDataException"/>. Not thread-safe: use one decoder per stream.
+/// throws <see cref="InvalidDataException"/>. Several pictures are decoded at once on worker threads (frame threads), so
+/// frames come out a few calls after their access unit and a damaged picture can throw from a later <see cref="Decode"/>
+/// or <see cref="Flush"/> call; after an <see cref="InvalidDataException"/> the decoder drops the pictures it holds and
+/// resumes at the next IDR picture. Not thread-safe: use one decoder per stream.
 /// </summary>
 public sealed partial class H264Decoder : IDisposable
 {
@@ -16,6 +19,7 @@ public sealed partial class H264Decoder : IDisposable
     private readonly Dictionary<int, PictureParameterSet> _pictureSets = new();
     private readonly VideoFramePool _pool;
     private readonly int _nalLengthSize;
+    private readonly int _parallelism;
     private SequenceParameterSet? _activeSequenceSet;
     private bool _disposed;
 
@@ -25,7 +29,19 @@ public sealed partial class H264Decoder : IDisposable
     /// <exception cref="InvalidDataException">The record or a parameter set in it is damaged.</exception>
     /// <exception cref="NotSupportedException">A parameter set uses an unsupported feature.</exception>
     public H264Decoder(ReadOnlySpan<byte> avcDecoderConfiguration, VideoFramePool? pool = null)
+        : this(avcDecoderConfiguration, pool, 0)
     {
+    }
+
+    /// <summary>A decoder for MP4-style (length-prefixed) access units, configured by an <c>avcC</c> record.</summary>
+    /// <param name="avcDecoderConfiguration">The AVCDecoderConfigurationRecord: NAL length size and parameter sets.</param>
+    /// <param name="pool">Where frames are rented; <see cref="VideoFramePool.Shared"/> when null.</param>
+    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per core (at most eight), 1 to decode on the calling thread.</param>
+    /// <exception cref="InvalidDataException">The record or a parameter set in it is damaged.</exception>
+    /// <exception cref="NotSupportedException">A parameter set uses an unsupported feature.</exception>
+    public H264Decoder(ReadOnlySpan<byte> avcDecoderConfiguration, VideoFramePool? pool, int maxDegreeOfParallelism)
+    {
+        _parallelism = ResolveParallelism(maxDegreeOfParallelism);
         var record = AvcDecoderConfigurationRecord.Parse(avcDecoderConfiguration);
         _pool = pool ?? VideoFramePool.Shared;
         _nalLengthSize = record.NalLengthSize;
@@ -38,7 +54,16 @@ public sealed partial class H264Decoder : IDisposable
     /// <summary>A decoder for Annex B access units (start codes), with parameter sets sent in the stream.</summary>
     /// <param name="pool">Where frames are rented; <see cref="VideoFramePool.Shared"/> when null.</param>
     public H264Decoder(VideoFramePool? pool = null)
+        : this(pool, 0)
     {
+    }
+
+    /// <summary>A decoder for Annex B access units (start codes), with parameter sets sent in the stream.</summary>
+    /// <param name="pool">Where frames are rented; <see cref="VideoFramePool.Shared"/> when null.</param>
+    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per core (at most eight), 1 to decode on the calling thread.</param>
+    public H264Decoder(VideoFramePool? pool, int maxDegreeOfParallelism)
+    {
+        _parallelism = ResolveParallelism(maxDegreeOfParallelism);
         _pool = pool ?? VideoFramePool.Shared;
         _nalLengthSize = 0;
     }
@@ -60,7 +85,7 @@ public sealed partial class H264Decoder : IDisposable
 
     /// <summary>
     /// Decodes one access unit. Frames that are ready are passed to <paramref name="output"/> in display order and
-    /// belong to the receiver; a frame may come out on a later call when pictures are reordered.
+    /// belong to the receiver; a frame may come out on a later call, when pictures are reordered or still decoding.
     /// </summary>
     /// <param name="accessUnit">The access unit: length-prefixed NAL units for the avcC constructor, start codes for the Annex B one.</param>
     /// <param name="timestamp">The presentation time of this access unit, carried to its frame.</param>
@@ -82,7 +107,8 @@ public sealed partial class H264Decoder : IDisposable
                 HandleNalUnit(data.AsSpan(offset, length), timestamp, output);
             }
 
-            FinishPicture(output);
+            FinishPicture();
+            EmitDecoded(output);
         }
         catch
         {
@@ -91,8 +117,14 @@ public sealed partial class H264Decoder : IDisposable
         }
     }
 
-    /// <summary>Outputs every frame the decoder still holds, in display order. Call it at the end of the stream.</summary>
+    /// <summary>
+    /// Waits for the pictures still decoding and outputs every frame the decoder holds, in display order. Call it at
+    /// the end of the stream.
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="output"/> is null.</exception>
+    /// <exception cref="ObjectDisposedException">The decoder was disposed.</exception>
+    /// <exception cref="InvalidDataException">A picture still decoding is damaged.</exception>
+    /// <exception cref="NotSupportedException">A picture still decoding uses an unsupported feature.</exception>
     public void Flush(Action<VideoFrame> output)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -109,8 +141,7 @@ public sealed partial class H264Decoder : IDisposable
         }
 
         _disposed = true;
-        AbandonPicture();
-        ReleasePictures();
+        CancelAndDropPictures();
     }
 
     private void HandleNalUnit(ReadOnlySpan<byte> nal, TimeSpan timestamp, Action<VideoFrame>? output)

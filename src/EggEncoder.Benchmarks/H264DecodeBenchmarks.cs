@@ -20,11 +20,16 @@ namespace EggEncoder.Benchmarks
             SplitAccessUnits(File.ReadAllBytes(path));
         }
 
-        [Benchmark(Description = "H264Decoder: whole Annex B file, one thread")]
-        public int Decode()
+        [Benchmark(Description = "H264Decoder: whole Annex B file, one picture at a time")]
+        public int Decode() => DecodeAll(1);
+
+        [Benchmark(Description = "H264Decoder: whole Annex B file, default frame threads")]
+        public int DecodeFrameThreads() => DecodeAll(0);
+
+        private int DecodeAll(int maxDegreeOfParallelism)
         {
             var frames = 0;
-            using var decoder = new H264Decoder();
+            using var decoder = new H264Decoder(null, maxDegreeOfParallelism);
             foreach (var unit in _accessUnits)
             {
                 decoder.Decode(unit, TimeSpan.Zero, frame =>

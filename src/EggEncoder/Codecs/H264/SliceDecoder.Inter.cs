@@ -420,6 +420,9 @@ internal sealed partial class SliceDecoder
         var height = partition.Height * 4;
         var x = (_mbX * 16) + (partition.X * 4);
         var y = (_mbY * 16) + (partition.Y * 4);
+        var lumaLines = y + (mvY >> 2) + height + 3;
+        var chromaLines = (y / 2) + (mvY >> 3) + (height / 2) + 1;
+        AwaitLines(picture, Math.Max(lumaLines, (2 * chromaLines) - 1));
         InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma, lumaStride);
         InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, chromaStride);
         InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr, chromaStride);
