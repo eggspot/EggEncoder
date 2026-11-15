@@ -251,13 +251,13 @@ public sealed partial class H264Encoder : IDisposable
     private void HandOutOldestFrame(Action<H264EncodedFrame> output)
     {
         var pending = _pending.Dequeue();
-        byte[] payload;
+        H264EncodedFrame encoded;
         try
         {
             pending.Writer?.GetAwaiter().GetResult();
             var nal = new List<byte>();
             NalUnitWriter.AppendLengthPrefixed(nal, pending.NalHeader, pending.Bits!.ToArray());
-            payload = nal.ToArray();
+            encoded = new H264EncodedFrame(nal.ToArray(), pending.IsKeyframe, pending.Timestamp, _settings.FrameRate.FrameDuration);
         }
         finally
         {
@@ -267,7 +267,7 @@ public sealed partial class H264Encoder : IDisposable
             _spareFrames.Push(pending);
         }
 
-        output(new H264EncodedFrame(payload, pending.IsKeyframe, pending.Timestamp, _settings.FrameRate.FrameDuration));
+        output(encoded);
     }
 
     private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, PendingFrame pending)
