@@ -544,7 +544,9 @@ Rules for every Phase 5 item, on top of the ones above:
     245 MB (target met); ffprobe reads 1,800 frames and the AAC track. The decode thread, the
     entropy-writing stage and the deblocking stage run beside the four encoder threads, so the
     machine had more than four cores busy. `CompositionBenchmarks` measures it with a clip named by
-    `EGGENCODER_COMPOSITION_BENCHMARK_CLIP`.
+    `EGGENCODER_COMPOSITION_BENCHMARK_CLIP`. Known limits: each scene's clip audio is decoded whole into
+    memory (fine for clips of a few minutes), and a clip whose audio track isn't AAC-LC is refused
+    with `NotSupportedException` rather than muted.
 
 
 ### Phase 0 — Container infrastructure (pure C#, zero patent/licensing risk)
