@@ -32,6 +32,9 @@ internal sealed partial class SliceDecoder
             case MacroblockKind.Intra16x16:
                 ReconstructIntra16x16(buffer, lumaOffset, frame.StrideY);
                 break;
+            default:
+                ReconstructInter(buffer, lumaOffset, frame.StrideY, chromaOffsetU, chromaOffsetV, frame.StrideUV);
+                return;
         }
 
         ReconstructIntraChroma(buffer, chromaOffsetU, chromaOffsetV, frame.StrideUV);
@@ -143,6 +146,7 @@ internal sealed partial class SliceDecoder
             IsAvailableForIntra(NeighbourMacroblock(-1, -1)));
 
         Span<int> dc = stackalloc int[16];
+        dc.Clear();
         if (syntax.LumaDcCoded)
         {
             _dequantizer.LumaDc(syntax.LumaDc, dc, _qp, 0);

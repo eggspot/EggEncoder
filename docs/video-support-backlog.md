@@ -396,12 +396,28 @@ Rules for every Phase 5 item, on top of the ones above:
     slices, deblocking off, offsets and idc 2 (slice headers rewritten by a script), constrained
     intra, chroma QP offset, a cropped 66x50 picture, QP 4 and 48) and on hand-built I_PCM pictures;
     20,000 mutated streams only ever throw `InvalidDataException`/`NotSupportedException`.
-- [ ] **25. H.264 decode II** — P slices, motion vector prediction, quarter-pel luma and
+- [x] **25. H.264 decode II** — P slices, motion vector prediction, quarter-pel luma and
   eighth-pel chroma interpolation, multiple reference frames, weighted P prediction, the DPB's
   sliding window. MMCO, long-term references, reference list modification and POC type 1 are tested
   with hand-built bitstreams or JVT conformance vectors through a local-path test.
   - **Depends on**: 24.
-  - Status: not started.
+  - Status: done. P slices with CAVLC: `mb_skip_run`, P_L0 16x16/16x8/8x16, P_8x8 and P_8x8ref0
+    with every sub-partition, reference indexes (te), motion vector prediction (median, directional
+    16x8/8x16, P_Skip, neighbours through partition decoding order), quarter-pel luma (6-tap) and
+    eighth-pel chroma interpolation reading the reference picture directly and clamping only at
+    its edges, explicit weighted prediction, intra macroblocks in P slices. `DecodedPictureBuffer`:
+    POC types 0, 1 and 2, sliding window, MMCO 1-6, long-term references, P list initialisation
+    and modification (B list initialisation ready for item 27), output by POC with bumping (no
+    reordering for POC type 2 or Baseline streams without VUI), IDR and MMCO 5 handling, frame_num
+    gaps refused. Bit-exact with ffmpeg on eight x264 P streams (1 and 4 references, all
+    partitions with motion past the picture edges, three slices, a still scene of skips, Main
+    profile CAVLC with weighted prediction on a fade, a cropped picture) and on two rewritten
+    streams: every P slice with references 0 and 1 swapped by `ref_pic_list_modification`, and a
+    picture made long-term by MMCO 4 + 6. POC types 0 (with LSB wrap) and 1, MMCO 1/2/3/5, the
+    sliding window, bumping order and no_output_of_prior_pics are unit-tested on the DPB directly;
+    `EGGENCODER_H264_CONFORMANCE` (a local directory of conformance streams with `.yuv`
+    references) runs the JVT vectors when set. A 1080p Baseline P stream (60 frames, made
+    locally) decodes byte-identical to ffmpeg at about 45 fps on one core of an i7-8850H.
 - [ ] **26. H.264 decode III** — CABAC. Fixtures: Main profile with `bframes=0`.
   - **Depends on**: 25.
   - Status: not started.
