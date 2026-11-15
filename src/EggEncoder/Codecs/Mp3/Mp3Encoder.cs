@@ -4,18 +4,6 @@ using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.Mp3
 {
-    // Pure managed MPEG-1 Layer III encoder, clean-room from the published ISO/IEC 11172-3 standard
-    // text (see Mp3Tables/Mp3HuffmanTables/Mp3PolyphaseFilter/Mp3AliasReduction/Mp3Quantizer/
-    // Mp3FrameEncoder's own doc comments for the per-stage provenance) -- no LAME, GroovyCodecs, or
-    // any other encoder's source was consulted, per docs/managed-codec-rewrite-plan.md item 6.
-    //
-    // A deliberately simple CBR-only baseline: long blocks only (no block switching/transient
-    // handling), independent (non-joint) stereo, no psychoacoustic model (global_gain alone is
-    // searched to fit each granule's own fixed bit budget), and no bit-reservoir borrowing across
-    // frames -- matching this project's own "correctness first, not yet compression-competitive"
-    // precedent (see FlacEncoder's own items 2/3 history, and the WavPack encoder's own
-    // single-decorrelation-term MVP choice). Correctness is the bar: every frame this encoder
-    // writes decodes cleanly via this project's own Mp3Decoder (NLayer).
     public static class Mp3Encoder
     {
         public const int DefaultBitRateKbps = 320;
@@ -53,9 +41,6 @@ namespace EggEncoder.Codecs.Mp3
         /// </summary>
         public static Mp3EncoderSession OpenSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int bitRateKbps = DefaultBitRateKbps, IReadOnlyDictionary<string, string>? tags = null)
         {
-            // Validate (and build) the tag bytes before touching the destination file at all -- an
-            // invalid tag id should fail loudly up front, not after a partial file is already on
-            // disk.
             var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
 
             var destStream = File.Create(destMp3FilePath);
@@ -109,11 +94,6 @@ namespace EggEncoder.Codecs.Mp3
             _bitsPerSampleShift = bitsPerSample - 16;
             _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps);
 
-            // Reserve the dedicated Info-tag header frame (see Mp3FrameEncoder.BuildInfoTagFrame's
-            // own doc comment) up front, as a placeholder -- Finish() seeks back and patches it with
-            // the real frame/byte counts and delay/padding values once they're known, the same
-            // provisional-header-then-patch pattern FlacEncoderSession.Finish() already established
-            // for STREAMINFO.
             _infoTagFrameOffset = destStream.Position;
             var placeholderInfoTagFrame = _frameEncoder.BuildInfoTagFrame(frameCount: 0, byteCount: 0, startPadSamples: 0, endPadSamples: 0);
             _destStream.Write(placeholderInfoTagFrame);
@@ -149,11 +129,6 @@ namespace EggEncoder.Codecs.Mp3
 
             _finished = true;
 
-            // The encoder's own polyphase/hybrid filterbank needs exactly 1152 samples per channel
-            // per frame -- silence-pad the final, shorter-than-a-frame tail rather than
-            // special-casing a partial frame. A few dozen milliseconds of trailing silence is
-            // the normal cost of any block-based encoder's own fixed frame size, not specific to
-            // this implementation.
             var remainingFrames = _pendingInterleaved.Count / _channels;
             var naturalPaddingFrames = remainingFrames > 0 ? FrameSamples - remainingFrames : 0;
             if (naturalPaddingFrames > 0)
@@ -166,14 +141,6 @@ namespace EggEncoder.Codecs.Mp3
                 EncodeFrame();
             }
 
-            // One additional, unconditional frame of pure silence -- confirmed necessary, not just
-            // a precaution, by direct measurement: this encoder's own one-granule MDCT history
-            // (Mp3FrameEncoder's own _subbandHistory) needs one full frame of "future" context to
-            // fully flush the true tail of real audio into a decodable position. Without this, the
-            // last ~1 frame's worth of genuinely real input samples are never recoverable from the
-            // bitstream at all (confirmed by decoding with and without this flush frame and
-            // comparing against the original signal sample-by-sample, not just by reasoning about
-            // the filter structure).
             for (var i = 0; i < FrameSamples * _channels; i++)
             {
                 _pendingInterleaved.Add(0);
