@@ -358,11 +358,21 @@ Rules for every Phase 5 item, on top of the ones above:
     GPOS through extension lookups); exact coverage of squares and a curved glyph's analytic area
     within 1 %; NFC; layout, wrapping, alignment; styles; truncated and garbled fonts (3,000
     mutations) only ever throw `InvalidDataException`.
-- [ ] **23. Subtitle burn-in** — takes cues (start, end, text) directly, with styles in libass units
+- [x] **23. Subtitle burn-in** — takes cues (start, end, text) directly, with styles in libass units
   (font size, vertical margin, outline and alignment in PlayResY=288 units scaled to the frame
   height). Output differs visibly from libass's own font fallback; that's intended.
   - **Depends on**: 22.
-  - Status: not started.
+  - Status: done. `SubtitleBurnInTransform(TextRenderer, cues, SubtitleStyle?)` with `SubtitleCue`
+    (start inclusive, end exclusive) and `SubtitleStyle` (font size, primary/outline/back colours,
+    outline, shadow, margins L/R/V, numpad alignment, BorderStyle 1 or 3, PlayResX/Y; defaults are
+    ffmpeg's SRT header: size 16, outline 1, shadow 0, margins 10, alignment 2, 384x288). Vertical
+    sizes scale by frame height / PlayResY, horizontal margins by frame width / PlayResX; the font
+    size is ascent + descent (OS/2 win metrics) as libass sizes fonts. `\N` breaks lines, `\h` is a
+    non-breaking space, override tags are removed; BorderStyle 3 draws an opaque box in the outline
+    colour with the outline as padding; overlapping cues stack away from their edge. Each cue is
+    rendered once per frame size. Tests: placement for every alignment row and column, scaling with
+    frame height, stacking, timing edges, BorderStyle 3, tags and line breaks, defaults, re-render on
+    a size change.
 - [ ] **24. H.264 decode I** — `Codecs/H264/` (full SPS/PPS including VUI in new internal types; the
   public `H264SpsInfo` record is unchanged): I slices, CAVLC, intra 4x4/16x16/chroma prediction,
   I_PCM, dequantization and inverse transforms, deblocking, frame cropping. Refused with
