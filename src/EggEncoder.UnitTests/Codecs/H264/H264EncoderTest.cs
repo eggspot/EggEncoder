@@ -12,6 +12,52 @@ namespace EggEncoder.UnitTests.Codecs.H264
     {
         private static readonly VideoFramePool Pool = new();
 
+        [Fact]
+        public void Encode_1080x1920_On_Four_Threads_Should_Run_In_Real_Time()
+        {
+            var path = Environment.GetEnvironmentVariable("EGGENCODER_H264_ENCODE_TARGET_FILE");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            var data = File.ReadAllBytes(path);
+            const int width = 1080;
+            const int height = 1920;
+            var frameBytes = width * height * 3 / 2;
+            var frames = new List<VideoFrame>();
+            for (var offset = 0; offset + frameBytes <= data.Length; offset += frameBytes)
+            {
+                var frame = Pool.Rent(width, height);
+                var position = offset;
+                for (var y = 0; y < height; y++, position += width)
+                {
+                    data.AsSpan(position, width).CopyTo(frame.GetRow(VideoPlane.Y, y));
+                }
+
+                foreach (var plane in new[] { VideoPlane.U, VideoPlane.V })
+                {
+                    for (var y = 0; y < height / 2; y++, position += width / 2)
+                    {
+                        data.AsSpan(position, width / 2).CopyTo(frame.GetRow(plane, y));
+                    }
+                }
+
+                frames.Add(frame);
+            }
+
+            using var encoder = new H264Encoder(new H264EncoderSettings { Width = width, Height = height, FrameRate = new VideoFrameRate(30), Profile = H264Profile.High, MaxDegreeOfParallelism = 4 });
+            var watch = Stopwatch.StartNew();
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, _ => { });
+            }
+
+            watch.Stop();
+            frames.ForEach(f => f.Dispose());
+            (frames.Count / watch.Elapsed.TotalSeconds).Should().BeGreaterThanOrEqualTo(30);
+        }
+
         [Theory]
         [InlineData(64, 48, H264Profile.Baseline, 18)]
         [InlineData(64, 48, H264Profile.High, 30)]

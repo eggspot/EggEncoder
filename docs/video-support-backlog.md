@@ -485,12 +485,24 @@ Rules for every Phase 5 item, on top of the ones above:
     determinism, level selection, a PSNR floor. Measured locally on 640x360 `testsrc2`, 60 frames:
     about 40 fps on one core, and at equal PSNR (42.8 dB) 27% larger than x264 `veryfast crf 23`
     (which also uses CABAC and B frames). 16x8/8x16/8x8 partitions move to item 29.
-- [ ] **29. H.264 encode II** — CABAC, 8x8 transform (High profile), row-wavefront threading.
+- [x] **29. H.264 encode II** — CABAC, 8x8 transform (High profile), row-wavefront threading.
   Targets, measured in `EggEncoder.Benchmarks` plus an environment-gated test: at least real time
   for 1080x1920 at 30 fps on 4 vCPU, and size within 15% of x264 `veryfast crf 20` at equal PSNR on
   a 10 s 1080p clip measured locally.
   - **Depends on**: 26, 27, 28.
-  - Status: not started.
+  - Status: done, targets partly met. Main and High profiles write CABAC (`CabacEncoder`, with the
+    decoder's context selection through `SliceDecoder.CabacWriting`); High adds the 8x8 transform for
+    inter macroblocks, chosen by SA8D against SATD, with 8x8 decimation. Rows are encoded as a
+    wavefront on `MaxDegreeOfParallelism` threads, with entropy writing and deblocking as trailing
+    stages; output bytes are the same for any thread count. Half-pel planes are built once per
+    reference, SATD is vectorised, and the P_Skip check skips transforms when a block's SAD
+    guarantees zero coefficients. Measured on 30 frames of 1080x1920 `testsrc2` (see
+    `docs/benchmarks.md`): at equal PSNR the size is about 14.5% above x264 `veryfast crf 20`
+    (target met), but the speed is about 15 fps on four threads, half of real time (target not met).
+    The CRF scale differs from x264's: CRF 28 here matches x264's CRF 20 in PSNR on that clip. The
+    8x8 transform changed nothing on that clip, and x264 gains nothing from it there either. Left
+    for later: intra 8x8, 16x8/8x16/8x8 partitions, B frames, a parallel entropy stage (slices),
+    and the speed target.
 - [ ] **30. JPEG frame grab** — a baseline JPEG encoder (full range, quality mapped from ffmpeg's
   `-q:v` scale and stated), tested with a small decoder in the test project. A scene-change score
   is deferred: only film analysis uses it, and films need codecs outside this phase.

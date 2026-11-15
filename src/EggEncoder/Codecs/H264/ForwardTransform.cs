@@ -241,6 +241,22 @@ internal static class Quantizer
         return 5;
     }
 
+    public static int ZeroLevelSadBound(int qp, bool intra)
+    {
+        var shift = 15 + (qp / 6);
+        var rounding = intra ? (1 << shift) / 3 : (1 << shift) / 6;
+        var factors = Factors[qp % 6];
+        var limit = (1L << shift) - rounding - 1;
+        return (int)Math.Min(limit / factors[0], Math.Min(limit / (4L * factors[1]), limit / (2L * factors[2])));
+    }
+
+    public static int ZeroDcLevelBound(int qp, bool intra)
+    {
+        var shift = 16 + (qp / 6);
+        var rounding = intra ? (2 << (shift - 1)) / 3 : (2 << (shift - 1)) / 6;
+        return (int)(((1L << shift) - rounding - 1) / Factors[qp % 6][0]);
+    }
+
     public static int DcLevel(int coefficient, int qp, bool intra)
     {
         var shift = 15 + (qp / 6);

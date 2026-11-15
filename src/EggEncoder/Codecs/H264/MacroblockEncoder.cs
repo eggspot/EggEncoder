@@ -25,6 +25,9 @@ internal sealed partial class MacroblockEncoder
     private readonly int _qp;
     private readonly int _chromaQp;
     private readonly int _lambda;
+    private readonly int _zeroLumaSad;
+    private readonly int _zeroChromaSad;
+    private readonly int _zeroChromaDcSad;
     private readonly Dequantizer _dequantizer;
     private readonly byte[] _recon;
     private readonly int _strideY;
@@ -55,6 +58,9 @@ internal sealed partial class MacroblockEncoder
         _qp = qp;
         _chromaQp = Dequantizer.ChromaQp(qp, chromaQpOffset);
         _lambda = Math.Max(1, (int)Math.Round(0.92 * Math.Pow(2, (qp - 12) / 6.0)));
+        _zeroLumaSad = Quantizer.ZeroLevelSadBound(qp, intra: false);
+        _zeroChromaSad = Quantizer.ZeroLevelSadBound(_chromaQp, intra: false);
+        _zeroChromaDcSad = Quantizer.ZeroDcLevelBound(_chromaQp, intra: false);
         _dequantizer = dequantizer;
         var frame = picture.Frame;
         _recon = frame.Buffer;
@@ -203,10 +209,17 @@ internal sealed partial class MacroblockEncoder
         var (mvX, mvY) = _slice.PredictedSkipMotion();
         PredictInter(mvX, mvY);
         var source = SourceY;
+        Span<int> sads = stackalloc int[16];
+        BlockCost.Sad4x4Grid16x16(source, _source.StrideY, _lumaPrediction, 16, sads);
         for (var block = 0; block < 16; block++)
         {
             var bx = MacroblockLayout.BlockX[block] * 4;
             var by = MacroblockLayout.BlockY[block] * 4;
+            if (sads[(MacroblockLayout.BlockY[block] * 4) + MacroblockLayout.BlockX[block]] <= _zeroLumaSad)
+            {
+                continue;
+            }
+
             ResidualBlock(source[((by * _source.StrideY) + bx)..], _source.StrideY, _lumaPrediction.AsSpan((by * 16) + bx), 16);
             var sum = 0;
             for (var i = 0; i < 16; i++)
@@ -231,6 +244,13 @@ internal sealed partial class MacroblockEncoder
 
     private bool ChromaQuantizesToZero(Span<byte> source, byte[] prediction)
     {
+        Span<int> sads = stackalloc int[4];
+        BlockCost.Sad4x4Grid8x8(source, _source.StrideUV, prediction, 8, sads);
+        if (Math.Max(Math.Max(sads[0], sads[1]), Math.Max(sads[2], sads[3])) <= _zeroChromaSad && sads[0] + sads[1] + sads[2] + sads[3] <= _zeroChromaDcSad)
+        {
+            return true;
+        }
+
         Span<int> dc = stackalloc int[4];
         for (var block = 0; block < 4; block++)
         {

@@ -194,7 +194,7 @@ public sealed partial class H264Encoder : IDisposable
         var width = _sps.WidthInMacroblocks;
         var rows = _sps.HeightInMacroblocks;
         var workers = Math.Clamp(_parallelism, 1, rows);
-        var progress = new int[rows];
+        var progress = new RowProgress(rows);
         var nextRow = -1;
         var encoders = new MacroblockEncoder[workers + 1];
         var slices = new SliceDecoder[workers + 1];
@@ -206,22 +206,6 @@ public sealed partial class H264Encoder : IDisposable
 
         SliceFilterParameters[] filters = [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)];
 
-        var failed = 0;
-
-        void WaitForRow(int row, int done)
-        {
-            var spinner = default(SpinWait);
-            while (Volatile.Read(ref progress[row]) < done)
-            {
-                if (Volatile.Read(ref failed) != 0)
-                {
-                    throw new OperationCanceledException();
-                }
-
-                spinner.SpinOnce(sleep1Threshold: -1);
-            }
-        }
-
         Task Run(Action stage) => Task.Factory.StartNew(
             () =>
             {
@@ -231,7 +215,7 @@ public sealed partial class H264Encoder : IDisposable
                 }
                 catch
                 {
-                    Volatile.Write(ref failed, 1);
+                    progress.Cancel();
                     throw;
                 }
             },
@@ -248,24 +232,24 @@ public sealed partial class H264Encoder : IDisposable
                 {
                     if (row > 0)
                     {
-                        WaitForRow(row - 1, Math.Min(x + 2, width));
+                        progress.WaitFor(row - 1, Math.Min(x + 2, width));
                     }
 
                     var address = (row * width) + x;
                     slices[worker].UseSyntax(_syntaxes[address]);
                     _skipped[address] = encoders[worker].Analyse(address);
-                    Volatile.Write(ref progress[row], x + 1);
+                    progress.Report(row, x + 1);
                 }
             }
         }
 
-        void Write() => MacroblockEncoder.WriteSlice(bits, _cabac, header.Type, qp, encoders[workers], _syntaxes, _skipped, address => WaitForRow(address / width, (address % width) + 1));
+        void Write() => MacroblockEncoder.WriteSlice(bits, _cabac, header.Type, qp, encoders[workers], _syntaxes, _skipped, address => progress.WaitFor(address / width, (address % width) + 1));
 
         void Deblock()
         {
             for (var row = 0; row < rows; row++)
             {
-                WaitForRow(Math.Min(row + 1, rows - 1), width);
+                progress.WaitFor(Math.Min(row + 1, rows - 1), width);
                 DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
             }
         }

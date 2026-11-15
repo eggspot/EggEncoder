@@ -179,6 +179,18 @@ reconstruction equals what decoders produce; reference pictures get their border
 the padding for motion search. Parameter sets are written, then parsed back with the decoder's
 parsers to drive the reconstruction. Not thread-safe; one per stream.
 
+Item 29: Main and High write CABAC (`CabacEncoder`, the production engine; `SliceDecoder.CabacWriting`
+encodes the same `MacroblockSyntax` the decoder parses, with the decoder's context selection), High
+adds the 8x8 transform for inter macroblocks (`ForwardTransform.Core8x8`, `Quantizer.Quantize8x8`,
+chosen when SA8D beats SATD, 8x8 decimation). Rows run as a wavefront: `MaxDegreeOfParallelism`
+analysis workers (row r waits for row r-1 to be two macroblocks ahead, through `RowProgress`: a short
+spin, then a `Monitor` wait), with the entropy writer and the deblocking filter as trailing stages on
+their own threads; output bytes don't depend on the thread count. `HalfPelPlanes` precomputes the
+reference's three half-pel planes once per frame for the sub-pel search. The P_Skip check skips the
+transform of any 4x4 block whose SAD is under the bound (`Quantizer.ZeroLevelSadBound`) that
+guarantees every coefficient quantises to zero. `H264EncodeBenchmarks` times 1080x1920 encodes; an
+`EGGENCODER_H264_ENCODE_TARGET_FILE`-gated test checks the real-time target.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`

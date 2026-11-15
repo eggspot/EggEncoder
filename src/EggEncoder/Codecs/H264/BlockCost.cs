@@ -36,6 +36,43 @@ internal static class BlockCost
         return (int)Vector128.Sum(Vector128.WidenLower(total) + Vector128.WidenUpper(total));
     }
 
+    public static void Sad4x4Grid16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> other, int otherStride, Span<int> sads)
+    {
+        for (var row = 0; row < 4; row++)
+        {
+            var low = Vector128<ushort>.Zero;
+            var high = Vector128<ushort>.Zero;
+            for (var y = row * 4; y < (row * 4) + 4; y++)
+            {
+                var a = Vector128.Create<byte>(source.Slice(y * sourceStride, 16));
+                var b = Vector128.Create<byte>(other.Slice(y * otherStride, 16));
+                var difference = Vector128.Max(a, b) - Vector128.Min(a, b);
+                low += Vector128.WidenLower(difference);
+                high += Vector128.WidenUpper(difference);
+            }
+
+            sads[row * 4] = (int)Vector128.Sum(Vector128.WidenLower(low));
+            sads[(row * 4) + 1] = (int)Vector128.Sum(Vector128.WidenUpper(low));
+            sads[(row * 4) + 2] = (int)Vector128.Sum(Vector128.WidenLower(high));
+            sads[(row * 4) + 3] = (int)Vector128.Sum(Vector128.WidenUpper(high));
+        }
+    }
+
+    public static void Sad4x4Grid8x8(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> other, int otherStride, Span<int> sads)
+    {
+        for (var row = 0; row < 2; row++)
+        {
+            var sum = Vector128<short>.Zero;
+            for (var y = row * 4; y < (row * 4) + 4; y++)
+            {
+                sum += Vector128.Abs(Difference(source[(y * sourceStride)..], other[(y * otherStride)..]));
+            }
+
+            sads[row * 2] = Vector128.Sum(Vector128.WidenLower(sum));
+            sads[(row * 2) + 1] = Vector128.Sum(Vector128.WidenUpper(sum));
+        }
+    }
+
     public static int Satd(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride, int width, int height)
     {
         if (width % 8 == 0)
