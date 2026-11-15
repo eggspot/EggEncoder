@@ -155,6 +155,51 @@ namespace EggEncoder.UnitTests.Containers.Mp4
             pool.RetainedBytes.Should().BeGreaterThan(0);
         }
 
+        [Fact]
+        public void ReadFrames_Should_Turn_Frames_The_Way_Ffmpeg_Autorotates_Them()
+        {
+            if (Environment.GetEnvironmentVariable("EGGENCODER_FFMPEG_ORACLE") != "1")
+            {
+                return;
+            }
+
+            var directory = Directory.CreateTempSubdirectory("eggencoder-rotate-").FullName;
+            try
+            {
+                var raw = Path.Combine(directory, "first.yuv");
+                using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ffmpeg", ["-v", "error", "-y", "-i", Mp4FileSourceTest.H264AacFixture, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p", raw]) { RedirectStandardError = true })!)
+                {
+                    process.WaitForExit();
+                    process.ExitCode.Should().Be(0, process.StandardError.ReadToEnd());
+                }
+
+                using var reader = Mp4VideoReader.Open(Mp4FileSourceTest.H264AacFixture);
+                using var frame = reader.ReadFrames().First();
+                File.ReadAllBytes(raw)[..(48 * 64)].Should().Equal(JpegEncoderTest.Plane(frame, VideoPlane.Y));
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Open_Malformed_File_Should_Throw_And_Release_The_File()
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"eggencoder-bad-{Guid.NewGuid():N}.mp4");
+            File.WriteAllBytes(path, [0, 0, 0, 8, (byte)'f', (byte)'r', (byte)'e', (byte)'e']);
+            try
+            {
+                var act = () => Mp4VideoReader.Open(path);
+
+                act.Should().Throw<Exception>().Where(e => e is InvalidDataException || e is NotSupportedException);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
         private static List<VideoFrame> DecodeDirectly()
         {
             using var source = Mp4FileSource.Open(Mp4FileSourceTest.H264AacFixture);
