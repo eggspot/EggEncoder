@@ -180,6 +180,22 @@ namespace EggEncoder.UnitTests.Codecs.H264
             }
         }
 
+        [Theory]
+        [InlineData(H264Profile.Baseline, 8, 7)]
+        [InlineData(H264Profile.High, 8, 7)]
+        [InlineData(H264Profile.High, 3, 2)]
+        [InlineData(H264Profile.Main, 6, 1)]
+        public void Frames_Encoded_At_Once_Should_Produce_The_Same_Bytes_As_One_Thread(H264Profile profile, int threads, int delayedFrames)
+        {
+            var frames = SyntheticFrames(96, 480, 12);
+            var settings = new H264EncoderSettings { Width = 96, Height = 480, FrameRate = new VideoFrameRate(25), Profile = profile, KeyframeInterval = 6 };
+            var serial = EncodeWithDelay(settings with { MaxDegreeOfParallelism = 1 }, frames);
+            var together = EncodeWithDelay(settings with { MaxDegreeOfParallelism = threads, MaxDelayedFrames = delayedFrames }, frames);
+
+            together.Stream.Should().Equal(serial.Stream);
+            DecodeToMd5(together.Stream).Should().HaveCount(frames.Count);
+        }
+
         [Fact]
         public void An_Encoder_Disposed_With_Frames_Held_Back_Should_Release_Them()
         {
@@ -451,6 +467,13 @@ namespace EggEncoder.UnitTests.Codecs.H264
         {
             using var encoder = new H264Encoder(settings);
             var stream = new List<byte>();
+            var configuration = encoder.DecoderConfiguration;
+            foreach (var nal in configuration.SequenceParameterSets.Concat(configuration.PictureParameterSets))
+            {
+                stream.AddRange([0, 0, 0, 1]);
+                stream.AddRange(nal.ToArray());
+            }
+
             var timestamps = new List<TimeSpan>();
             var keyframes = new List<bool>();
             var outputAfterCall = new List<int>();

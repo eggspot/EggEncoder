@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using EggEncoder.Video;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -33,10 +34,15 @@ internal sealed class HalfPelPlanes
 
     public int Origin { get; }
 
+    public int RowCount => _height + (2 * Margin);
+
+    public static HalfPelPlanes ForFrame(VideoFrame frame, HalfPelPlanes? reuse) =>
+        reuse is not null && reuse._width == frame.Width && reuse._height == frame.Height ? reuse : new HalfPelPlanes(frame.Width, frame.Height);
+
     public static HalfPelPlanes Build(H264Picture picture, int parallelism, HalfPelPlanes? reuse)
     {
         var frame = picture.Frame;
-        var planes = reuse is not null && reuse._width == frame.Width && reuse._height == frame.Height ? reuse : new HalfPelPlanes(frame.Width, frame.Height);
+        var planes = ForFrame(frame, reuse);
         var rows = frame.Height + (2 * Margin);
         var bands = Math.Clamp(parallelism, 1, 16);
         if (bands == 1)
@@ -52,7 +58,7 @@ internal sealed class HalfPelPlanes
         return planes;
     }
 
-    private void FillRows(H264Picture picture, int firstRow, int endRow)
+    public void FillRows(H264Picture picture, int firstRow, int endRow)
     {
         var frame = picture.Frame;
         var source = frame.Buffer;
