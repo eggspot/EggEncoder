@@ -189,10 +189,12 @@ Item 26 adds CABAC: `CabacDecoder` (engine + context init from
 per macroblock) keeps what context selection reads from neighbours. Item 27 (High profile) adds
 `SliceDecoder.Bipredictive` (B mb/sub types, spatial/temporal direct, bi-prediction weights), the
 8x8 transform in both entropy modes and `IntraPrediction8x8`. Speed: `InterPrediction` writes
-straight into the frame (16-bit vector lanes for the 6-tap and bilinear filters and implicit
+straight into the frame (16-bit vector lanes for the 6-tap, centre and bilinear filters and implicit
 weights), uniform B_Skip/B_Direct_16x16 macroblocks predict once as 16x16, per-picture macroblock
 arrays come from `MacroblockArrayPool`, and `DeblockingFilter` works from a coefficient bitmask per
-macroblock; `H264DecodeBenchmarks` measures a local file (`EGGENCODER_H264_BENCHMARK_FILE`). Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+macroblock plus a uniform-motion flag (internal edges of such a macroblock need no motion check, an
+edge between two needs one) and filters eight samples at once (`DeblockingFilter.Vectors`: 8x8 byte
+transposes with SSE2 or AdvSimd unpacks for vertical edges, the scalar filter elsewhere); `H264DecodeBenchmarks` measures a local file (`EGGENCODER_H264_BENCHMARK_FILE`). Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
 64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
 `CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
 

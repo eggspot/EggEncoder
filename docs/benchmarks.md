@@ -132,6 +132,18 @@ Scaling stops near 3x on this 6-core laptop: with every core busy each thread ru
 slower than alone (all-core clocks and hyper-threads). Spinning before a blocking wait cost about
 10%, so the decoder's progress counters block at once. The per-thread decode speed is now the limit.
 
+Run serially (`DOTNET_PROCESSOR_COUNT=1`, so deblocking shares the decoding thread), deblocking was
+29-31% of the time and motion compensation 18-26%; inside deblocking the edge-strength decisions cost
+more than the sample filter. A uniform-motion flag per macroblock (one motion check per edge between
+two such macroblocks, none for their internal edges) and filtering eight samples at once (vertical
+edges through an 8x8 byte transpose) changed, interleaved A/B runs in one session:
+
+| Stream | Serial before | Serial after | Frame threads before | Frame threads after |
+|--------|-----:|-----:|-----:|-----:|
+| High profile, medium preset | 1.268 s | 1.075 s | 0.394 s | 0.377 s |
+| Main profile CABAC P | 0.972 s | 0.925 s | 0.358 s | 0.344 s |
+| Baseline CAVLC P | 0.682 s | 0.693 s | 0.250 s | 0.243 s |
+
 ### Video filters (Intel Core i7-8850H, .NET 10.0.12, AVX2, default job, `--inProcess`)
 
 Budgets from the video backlog's item 21 plan: the composition (item 31) needs about 15 frames a
