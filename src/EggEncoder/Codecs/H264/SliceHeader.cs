@@ -28,57 +28,57 @@ internal sealed class PredictionWeights
 
 internal sealed class SliceHeader
 {
-    public int FirstMacroblock { get; private init; }
+    public int FirstMacroblock { get; internal init; }
 
-    public SliceType Type { get; private init; }
+    public SliceType Type { get; internal init; }
 
-    public int PictureParameterSetId { get; private init; }
+    public int PictureParameterSetId { get; internal init; }
 
-    public int FrameNum { get; private init; }
+    public int FrameNum { get; internal init; }
 
-    public bool IsIdr { get; private init; }
+    public bool IsIdr { get; internal init; }
 
-    public int NalReferenceIdc { get; private init; }
+    public int NalReferenceIdc { get; internal init; }
 
-    public int IdrPictureId { get; private init; }
+    public int IdrPictureId { get; internal init; }
 
-    public int PicOrderCountLsb { get; private init; }
+    public int PicOrderCountLsb { get; internal init; }
 
-    public int DeltaPicOrderCountBottom { get; private init; }
+    public int DeltaPicOrderCountBottom { get; internal init; }
 
-    public int DeltaPicOrderCount0 { get; private init; }
+    public int DeltaPicOrderCount0 { get; internal init; }
 
-    public int DeltaPicOrderCount1 { get; private init; }
+    public int DeltaPicOrderCount1 { get; internal init; }
 
-    public bool DirectSpatialMvPrediction { get; private init; }
+    public bool DirectSpatialMvPrediction { get; internal init; }
 
-    public int ReferenceCountL0 { get; private init; }
+    public int ReferenceCountL0 { get; internal init; }
 
-    public int ReferenceCountL1 { get; private init; }
+    public int ReferenceCountL1 { get; internal init; }
 
-    public ReferenceListModification[] ModificationsL0 { get; private init; } = [];
+    public ReferenceListModification[] ModificationsL0 { get; internal init; } = [];
 
-    public ReferenceListModification[] ModificationsL1 { get; private init; } = [];
+    public ReferenceListModification[] ModificationsL1 { get; internal init; } = [];
 
-    public PredictionWeights? Weights { get; private init; }
+    public PredictionWeights? Weights { get; internal init; }
 
-    public bool NoOutputOfPriorPictures { get; private init; }
+    public bool NoOutputOfPriorPictures { get; internal init; }
 
-    public bool LongTermReference { get; private init; }
+    public bool LongTermReference { get; internal init; }
 
-    public MemoryManagementOperation[]? MemoryManagement { get; private init; }
+    public MemoryManagementOperation[]? MemoryManagement { get; internal init; }
 
-    public int CabacInitIdc { get; private init; }
+    public int CabacInitIdc { get; internal init; }
 
-    public int QpDelta { get; private init; }
+    public int QpDelta { get; internal init; }
 
-    public int DisableDeblockingFilterIdc { get; private init; }
+    public int DisableDeblockingFilterIdc { get; internal init; }
 
-    public int FilterOffsetA { get; private init; }
+    public int FilterOffsetA { get; internal init; }
 
-    public int FilterOffsetB { get; private init; }
+    public int FilterOffsetB { get; internal init; }
 
-    public long SliceDataPosition { get; private init; }
+    public long SliceDataPosition { get; internal init; }
 
     public static SliceHeader Parse(
         H264BitReader reader,

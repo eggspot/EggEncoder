@@ -147,8 +147,13 @@ intra modes, CAVLC totals, motion vectors and reference ids per 4x4/8x8) on the 
 decodes each slice with `SliceDecoder` (parse one macroblock into `MacroblockSyntax`, then
 reconstruct it). After the last slice, `DeblockingFilter` runs over the picture and the cropped area
 is copied into a fresh frame for the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
-SP/SI, data partitioning, lossless. Item 24 decodes I slices with CAVLC; P (25), CABAC (26) and B/High
-(27) extend `SliceDecoder` and add the DPB. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+SP/SI, data partitioning, lossless. Items 24-25 decode I and P slices with CAVLC: `SliceDecoder.Inter` parses
+P partitions into `MacroblockSyntax.Partitions`, predicts motion vectors from neighbours in partition
+decoding order (`_motionAssigned`), and `InterPrediction` interpolates straight from the reference
+picture (a clamped copy only for blocks touching its edge). `DecodedPictureBuffer` owns reference
+marking (sliding window, MMCO), POC (types 0/1/2), list initialisation/modification and bumping;
+pictures it drops come back through `TakeReleased` and are disposed after output is copied.
+CABAC (26) and B/High (27) extend `SliceDecoder`. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
 64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit.
 
 ### Media packet model (`src/EggEncoder/Media/`)

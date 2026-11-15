@@ -6,59 +6,61 @@ internal sealed class SequenceParameterSet
 {
     private const int MaxMacroblocksPerSide = 1024;
 
-    public int ProfileIdc { get; private init; }
+    public int ProfileIdc { get; internal init; }
 
-    public int LevelIdc { get; private init; }
+    public int LevelIdc { get; internal init; }
 
-    public int Id { get; private init; }
+    public int Id { get; internal init; }
 
-    public int ChromaFormatIdc { get; private init; } = 1;
+    public int ChromaFormatIdc { get; internal init; } = 1;
 
-    public bool HasScalingMatrix { get; private init; }
+    public bool HasScalingMatrix { get; internal init; }
 
-    public byte[][] ScalingLists { get; private init; } = H264.ScalingLists.FlatSet();
+    public byte[][] ScalingLists { get; internal init; } = H264.ScalingLists.FlatSet();
 
-    public int Log2MaxFrameNum { get; private init; }
+    public int Log2MaxFrameNum { get; internal init; }
 
-    public int PicOrderCountType { get; private init; }
+    public int PicOrderCountType { get; internal init; }
 
-    public int Log2MaxPicOrderCountLsb { get; private init; }
+    public int Log2MaxPicOrderCountLsb { get; internal init; }
 
-    public bool DeltaPicOrderAlwaysZero { get; private init; }
+    public bool DeltaPicOrderAlwaysZero { get; internal init; }
 
-    public int OffsetForNonReferencePicture { get; private init; }
+    public int OffsetForNonReferencePicture { get; internal init; }
 
-    public int OffsetForTopToBottomField { get; private init; }
+    public int OffsetForTopToBottomField { get; internal init; }
 
-    public int[] OffsetForReferenceFrame { get; private init; } = [];
+    public int[] OffsetForReferenceFrame { get; internal init; } = [];
 
-    public int MaxNumberOfReferenceFrames { get; private init; }
+    public int MaxNumberOfReferenceFrames { get; internal init; }
 
-    public bool GapsInFrameNumAllowed { get; private init; }
+    public bool GapsInFrameNumAllowed { get; internal init; }
 
-    public int WidthInMacroblocks { get; private init; }
+    public int WidthInMacroblocks { get; internal init; }
 
-    public int HeightInMacroblocks { get; private init; }
+    public int HeightInMacroblocks { get; internal init; }
 
-    public bool Direct8x8Inference { get; private init; }
+    public bool Direct8x8Inference { get; internal init; }
 
-    public int CropLeft { get; private init; }
+    public int CropLeft { get; internal init; }
 
-    public int CropRight { get; private init; }
+    public int CropRight { get; internal init; }
 
-    public int CropTop { get; private init; }
+    public int CropTop { get; internal init; }
 
-    public int CropBottom { get; private init; }
+    public int CropBottom { get; internal init; }
 
-    public VideoColorRange Range { get; private init; }
+    public VideoColorRange Range { get; internal init; }
 
-    public VideoColorMatrix? Matrix { get; private init; }
+    public VideoColorMatrix? Matrix { get; internal init; }
 
-    public VideoFrameRate? FrameRate { get; private init; }
+    public VideoFrameRate? FrameRate { get; internal init; }
 
-    public int? MaxNumberOfReorderFrames { get; private init; }
+    public int? MaxNumberOfReorderFrames { get; internal init; }
 
-    public int? MaxDecodedFrameBuffering { get; private init; }
+    public int? MaxDecodedFrameBuffering { get; internal init; }
+
+    public int? OutputReorderLimit => MaxNumberOfReorderFrames ?? (PicOrderCountType == 2 || ProfileIdc == 66 ? 0 : null);
 
     public int Width => (WidthInMacroblocks * 16) - (2 * (CropLeft + CropRight));
 
@@ -327,37 +329,37 @@ internal sealed class SequenceParameterSet
 
 internal sealed class PictureParameterSet
 {
-    public int Id { get; private init; }
+    public int Id { get; internal init; }
 
-    public int SequenceParameterSetId { get; private init; }
+    public int SequenceParameterSetId { get; internal init; }
 
-    public bool EntropyCodingCabac { get; private init; }
+    public bool EntropyCodingCabac { get; internal init; }
 
-    public bool BottomFieldPicOrderInFramePresent { get; private init; }
+    public bool BottomFieldPicOrderInFramePresent { get; internal init; }
 
-    public int DefaultReferenceCountL0 { get; private init; }
+    public int DefaultReferenceCountL0 { get; internal init; }
 
-    public int DefaultReferenceCountL1 { get; private init; }
+    public int DefaultReferenceCountL1 { get; internal init; }
 
-    public bool WeightedPrediction { get; private init; }
+    public bool WeightedPrediction { get; internal init; }
 
-    public int WeightedBipredictionIdc { get; private init; }
+    public int WeightedBipredictionIdc { get; internal init; }
 
-    public int InitialQp { get; private init; }
+    public int InitialQp { get; internal init; }
 
-    public int ChromaQpIndexOffset { get; private init; }
+    public int ChromaQpIndexOffset { get; internal init; }
 
-    public int SecondChromaQpIndexOffset { get; private init; }
+    public int SecondChromaQpIndexOffset { get; internal init; }
 
-    public bool DeblockingFilterControlPresent { get; private init; }
+    public bool DeblockingFilterControlPresent { get; internal init; }
 
-    public bool ConstrainedIntraPrediction { get; private init; }
+    public bool ConstrainedIntraPrediction { get; internal init; }
 
-    public bool RedundantPictureCountPresent { get; private init; }
+    public bool RedundantPictureCountPresent { get; internal init; }
 
-    public bool Transform8x8Mode { get; private init; }
+    public bool Transform8x8Mode { get; internal init; }
 
-    public byte[]?[]? ExplicitScalingLists { get; private init; }
+    public byte[]?[]? ExplicitScalingLists { get; internal init; }
 
     public static PictureParameterSet Parse(H264BitReader reader)
     {

@@ -36,6 +36,14 @@ internal sealed class MacroblockSyntax
 
     public bool LumaDcCoded;
 
+    public InterShape Shape;
+
+    public int PartitionCount;
+
+    public readonly InterPartition[] Partitions = new InterPartition[16];
+
+    public readonly int[] SubMacroblockTypes = new int[4];
+
     public readonly bool[] ChromaDcCoded = new bool[2];
 
     public void ClearResidual()
@@ -50,6 +58,31 @@ internal sealed class MacroblockSyntax
         ChromaDcCoded[0] = false;
         ChromaDcCoded[1] = false;
     }
+}
+
+internal enum InterShape
+{
+    Partition16x16,
+    Partition16x8,
+    Partition8x16,
+    Partition8x8
+}
+
+internal struct InterPartition
+{
+    public int X;
+    public int Y;
+    public int Width;
+    public int Height;
+    public int PartitionIndex;
+    public int ReferenceL0;
+    public int ReferenceL1;
+    public int MvdL0X;
+    public int MvdL0Y;
+    public int MvdL1X;
+    public int MvdL1Y;
+    public bool UsesL0;
+    public bool UsesL1;
 }
 
 internal static class MacroblockLayout

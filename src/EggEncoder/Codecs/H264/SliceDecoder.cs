@@ -1,5 +1,8 @@
+using System.Runtime.CompilerServices;
+
 namespace EggEncoder.Codecs.H264;
 
+[SkipLocalsInit]
 internal sealed partial class SliceDecoder
 {
     private readonly H264Picture _picture;
@@ -12,13 +15,18 @@ internal sealed partial class SliceDecoder
     private readonly MacroblockSyntax _syntax = new();
     private readonly int _width;
     private readonly int[] _dequantized = new int[64];
+    private readonly H264Picture[] _referencesL0;
+    private readonly H264Picture[] _referencesL1;
+    private readonly bool[] _motionAssigned = new bool[16];
     private int _qp;
     private int _macroblock;
     private int _mbX;
     private int _mbY;
 
-    public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer)
+    public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer, H264Picture[] referencesL0, H264Picture[] referencesL1)
     {
+        _referencesL0 = referencesL0;
+        _referencesL1 = referencesL1;
         _picture = picture;
         _sps = sps;
         _pps = pps;
@@ -37,38 +45,78 @@ internal sealed partial class SliceDecoder
             throw new NotSupportedException("H.264: CABAC entropy coding is not supported yet");
         }
 
-        var count = _sps.MacroblockCount;
         _macroblock = _header.FirstMacroblock;
         var moreData = true;
         while (moreData)
         {
-            if (_macroblock >= count)
+            if (_header.Type != SliceType.I)
             {
-                throw new InvalidDataException("H.264: a slice runs past the last macroblock");
+                var skipRun = _reader.ReadUe((uint)_sps.MacroblockCount, "mb_skip_run");
+                for (var i = 0; i < skipRun; i++)
+                {
+                    BeginMacroblock();
+                    DecodeSkippedMacroblock();
+                    _macroblock++;
+                }
+
+                if (skipRun > 0 && !_reader.MoreRbspData())
+                {
+                    break;
+                }
             }
 
-            if (_picture.Kinds[_macroblock] != MacroblockKind.NotDecoded)
-            {
-                throw new InvalidDataException("H.264: two slices cover the same macroblock");
-            }
-
-            _mbX = _macroblock % _width;
-            _mbY = _macroblock / _width;
-            _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16).Clear();
-            _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8).Clear();
+            BeginMacroblock();
             if (_header.Type == SliceType.I)
             {
                 ParseIntraMacroblock((int)_reader.ReadUe(25, "mb_type"));
             }
+            else if (_header.Type == SliceType.P)
+            {
+                var mbType = (int)_reader.ReadUe(30, "mb_type");
+                if (mbType < 5)
+                {
+                    ParseInterMacroblockP(mbType);
+                }
+                else
+                {
+                    ParseIntraMacroblock(mbType - 5);
+                }
+            }
             else
             {
-                throw new NotSupportedException($"H.264: {_header.Type} slices are not supported yet");
+                throw new NotSupportedException("H.264: B slices are not supported yet");
             }
 
             ReconstructMacroblock();
             moreData = _reader.MoreRbspData();
             _macroblock++;
         }
+    }
+
+    private void BeginMacroblock()
+    {
+        if (_macroblock >= _sps.MacroblockCount)
+        {
+            throw new InvalidDataException("H.264: a slice runs past the last macroblock");
+        }
+
+        if (_picture.Kinds[_macroblock] != MacroblockKind.NotDecoded)
+        {
+            throw new InvalidDataException("H.264: two slices cover the same macroblock");
+        }
+
+        _mbX = _macroblock % _width;
+        _mbY = _macroblock / _width;
+        _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16).Clear();
+        _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8).Clear();
+        _picture.SliceNumbers[_macroblock] = -1;
+        for (var list = 0; list < 2; list++)
+        {
+            _picture.ReferenceIndexes[list].AsSpan(_macroblock * 4, 4).Fill(-1);
+            _picture.MotionVectors[list].AsSpan(_macroblock * 32, 32).Clear();
+        }
+
+        Array.Clear(_motionAssigned);
     }
 
     private void ParseIntraMacroblock(int mbType)

@@ -83,6 +83,10 @@ internal sealed class H264Picture : IDisposable
 
     public int PicOrderCount { get; set; }
 
+    public int TopPicOrderCount { get; set; }
+
+    public int BottomPicOrderCount { get; set; }
+
     public int LongTermFrameIndex { get; set; } = -1;
 
     public bool IsReference { get; set; }

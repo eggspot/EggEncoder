@@ -1,7 +1,10 @@
+using System.Runtime.CompilerServices;
+
 namespace EggEncoder.Codecs.H264;
 
 internal readonly record struct SliceFilterParameters(int DisableIdc, int OffsetA, int OffsetB, int ChromaQpOffsetCb, int ChromaQpOffsetCr);
 
+[SkipLocalsInit]
 internal static class DeblockingFilter
 {
     private static readonly byte[] Alpha =
@@ -80,6 +83,11 @@ internal static class DeblockingFilter
                         continue;
                     }
 
+                    if (edge > 0 && HasUniformMotionWithoutCoefficients(picture, macroblock))
+                    {
+                        continue;
+                    }
+
                     var any = false;
                     for (var k = 0; k < 4; k++)
                     {
@@ -102,6 +110,10 @@ internal static class DeblockingFilter
             }
         }
     }
+
+    private static bool HasUniformMotionWithoutCoefficients(H264Picture picture, int macroblock) =>
+        picture.Kinds[macroblock] is MacroblockKind.PSkip or MacroblockKind.P16x16 or MacroblockKind.B16x16
+        && picture.TotalCoefficientsLuma.AsSpan(macroblock * 16, 16).IndexOfAnyExcept((byte)0) < 0;
 
     private static byte BoundaryStrength(H264Picture picture, int q, int p, bool vertical, int edge, int k)
     {
