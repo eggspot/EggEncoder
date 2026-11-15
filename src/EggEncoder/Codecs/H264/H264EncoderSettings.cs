@@ -48,9 +48,11 @@ public sealed record H264EncoderSettings
     /// <summary>
     /// How many encoded frames may still be in progress when <see cref="H264Encoder.Encode"/> returns, 0 to
     /// <see cref="MaxDelayedFramesLimit"/>. With 0 (the default) each frame comes out before its
-    /// <see cref="H264Encoder.Encode"/> call returns; above 0 a frame's bitstream is written while later
-    /// frames are analysed, and comes out from a later <see cref="H264Encoder.Encode"/> or
-    /// <see cref="H264Encoder.Flush"/>. The output bytes are the same for every value.
+    /// <see cref="H264Encoder.Encode"/> call returns. Above 0, up to this many frames plus one are encoded
+    /// at once (each waiting only for the rows of its reference it can reach), the
+    /// <see cref="MaxDegreeOfParallelism"/> threads are shared between them, and a frame comes out from a
+    /// later <see cref="H264Encoder.Encode"/> or <see cref="H264Encoder.Flush"/>, in order. The output bytes
+    /// are the same for every value.
     /// </summary>
     public int MaxDelayedFrames { get; init; }
 

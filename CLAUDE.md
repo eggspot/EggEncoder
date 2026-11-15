@@ -230,7 +230,13 @@ row and wakes a waiter only when the progress it registered is reached. With
 `H264EncoderSettings.MaxDelayedFrames` > 0 (default 0) a frame's entropy writer keeps running while
 later frames are analysed (`PendingFrame` holds its syntax, CABAC state, bit writer and picture holds)
 and the frame comes out of a later `Encode` or `Flush`, in order; the composition renderer uses 2.
-Intra 4x4 analysis stops once its running cost reaches the cost it has to beat.
+Above 0 up to delay + 1 frames run at once on their own jobs, the threads split between them: each
+frame's deblocking stage publishes its reference rows as they become final (`ReferencePublisher`:
+borders extended and half-pel rows filled row by row, `Lines` counting published luma lines), and a
+macroblock row of the next frame waits only for `ReferencePublisher.LinesNeeded` lines. Motion search
+never points more than `ReferencePublisher.MaxDownwardVector` (64) pixels down, in every mode, so the
+bytes don't depend on threads or delay; rate control measures complexity against the previous source
+frame. Intra 4x4 analysis stops once its running cost reaches the cost it has to beat.
 
 ### MPEG-2 video decoder (`src/EggEncoder/Codecs/Mpeg2/`)
 

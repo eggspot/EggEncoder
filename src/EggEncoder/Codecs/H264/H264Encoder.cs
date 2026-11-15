@@ -306,7 +306,7 @@ public sealed partial class H264Encoder : IDisposable
             if (publisher is null)
             {
                 ExtendBorders(picture.Frame);
-                pending.Planes = HalfPelPlanes.Build(picture, _workersPerFrame, pending.Planes);
+                pending.Planes!.Fill(picture, _workersPerFrame);
             }
 
             pending.Lines!.Report(0, ReferencePublisher.Complete);
