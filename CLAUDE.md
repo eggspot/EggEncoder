@@ -131,6 +131,10 @@ area per cell, then a running sum per row gives coverage (|sum| clamped to 1). `
 `VideoDraw.BlendMask`; `TextOverlayTransform` is the drawtext-like transform. Test fonts:
 `UnitTests/Video/Text/NotoSans-subset.ttf` (OFL, test-only, notice in THIRD-PARTY-NOTICES.md),
 `synthetic.ttf` and `synthetic-gpos.ttf` (made with fontTools for the tests).
+`SubtitleBurnInTransform` (backlog item 23) maps `SubtitleStyle`'s libass units onto a `TextStyle`
+per frame size (vertical sizes scaled by height / PlayResY, margins by width / PlayResX, px/em =
+size × unitsPerEm / (winAscent + winDescent)); BorderStyle 3 becomes a background box in the outline
+colour; `PlainText` handles `\N`, `\h`, `\n` and strips `{...}` tags.
 
 ### Media packet model (`src/EggEncoder/Media/`)
 

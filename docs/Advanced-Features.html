@@ -315,6 +315,7 @@ var renderer = new TextRenderer(TrueTypeFont.Load(File.ReadAllBytes("NotoSans-Re
 var title = new TextOverlayTransform(renderer, "Xin chào Việt Nam!",
     new TextStyle { FontSize = 64, OutlineWidth = 3, Alignment = TextAlignment.Center },
     TextAnchor.BottomCenter, marginY: 120, start: TimeSpan.Zero, end: TimeSpan.FromSeconds(3));</code></pre>
+      <p><code>SubtitleBurnInTransform</code> burns in a list of <code>SubtitleCue</code>s (start, end, text) the way ffmpeg's <code>subtitles</code> filter with <code>force_style</code> does: <code>SubtitleStyle</code> takes libass's units (font size, outline, shadow and margins on a 384x288 script canvas, numpad alignment, BorderStyle 1 or 3) and scales them to the frame; its defaults are the ones ffmpeg gives SRT subtitles. <code>\N</code> breaks lines, override tags are removed, and cues shown together stack away from their edge. The glyphs differ from libass's (no hinting or font fallback), by design.</p>
       <p>A <code>RenderedText</code> can also be drawn directly with <code>DrawOn(frame, x, y)</code>, placed with <code>Place(anchor, ...)</code>. A renderer caches rasterized glyphs and is not thread-safe; a font is.</p>
 
       <h2 id="cross-platform">Cross-Platform, No Native Binaries</h2>
