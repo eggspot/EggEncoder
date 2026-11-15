@@ -459,13 +459,32 @@ Rules for every Phase 5 item, on top of the ones above:
     (60 frames, x264 medium preset) decodes byte-identical to ffmpeg, about 14 fps on one core of an
     i7-8850H at first and 45 fps after the performance pass that followed (see `docs/benchmarks.md`;
     ffmpeg with one thread: about 180 fps).
-- [ ] **28. H.264 encode I** — I and P frames, CAVLC, intra mode decision (SAD/SATD), hexagon search
+- [x] **28. H.264 encode I** — I and P frames, CAVLC, intra mode decision (SAD/SATD), hexagon search
   with quarter-pel refinement, deblocking, CRF-like rate control, a correct `level_idc`, VUI timing,
   SAR 1:1, SPS cropping for sizes that aren't multiples of 16. Tests: encoder reconstruction equals
   item 24-25's decoder output bit for bit; tiny outputs checked in with framemd5/ffprobe literals;
   a PSNR floor.
   - **Depends on**: 24, 25.
-  - Status: not started.
+  - Status: done. `H264Encoder` (settings: size, frame rate, `ConstantRateFactor`, keyframe
+    interval, profile, colour range/matrix) writes one slice per frame: IDR every keyframe
+    interval, P frames with one reference. Mode decision by SATD plus lambda-weighted bit
+    estimates: intra 16x16 (four modes) and intra 4x4 (nine modes, block by block on the
+    reconstruction), chroma intra modes, P_Skip when the skip prediction's residual quantises to
+    nothing, P16x16 from a hexagon integer search seeded with the median predictor, (0,0) and the
+    left/top vectors, refined at half and quarter pel. Forward 4x4 transform and Hadamard DC
+    transforms, dead-zone quantisation, inter coefficient decimation, CAVLC residual writing
+    (`CavlcWriter`, the inverse of the decoder's reader over the same tables). Reconstruction goes
+    through the decoder's own `SliceDecoder` (macroblock reconstruction, motion vector and intra
+    mode prediction, neighbour rules) and `DeblockingFilter`, so it matches the decoder by
+    construction. CRF-like rate control: I frames 3 QP lower, P frames moved up to ±3 QP by
+    frame complexity against a running average. SPS with the smallest level from Table A-1,
+    cropping, VUI (SAR 1:1, range and colour description, timing, bitstream restriction), PPS, POC
+    type 2. Tests: every round trip decodes to the encoder's reconstruction byte for byte (six
+    sizes, profiles and quality settings including cropping), ffmpeg decodes to the same frames
+    (`EGGENCODER_FFMPEG_ORACLE=1`), the CAVLC writer against the decoder's reader on random blocks,
+    determinism, level selection, a PSNR floor. Measured locally on 640x360 `testsrc2`, 60 frames:
+    about 40 fps on one core, and at equal PSNR (42.8 dB) 27% larger than x264 `veryfast crf 23`
+    (which also uses CABAC and B frames). 16x8/8x16/8x8 partitions move to item 29.
 - [ ] **29. H.264 encode II** — CABAC, 8x8 transform (High profile), row-wavefront threading.
   Targets, measured in `EggEncoder.Benchmarks` plus an environment-gated test: at least real time
   for 1080x1920 at 30 fps on 4 vCPU, and size within 15% of x264 `veryfast crf 20` at equal PSNR on

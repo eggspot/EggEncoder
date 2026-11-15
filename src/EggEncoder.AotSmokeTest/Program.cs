@@ -624,6 +624,62 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("H.264 encode: frames round trip through the decoder", () =>
+    {
+        var pool = new EggEncoder.Video.VideoFramePool();
+        using var encoder = new EggEncoder.Codecs.H264.H264Encoder(new EggEncoder.Codecs.H264.H264EncoderSettings
+        {
+            Width = 48,
+            Height = 32,
+            FrameRate = new EggEncoder.Video.VideoFrameRate(25)
+        });
+        var configuration = encoder.DecoderConfiguration;
+        var header = new List<byte>();
+        foreach (var nal in configuration.SequenceParameterSets.Concat(configuration.PictureParameterSets))
+        {
+            header.AddRange(new byte[] { 0, 0, 0, 1 });
+            header.AddRange(nal.ToArray());
+        }
+
+        using var decoder = new EggEncoder.Codecs.H264.H264Decoder();
+        var decoded = 0;
+        for (var index = 0; index < 4; index++)
+        {
+            using var frame = pool.Rent(48, 32);
+            for (var y = 0; y < 32; y++)
+            {
+                var row = frame.GetRow(EggEncoder.Video.VideoPlane.Y, y);
+                for (var x = 0; x < 48; x++)
+                {
+                    row[x] = (byte)((x * 4) + (y * 2) + (index * 3));
+                }
+            }
+
+            frame.GetRow(EggEncoder.Video.VideoPlane.U, 0).Fill(128);
+            encoder.Encode(frame, encoded =>
+            {
+                var annexB = EggEncoder.Media.AnnexBConverter.ToAnnexB(encoded.Payload.Span);
+                decoder.Decode(index == 0 ? [.. header, .. annexB] : annexB, TimeSpan.Zero, output =>
+                {
+                    decoded++;
+                    output.Dispose();
+                });
+            });
+        }
+
+        decoder.Flush(output =>
+        {
+            decoded++;
+            output.Dispose();
+        });
+        if (decoded != 4)
+        {
+            throw new InvalidOperationException("H.264 encode check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }
