@@ -967,7 +967,7 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         public async Task Authorization_ThatIgnoresItsToken_Should_Still_Be_Cut_Off_By_PublishTimeout()
         {
             var time = new FakeTimeProvider();
-            var called = new TaskCompletionSource();
+            var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var never = new TaskCompletionSource<bool>();
             await using var server = await StartAsync(AcceptAll(new RtmpServerOptions
             {
