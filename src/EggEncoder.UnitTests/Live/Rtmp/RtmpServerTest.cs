@@ -993,15 +993,15 @@ namespace EggEncoder.UnitTests.Live.Rtmp
         public async Task Authorization_ThatHangs_Should_Be_Cancelled_By_PublishTimeout()
         {
             var time = new FakeTimeProvider();
-            var called = new TaskCompletionSource();
-            var cancelled = new TaskCompletionSource();
+            var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await using var server = await StartAsync(AcceptAll(new RtmpServerOptions
             {
                 TimeProvider = time,
                 AuthorizePublishAsync = async (_, token) =>
                 {
-                    called.TrySetResult();
                     await using var registration = token.Register(() => cancelled.TrySetResult());
+                    called.TrySetResult();
                     await Task.Delay(Timeout.Infinite, token);
                     return true;
                 }
