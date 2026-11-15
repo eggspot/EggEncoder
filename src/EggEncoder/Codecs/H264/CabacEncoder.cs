@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.H264;
@@ -12,7 +13,7 @@ internal sealed class CabacEncoder
     private BitWriter _writer = new();
     private ulong _low;
     private int _range;
-    private int _settledBits;
+    private int _bitsAboveWindow;
     private int _heldByte;
     private int _heldFfBytes;
 
@@ -30,7 +31,7 @@ internal sealed class CabacEncoder
         _writer = writer;
         _low = 0;
         _range = 510;
-        _settledBits = -1;
+        _bitsAboveWindow = -1;
         _heldByte = NoHeldByte;
         _heldFfBytes = 0;
     }
@@ -52,22 +53,15 @@ internal sealed class CabacEncoder
             state = CabacTables.NextStateMps[current];
         }
 
-        var shift = BitOperations.LeadingZeroCount((uint)range) - 23;
-        _range = range << shift;
-        _low <<= shift;
-        _settledBits += shift;
-        if (_settledBits >= 8)
-        {
-            EmitSettledBytes();
-        }
+        Renormalize(range);
     }
 
     public void EncodeBypass(int bin)
     {
         _low = (_low << 1) + (bin != 0 ? (ulong)_range : 0UL);
-        if (++_settledBits >= 8)
+        if (++_bitsAboveWindow >= 8)
         {
-            EmitSettledBytes();
+            WriteCompleteBytes();
         }
     }
 
@@ -76,20 +70,12 @@ internal sealed class CabacEncoder
         var range = _range - 2;
         if (bin == 0)
         {
-            var shift = BitOperations.LeadingZeroCount((uint)range) - 23;
-            _range = range << shift;
-            _low <<= shift;
-            _settledBits += shift;
-            if (_settledBits >= 8)
-            {
-                EmitSettledBytes();
-            }
-
+            Renormalize(range);
             return;
         }
 
         _low = (_low + (ulong)range) | 1;
-        Finish(_settledBits + WindowBits);
+        Finish(_bitsAboveWindow + WindowBits);
     }
 
     public void EncodeExpGolombBypass(int value, int k)
@@ -108,20 +94,33 @@ internal sealed class CabacEncoder
         }
     }
 
-    private void EmitSettledBytes()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Renormalize(int range)
+    {
+        var shift = BitOperations.LeadingZeroCount((uint)range) - 23;
+        _range = range << shift;
+        _low <<= shift;
+        _bitsAboveWindow += shift;
+        if (_bitsAboveWindow >= 8)
+        {
+            WriteCompleteBytes();
+        }
+    }
+
+    private void WriteCompleteBytes()
     {
         do
         {
-            var position = WindowBits + _settledBits - 8;
+            var position = WindowBits + _bitsAboveWindow - 8;
             var chunk = (int)(_low >> position);
             _low &= (1UL << position) - 1;
-            _settledBits -= 8;
-            Settle(chunk);
+            _bitsAboveWindow -= 8;
+            QueueByte(chunk);
         }
-        while (_settledBits >= 8);
+        while (_bitsAboveWindow >= 8);
     }
 
-    private void Settle(int chunk)
+    private void QueueByte(int chunk)
     {
         if (chunk == 0xFF)
         {
@@ -156,10 +155,10 @@ internal sealed class CabacEncoder
             bits -= 8;
             var chunk = (int)(_low >> bits);
             _low &= (1UL << bits) - 1;
-            Settle(chunk);
+            QueueByte(chunk);
         }
 
-        var carry = (int)(_low >> Math.Max(bits, 0));
+        var carry = (int)(_low >> bits);
         ReleaseHeld(carry);
         if (bits > 0)
         {
