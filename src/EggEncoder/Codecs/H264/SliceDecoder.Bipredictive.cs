@@ -478,17 +478,16 @@ internal sealed partial class SliceDecoder
         {
             var (lumaWeight0, lumaOffset0) = weights.Luma[0][referenceL0];
             var (lumaWeight1, lumaOffset1) = weights.Luma[1][referenceL1];
-            InterPrediction.Bipredict(luma, lumaStride, luma1, width, width, height, weights.LumaLog2Denominator, lumaWeight0, lumaWeight1, lumaOffset0, lumaOffset1);
+            Bipredict(luma, lumaStride, luma1, width, width, height, weights.LumaLog2Denominator, lumaWeight0, lumaWeight1, lumaOffset0, lumaOffset1);
             var chroma0 = weights.Chroma[0][referenceL0];
             var chroma1 = weights.Chroma[1][referenceL1];
-            InterPrediction.Bipredict(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[0].Weight, chroma1[0].Weight, chroma0[0].Offset, chroma1[0].Offset);
-            InterPrediction.Bipredict(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[1].Weight, chroma1[1].Weight, chroma0[1].Offset, chroma1[1].Offset);
+            Bipredict(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[0].Weight, chroma1[0].Weight, chroma0[0].Offset, chroma1[0].Offset);
+            Bipredict(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight, weights.ChromaLog2Denominator, chroma0[1].Weight, chroma1[1].Weight, chroma0[1].Offset, chroma1[1].Offset);
             return;
         }
 
-        if (_pps.WeightedBipredictionIdc == 2)
+        if (_pps.WeightedBipredictionIdc == 2 && ImplicitWeights(referenceL0, referenceL1) is var (weight0, weight1) && weight0 != weight1)
         {
-            var (weight0, weight1) = ImplicitWeights(referenceL0, referenceL1);
             InterPrediction.BipredictImplicit(luma, lumaStride, luma1, width, width, height, weight0, weight1);
             InterPrediction.BipredictImplicit(cb, chromaStride, cb1, chromaWidth, chromaWidth, chromaHeight, weight0, weight1);
             InterPrediction.BipredictImplicit(cr, chromaStride, cr1, chromaWidth, chromaWidth, chromaHeight, weight0, weight1);
@@ -529,6 +528,17 @@ internal sealed partial class SliceDecoder
         }
 
         return true;
+    }
+
+    private static void Bipredict(Span<byte> first, int firstStride, ReadOnlySpan<byte> second, int secondStride, int width, int height, int log2Denominator, int weight0, int weight1, int offset0, int offset1)
+    {
+        if (weight0 == 1 << log2Denominator && weight1 == weight0 && offset0 == 0 && offset1 == 0)
+        {
+            InterPrediction.AverageInto(first, firstStride, second, secondStride, width, height);
+            return;
+        }
+
+        InterPrediction.Bipredict(first, firstStride, second, secondStride, width, height, log2Denominator, weight0, weight1, offset0, offset1);
     }
 
     private (int Weight0, int Weight1) ImplicitWeights(int referenceL0, int referenceL1)

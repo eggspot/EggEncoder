@@ -32,11 +32,7 @@ internal static class InterPrediction
 
         if (xFrac == 0 && yFrac == 0)
         {
-            for (var j = 0; j < height; j++)
-            {
-                source.Slice(origin + (j * stride), width).CopyTo(output.Slice(j * outputStride, width));
-            }
-
+            CopyBlock(source, origin, stride, output, outputStride, width, height);
             return;
         }
 
@@ -174,11 +170,7 @@ internal static class InterPrediction
 
         if (xFrac == 0 && yFrac == 0)
         {
-            for (var j = 0; j < height; j++)
-            {
-                source.Slice(origin + (j * stride), width).CopyTo(output.Slice(j * outputStride, width));
-            }
-
+            CopyBlock(source, origin, stride, output, outputStride, width, height);
             return;
         }
 
@@ -408,6 +400,31 @@ internal static class InterPrediction
         var words = Vector128.Narrow(Vector128.Min(Vector128.Max(low, zero), maximum), Vector128.Min(Vector128.Max(high, zero), maximum));
         var bytes = Vector128.Narrow(words.AsUInt16(), words.AsUInt16());
         BinaryPrimitives.WriteUInt64LittleEndian(target, bytes.AsUInt64().ToScalar());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CopyBlock(ReadOnlySpan<byte> source, int origin, int stride, Span<byte> output, int outputStride, int width, int height)
+    {
+        for (var j = 0; j < height; j++)
+        {
+            var from = source[(origin + (j * stride))..];
+            var to = output[(j * outputStride)..];
+            switch (width)
+            {
+                case 16:
+                    Vector128.Create<byte>(from).CopyTo(to);
+                    break;
+                case 8:
+                    BinaryPrimitives.WriteUInt64LittleEndian(to, BinaryPrimitives.ReadUInt64LittleEndian(from));
+                    break;
+                case 4:
+                    BinaryPrimitives.WriteUInt32LittleEndian(to, BinaryPrimitives.ReadUInt32LittleEndian(from));
+                    break;
+                default:
+                    from[..width].CopyTo(to);
+                    break;
+            }
+        }
     }
 
     private static void Fetch(byte[] buffer, int offset, int stride, int pictureWidth, int pictureHeight, int x, int y, int width, int height, Span<byte> output)

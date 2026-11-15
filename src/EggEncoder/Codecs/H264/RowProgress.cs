@@ -41,6 +41,11 @@ internal sealed class RowProgress
 
     public void WaitFor(int row, int done)
     {
+        if (Volatile.Read(ref _done[row]) >= done)
+        {
+            return;
+        }
+
         for (var round = 0; round < _spinRounds; round++)
         {
             if (Volatile.Read(ref _done[row]) >= done)
