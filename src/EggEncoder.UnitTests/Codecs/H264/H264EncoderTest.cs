@@ -374,6 +374,41 @@ namespace EggEncoder.UnitTests.Codecs.H264
         }
 
         [Fact]
+        public void Sads_Should_Equal_Sums_Of_Absolute_Differences()
+        {
+            var random = new Random(17);
+            for (var round = 0; round < 100; round++)
+            {
+                var source = new byte[40 * 17];
+                var first = new byte[24 * 17];
+                var second = new byte[32 * 17];
+                random.NextBytes(source);
+                random.NextBytes(first);
+                random.NextBytes(second);
+                var whole = 0;
+                var averaged = 0;
+                var blocks = new int[16];
+                for (var y = 0; y < 16; y++)
+                {
+                    for (var x = 0; x < 16; x++)
+                    {
+                        var difference = Math.Abs(source[(y * 40) + x] - first[(y * 24) + x]);
+                        whole += difference;
+                        blocks[((y / 4) * 4) + (x / 4)] += difference;
+                        averaged += Math.Abs(source[(y * 40) + x] - ((first[(y * 24) + x] + second[(y * 32) + x] + 1) >> 1));
+                    }
+                }
+
+                var grid = new int[16];
+                BlockCost.Sad4x4Grid16x16(source, 40, first, 24, grid);
+
+                BlockCost.Sad16x16(source, 40, first, 24).Should().Be(whole);
+                BlockCost.Sad16x16Average(source, 40, first, 24, second, 32).Should().Be(averaged);
+                grid.Should().Equal(blocks);
+            }
+        }
+
+        [Fact]
         public void Sa8d_Should_Equal_The_Rounded_Sum_Of_8x8_Hadamard_Magnitudes()
         {
             var random = new Random(13);

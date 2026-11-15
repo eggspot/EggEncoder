@@ -1,5 +1,8 @@
+using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -8,54 +11,97 @@ internal static class BlockCost
 {
     public static int Sad16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> other, int otherStride)
     {
-        var total = Vector128<ushort>.Zero;
+        ref var sourceRow = ref MemoryMarshal.GetReference(source[..((15 * sourceStride) + 16)]);
+        ref var otherRow = ref MemoryMarshal.GetReference(other[..((15 * otherStride) + 16)]);
+        var total = Vector128<ulong>.Zero;
         for (var y = 0; y < 16; y++)
         {
-            var a = Vector128.Create<byte>(source.Slice(y * sourceStride, 16));
-            var b = Vector128.Create<byte>(other.Slice(y * otherStride, 16));
-            var difference = Vector128.Max(a, b) - Vector128.Min(a, b);
-            total += Vector128.WidenLower(difference) + Vector128.WidenUpper(difference);
+            total += RowSad(Vector128.LoadUnsafe(ref sourceRow), Vector128.LoadUnsafe(ref otherRow));
+            sourceRow = ref Unsafe.Add(ref sourceRow, sourceStride);
+            otherRow = ref Unsafe.Add(ref otherRow, otherStride);
         }
 
-        return (int)Vector128.Sum(Vector128.WidenLower(total) + Vector128.WidenUpper(total));
+        return (int)(total.GetElement(0) + total.GetElement(1));
     }
 
     public static int Sad16x16Average(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> first, int firstStride, ReadOnlySpan<byte> second, int secondStride)
     {
-        var total = Vector128<ushort>.Zero;
+        ref var sourceRow = ref MemoryMarshal.GetReference(source[..((15 * sourceStride) + 16)]);
+        ref var firstRow = ref MemoryMarshal.GetReference(first[..((15 * firstStride) + 16)]);
+        ref var secondRow = ref MemoryMarshal.GetReference(second[..((15 * secondStride) + 16)]);
+        var total = Vector128<ulong>.Zero;
         for (var y = 0; y < 16; y++)
         {
-            var a = Vector128.Create<byte>(first.Slice(y * firstStride, 16));
-            var b = Vector128.Create<byte>(second.Slice(y * secondStride, 16));
-            var average = (a | b) - Vector128.ShiftRightLogical(a ^ b, 1);
-            var s = Vector128.Create<byte>(source.Slice(y * sourceStride, 16));
-            var difference = Vector128.Max(s, average) - Vector128.Min(s, average);
-            total += Vector128.WidenLower(difference) + Vector128.WidenUpper(difference);
+            var average = RoundedByteAverage(Vector128.LoadUnsafe(ref firstRow), Vector128.LoadUnsafe(ref secondRow));
+            total += RowSad(Vector128.LoadUnsafe(ref sourceRow), average);
+            sourceRow = ref Unsafe.Add(ref sourceRow, sourceStride);
+            firstRow = ref Unsafe.Add(ref firstRow, firstStride);
+            secondRow = ref Unsafe.Add(ref secondRow, secondStride);
         }
 
-        return (int)Vector128.Sum(Vector128.WidenLower(total) + Vector128.WidenUpper(total));
+        return (int)(total.GetElement(0) + total.GetElement(1));
     }
 
     public static void Sad4x4Grid16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> other, int otherStride, Span<int> sads)
     {
+        ref var sourceRow = ref MemoryMarshal.GetReference(source[..((15 * sourceStride) + 16)]);
+        ref var otherRow = ref MemoryMarshal.GetReference(other[..((15 * otherStride) + 16)]);
+        var evenColumns = Vector128.Create(0x00000000FFFFFFFFUL, 0x00000000FFFFFFFFUL).AsByte();
+        var oddColumns = ~evenColumns;
         for (var row = 0; row < 4; row++)
         {
-            var low = Vector128<ushort>.Zero;
-            var high = Vector128<ushort>.Zero;
-            for (var y = row * 4; y < (row * 4) + 4; y++)
+            var even = Vector128<ulong>.Zero;
+            var odd = Vector128<ulong>.Zero;
+            for (var y = 0; y < 4; y++)
             {
-                var a = Vector128.Create<byte>(source.Slice(y * sourceStride, 16));
-                var b = Vector128.Create<byte>(other.Slice(y * otherStride, 16));
-                var difference = Vector128.Max(a, b) - Vector128.Min(a, b);
-                low += Vector128.WidenLower(difference);
-                high += Vector128.WidenUpper(difference);
+                var a = Vector128.LoadUnsafe(ref sourceRow);
+                var b = Vector128.LoadUnsafe(ref otherRow);
+                even += RowSad(a & evenColumns, b & evenColumns);
+                odd += RowSad(a & oddColumns, b & oddColumns);
+                sourceRow = ref Unsafe.Add(ref sourceRow, sourceStride);
+                otherRow = ref Unsafe.Add(ref otherRow, otherStride);
             }
 
-            sads[row * 4] = (int)Vector128.Sum(Vector128.WidenLower(low));
-            sads[(row * 4) + 1] = (int)Vector128.Sum(Vector128.WidenUpper(low));
-            sads[(row * 4) + 2] = (int)Vector128.Sum(Vector128.WidenLower(high));
-            sads[(row * 4) + 3] = (int)Vector128.Sum(Vector128.WidenUpper(high));
+            sads[row * 4] = (int)even.GetElement(0);
+            sads[(row * 4) + 1] = (int)odd.GetElement(0);
+            sads[(row * 4) + 2] = (int)even.GetElement(1);
+            sads[(row * 4) + 3] = (int)odd.GetElement(1);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ulong> RowSad(Vector128<byte> a, Vector128<byte> b)
+    {
+        if (Sse2.IsSupported)
+        {
+            return Sse2.SumAbsoluteDifferences(a, b).AsUInt64();
+        }
+
+        if (AdvSimd.IsSupported)
+        {
+            return AdvSimd.AddPairwiseWidening(AdvSimd.AddPairwiseWidening(AdvSimd.AddPairwiseWidening(AdvSimd.AbsoluteDifference(a, b))));
+        }
+
+        var difference = Vector128.Max(a, b) - Vector128.Min(a, b);
+        var low = Vector128.WidenLower(difference);
+        var high = Vector128.WidenUpper(difference);
+        return Vector128.Create((ulong)Vector128.Sum(low), (ulong)Vector128.Sum(high));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<byte> RoundedByteAverage(Vector128<byte> a, Vector128<byte> b)
+    {
+        if (Sse2.IsSupported)
+        {
+            return Sse2.Average(a, b);
+        }
+
+        if (AdvSimd.IsSupported)
+        {
+            return AdvSimd.FusedAddRoundedHalving(a, b);
+        }
+
+        return (a | b) - Vector128.ShiftRightLogical(a ^ b, 1);
     }
 
     public static void Sad4x4Grid8x8(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> other, int otherStride, Span<int> sads)

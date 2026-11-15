@@ -53,6 +53,7 @@ internal sealed partial class MacroblockEncoder
         Span<int> above = stackalloc int[8];
         Span<int> side = stackalloc int[4];
         Span<byte> candidate = stackalloc byte[16];
+        Span<int> edgeValues = stackalloc int[IntraPrediction.EdgeValueCount];
         for (var block = 0; block < 16; block++)
         {
             var bx = MacroblockLayout.BlockX[block];
@@ -64,6 +65,7 @@ internal sealed partial class MacroblockEncoder
             var bestMode = 2;
             var bestCost = int.MaxValue;
             var corner = IntraPrediction.Gather4x4Neighbours(_recon, offset, _strideY, left, top, topLeft, topRight, above, side);
+            IntraPrediction.Edge4x4Values(above, side, corner, edgeValues);
             for (var mode = 0; mode < 9; mode++)
             {
                 if (!Intra4x4ModeAvailable(mode, left, top, topLeft))
@@ -71,7 +73,7 @@ internal sealed partial class MacroblockEncoder
                     continue;
                 }
 
-                IntraPrediction.Predict4x4(above, side, corner, mode, left, top, topLeft, candidate, 4);
+                IntraPrediction.Predict4x4(edgeValues, mode, left, top, topLeft, candidate, 4);
                 var cost = BlockCost.Satd(blockSource, _source.StrideY, candidate, 4, 4, 4) + (_lambda * (mode == predicted ? 1 : 4));
                 if (cost < bestCost)
                 {
@@ -80,7 +82,7 @@ internal sealed partial class MacroblockEncoder
                 }
             }
 
-            IntraPrediction.Predict4x4(above, side, corner, bestMode, left, top, topLeft, _recon.AsSpan(offset), _strideY);
+            IntraPrediction.Predict4x4(edgeValues, bestMode, left, top, topLeft, _recon.AsSpan(offset), _strideY);
             ResidualBlock(blockSource, _source.StrideY, _recon.AsSpan(offset), _strideY);
             ForwardTransform.Core4x4(_residual.AsSpan(0, 16), _coefficients);
             var count = Quantizer.Quantize4x4(_coefficients, _raster, _scanned, _qp, intra: true, 0);
