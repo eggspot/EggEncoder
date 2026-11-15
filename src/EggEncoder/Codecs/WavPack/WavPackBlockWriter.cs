@@ -9,6 +9,12 @@ namespace EggEncoder.Codecs.WavPack
 
             var metadata = new List<byte>();
             WriteSubBlock(metadata, WavPackMetadataSubBlock.IdDecorrTerms, decorrTerms);
+            if (decorrTerms.Length > 0)
+            {
+                WriteSubBlock(metadata, WavPackMetadataSubBlock.IdDecorrWeights, new byte[decorrTerms.Length * channels]);
+                WriteSubBlock(metadata, WavPackMetadataSubBlock.IdDecorrSamples, new byte[ColdStartSampleCount(decorrTerms, channels) * 2]);
+            }
+
             WriteSubBlock(metadata, WavPackMetadataSubBlock.IdEntropyVars, entropyVars);
 
             var sampleRateIndex = Array.IndexOf(WavPackBlockHeader.StandardSampleRates, sampleRate);
@@ -50,6 +56,18 @@ namespace EggEncoder.Codecs.WavPack
             block[ckSizeOffset + 3] = (byte)(ckSize >> 24);
 
             return [.. block];
+        }
+
+        private static int ColdStartSampleCount(byte[] decorrTerms, int channels)
+        {
+            var count = 0;
+            foreach (var entry in decorrTerms)
+            {
+                var term = (entry & 0x1F) - 5;
+                count += term > 8 ? 2 * channels : term > 0 ? term * channels : 2;
+            }
+
+            return count;
         }
 
         private static void WriteSubBlock(List<byte> output, int functionId, byte[] data)
