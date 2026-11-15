@@ -553,6 +553,22 @@ internal static class CabacTables
 
     public static readonly byte[] NextStateLps = BuildNextState(mps: false);
 
+    public static readonly byte[] NextStateForBin = BuildNextStateForBin();
+
+    private static byte[] BuildNextStateForBin()
+    {
+        var table = new byte[256];
+        for (var state = 0; state < 128; state++)
+        {
+            for (var bin = 0; bin < 2; bin++)
+            {
+                table[(state << 1) | bin] = bin == (state & 1) ? NextStateMps[state] : NextStateLps[state];
+            }
+        }
+
+        return table;
+    }
+
     private static byte[] BuildNextState(bool mps)
     {
         var table = new byte[128];
