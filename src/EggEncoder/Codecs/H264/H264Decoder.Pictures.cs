@@ -5,7 +5,7 @@ namespace EggEncoder.Codecs.H264;
 
 public sealed partial class H264Decoder
 {
-    private const int MaxDefaultParallelism = 8;
+    private const int MaxDefaultParallelism = 16;
 
     private readonly Dictionary<int, (PictureParameterSet Pps, SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
     private readonly DecodedPictureBuffer _buffer = new();

@@ -163,7 +163,7 @@ sets each slice up as a `SliceDecoder` (parse one macroblock into `MacroblockSyn
 reconstruct it) in a `PictureDecodeJob`. Frame threads: the calling thread parses headers, builds
 reference lists, marks and stores the picture in the DPB (the same order as decoding one picture at a
 time), then the job decodes on a LongRunning task, up to `maxDegreeOfParallelism` pictures at once
-(constructor argument; default one per core, at most eight; 1 decodes on the calling thread). The
+(constructor argument; default one per logical processor, at most 16; 1 decodes on the calling thread). The
 `SliceDecoder` constructor snapshots every reference's POC and long-term flag and the current POC,
 since later marking (MMCO, MMCO5's POC reset) runs before earlier jobs finish. `H264Picture.Progress`
 counts final luma lines (16r+13 after deblocking row r, the next row's edge still changes the rest);
@@ -190,7 +190,8 @@ per macroblock) keeps what context selection reads from neighbours. Item 27 (Hig
 `SliceDecoder.Bipredictive` (B mb/sub types, spatial/temporal direct, bi-prediction weights), the
 8x8 transform in both entropy modes and `IntraPrediction8x8`. Speed: `InterPrediction` writes
 straight into the frame (16-bit vector lanes for the 6-tap, centre and bilinear filters and implicit
-weights; identity explicit weights are skipped and equal bi-prediction weights average), full-pel
+weights; identity explicit weights are skipped and equal bi-prediction weights average, the second list
+averaging straight into the frame as it is interpolated), full-pel
 blocks copy with fixed-width loads, uniform B_Skip/B_Direct_16x16 macroblocks predict once as 16x16, per-picture macroblock
 arrays come from `MacroblockArrayPool`, and `DeblockingFilter` works from a coefficient bitmask per
 macroblock plus a uniform-motion flag (internal edges of such a macroblock need no motion check, an

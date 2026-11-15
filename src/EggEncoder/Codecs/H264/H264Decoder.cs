@@ -36,7 +36,7 @@ public sealed partial class H264Decoder : IDisposable
     /// <summary>A decoder for MP4-style (length-prefixed) access units, configured by an <c>avcC</c> record.</summary>
     /// <param name="avcDecoderConfiguration">The AVCDecoderConfigurationRecord: NAL length size and parameter sets.</param>
     /// <param name="pool">Where frames are rented; <see cref="VideoFramePool.Shared"/> when null.</param>
-    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per core (at most eight), 1 to decode on the calling thread.</param>
+    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per logical processor (at most 16), 1 to decode on the calling thread.</param>
     /// <exception cref="InvalidDataException">The record or a parameter set in it is damaged.</exception>
     /// <exception cref="NotSupportedException">A parameter set uses an unsupported feature.</exception>
     public H264Decoder(ReadOnlySpan<byte> avcDecoderConfiguration, VideoFramePool? pool, int maxDegreeOfParallelism)
@@ -60,7 +60,7 @@ public sealed partial class H264Decoder : IDisposable
 
     /// <summary>A decoder for Annex B access units (start codes), with parameter sets sent in the stream.</summary>
     /// <param name="pool">Where frames are rented; <see cref="VideoFramePool.Shared"/> when null.</param>
-    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per core (at most eight), 1 to decode on the calling thread.</param>
+    /// <param name="maxDegreeOfParallelism">Pictures decoded at once; 0 or less for one per logical processor (at most 16), 1 to decode on the calling thread.</param>
     public H264Decoder(VideoFramePool? pool, int maxDegreeOfParallelism)
     {
         _parallelism = ResolveParallelism(maxDegreeOfParallelism);
