@@ -429,8 +429,7 @@ internal sealed partial class SliceDecoder
         var chromaLines = (y / 2) + (mvY >> 3) + (height / 2) + 1;
         AwaitLines(picture, Math.Max(lumaLines, (2 * chromaLines) - 1));
         InterPrediction.Luma(picture, x + (mvX >> 2), y + (mvY >> 2), mvX & 3, mvY & 3, width, height, luma, lumaStride, average);
-        InterPrediction.Chroma(picture, false, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, chromaStride, average);
-        InterPrediction.Chroma(picture, true, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cr, chromaStride, average);
+        InterPrediction.ChromaPair(picture, (x / 2) + (mvX >> 3), (y / 2) + (mvY >> 3), mvX & 7, mvY & 7, width / 2, height / 2, cb, cr, chromaStride, average);
     }
 
     private void ApplyWeights(int list, int reference, Span<byte> luma, int lumaStride, Span<byte> cb, Span<byte> cr, int chromaStride, int width, int height)

@@ -246,6 +246,27 @@ internal static class InterPrediction
             origin = 0;
         }
 
+        ChromaBlock(source, origin, stride, xFrac, yFrac, width, height, output, outputStride, average);
+    }
+
+    public static void ChromaPair(H264Picture reference, int x, int y, int xFrac, int yFrac, int width, int height, Span<byte> cb, Span<byte> cr, int outputStride, bool average = false)
+    {
+        var frame = reference.Frame;
+        if (x < 0 || y < 0 || x + width + 1 > reference.WidthInMacroblocks * 8 || y + height + 1 > reference.HeightInMacroblocks * 8)
+        {
+            Chroma(reference, false, x, y, xFrac, yFrac, width, height, cb, outputStride, average);
+            Chroma(reference, true, x, y, xFrac, yFrac, width, height, cr, outputStride, average);
+            return;
+        }
+
+        var stride = frame.StrideUV;
+        var offset = (y * stride) + x;
+        ChromaBlock(frame.Buffer, frame.OffsetU + offset, stride, xFrac, yFrac, width, height, cb, outputStride, average);
+        ChromaBlock(frame.Buffer, frame.OffsetV + offset, stride, xFrac, yFrac, width, height, cr, outputStride, average);
+    }
+
+    private static void ChromaBlock(ReadOnlySpan<byte> source, int origin, int stride, int xFrac, int yFrac, int width, int height, Span<byte> output, int outputStride, bool average)
+    {
         if (xFrac == 0 && yFrac == 0)
         {
             CopyBlock(source, origin, stride, output, outputStride, width, height, average);

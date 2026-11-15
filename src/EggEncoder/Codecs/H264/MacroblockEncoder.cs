@@ -277,8 +277,7 @@ internal sealed partial class MacroblockEncoder
         InterPrediction.Luma(_reference!, x, y, mvX & 3, mvY & 3, 16, 16, _lumaPrediction, 16);
         var cx = (_mbX * 8) + (mvX >> 3);
         var cy = (_mbY * 8) + (mvY >> 3);
-        InterPrediction.Chroma(_reference!, false, cx, cy, mvX & 7, mvY & 7, 8, 8, _cbPrediction, 8);
-        InterPrediction.Chroma(_reference!, true, cx, cy, mvX & 7, mvY & 7, 8, 8, _crPrediction, 8);
+        InterPrediction.ChromaPair(_reference!, cx, cy, mvX & 7, mvY & 7, 8, 8, _cbPrediction, _crPrediction, 8);
     }
 
     private void ResidualBlock(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
