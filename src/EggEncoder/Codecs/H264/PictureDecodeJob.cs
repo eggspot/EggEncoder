@@ -24,6 +24,7 @@ internal sealed class PictureDecodeJob
     private readonly List<H264Picture> _references = new();
     private bool _progressive = true;
     private bool _finishedInline;
+    private bool _deblockWhileDecoding;
     private Task? _task;
 
     public PictureDecodeJob(H264Picture picture, SliceEntropyContext context)
@@ -63,6 +64,7 @@ internal sealed class PictureDecodeJob
             reference.Hold();
         }
 
+        _deblockWhileDecoding = !onCallingThread;
         if (onCallingThread)
         {
             Execute();
@@ -113,13 +115,19 @@ internal sealed class PictureDecodeJob
 
     private void Decode()
     {
+        if (_progressive && _deblockWhileDecoding)
+        {
+            DecodeAndDeblockRowByRow();
+            return;
+        }
+
         var picture = Picture;
         var count = picture.WidthInMacroblocks * picture.HeightInMacroblocks;
         var decoded = _progressive && Environment.ProcessorCount > 1 ? new RowProgress(1, spinRounds: 0) : null;
         var deblocking = decoded is null ? null : StartDeblocking(decoded);
         try
         {
-            var reporting = decoded;
+            Action<int>? reporting = decoded is null ? null : macroblocks => decoded.Report(0, macroblocks);
             var next = 0;
             foreach (var slice in _slices)
             {
@@ -128,12 +136,12 @@ internal sealed class PictureDecodeJob
                     reporting = null;
                 }
 
-                slice.Progress = reporting;
+                slice.RowStarted = reporting;
                 slice.Decode();
                 if (reporting is not null)
                 {
                     next = slice.Macroblock;
-                    reporting.Report(0, next);
+                    reporting(next);
                 }
             }
 
@@ -169,6 +177,57 @@ internal sealed class PictureDecodeJob
             }
 
             throw;
+        }
+    }
+
+    private void DecodeAndDeblockRowByRow()
+    {
+        var picture = Picture;
+        var width = picture.WidthInMacroblocks;
+        var rows = picture.HeightInMacroblocks;
+        var filters = _filters;
+        var masks = System.Buffers.ArrayPool<int>.Shared.Rent(width * rows);
+        var deblocked = 0;
+        void DeblockUpTo(int endRow)
+        {
+            for (; deblocked < endRow; deblocked++)
+            {
+                DeblockingFilter.ComputeEdgeMasks(picture, masks, deblocked, deblocked + 1);
+                DeblockingFilter.FilterRows(picture, filters, masks, deblocked, deblocked + 1);
+                picture.Progress?.Report(0, (16 * deblocked) + 13);
+            }
+        }
+
+        try
+        {
+            Action<int>? rowStarted = macroblocks => DeblockUpTo(Math.Max(0, (macroblocks / width) - 1));
+            var next = 0;
+            foreach (var slice in _slices)
+            {
+                if (slice.FirstMacroblock != next)
+                {
+                    rowStarted = null;
+                }
+
+                slice.RowStarted = rowStarted;
+                slice.Decode();
+                if (rowStarted is not null)
+                {
+                    next = slice.Macroblock;
+                }
+            }
+
+            if (Array.IndexOf(picture.Kinds, MacroblockKind.NotDecoded) >= 0)
+            {
+                throw new InvalidDataException("H.264: the slices of a picture don't cover every macroblock");
+            }
+
+            DeblockUpTo(rows);
+            picture.Progress?.Report(0, rows * 16);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<int>.Shared.Return(masks);
         }
     }
 

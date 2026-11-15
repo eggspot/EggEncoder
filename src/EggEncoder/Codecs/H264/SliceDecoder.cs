@@ -35,7 +35,7 @@ internal sealed partial class SliceDecoder
     private readonly int[] _neighbourCache = new int[6];
     private bool _cacheNeighbours;
 
-    public RowProgress? Progress { get; set; }
+    public Action<int>? RowStarted { get; set; }
 
     public int FirstMacroblock => _header.FirstMacroblock;
 
@@ -171,7 +171,7 @@ internal sealed partial class SliceDecoder
         _mbX = _macroblock % _width;
         if (_mbX == 0)
         {
-            Progress?.Report(0, _macroblock);
+            RowStarted?.Invoke(_macroblock);
         }
 
         _mbY = _macroblock / _width;
