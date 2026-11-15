@@ -54,6 +54,22 @@ pre-emptively covering everything.
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
 
+### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2, scratch harness, 20 timed decodes after one warm-up)
+
+60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to 16-bit PCM; the machine
+was shared with other work, so each figure is the range over repeated runs:
+
+| Decoder | Time | Real time |
+|---------|-----:|-----:|
+| `Mp3Decoder`, 1 thread | 156-179 ms | about 360x |
+| `Mp3Decoder`, default (up to 4 threads) | 66-107 ms | about 560-900x |
+| ffmpeg 2021 build (`-threads 1 -benchmark`, its MP3 decoder has no threading) | 95-134 ms | about 450-630x |
+
+On one core ffmpeg's hand-written SIMD decoder is about 1.7x faster; with the file cut into
+segments decoded in parallel (byte-identical output) this decoder is faster in wall-clock time.
+Before tuning, one core took 207 ms: most of the gain came from a symmetric IMDCT, 256-bit synthesis
+loops, a branch-free requantiser and vectorised PCM conversion.
+
 ### H.264 encode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2, scratch harness timing `Encode` calls)
 
 30 frames of 1080x1920 `testsrc2` (mostly flat bars, a few moving objects), High profile:

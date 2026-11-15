@@ -41,7 +41,8 @@ EggEncoder gives you a single `IMediaEncoder` abstraction — `Probe`, `ConvertF
 - ✂️ **Sample-accurate cutting** — trim audio files without a full decode→encode round trip
 - 🛑 **`CancellationToken` support** — `ConvertFile`/`CutFile` (and `Probe`) each have a `CancellationToken`-accepting overload; `ConvertFile`/`CutFile` check it once per decoded block for real, sub-second cancellation, not just once up front
 - 🎛️ **PCM transform pipeline** — resampling, gain/peak normalization, channel remix, bit-depth/float conversion, fades, parametric EQ (biquad + Butterworth) and general FIR filtering, mixing, and concatenation — opt-in, composable, and layered onto `Convert`/`Cut` without touching the original API
-- 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and a handful of pure managed codec NuGet packages (NLayer, Concentus, NVorbis, OggVorbisEncoder)
+- 🪶 **Dependency-light** — only `Microsoft.Extensions.*.Abstractions` and three pure managed codec NuGet packages (Concentus, NVorbis, OggVorbisEncoder)
+- 🎵 **MP3 decoding** — `Codecs.Mp3.Mp3Decoder` is an in-house MPEG-1/2/2.5 Layer III decoder (bit reservoir, joint and intensity stereo, short and mixed blocks), within 2 LSB of ffmpeg on every sample of the test files; long files are decoded in parallel segments with byte-identical output, which on four threads beats ffmpeg's single-threaded decoder (see [docs/benchmarks.md](docs/benchmarks.md))
 - 📖 **MIT OR Apache-2.0 licensed** — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses of the pure managed codec dependencies above
 
 ## Installation
