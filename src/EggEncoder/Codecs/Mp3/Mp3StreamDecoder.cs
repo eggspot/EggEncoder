@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace EggEncoder.Codecs.Mp3;
 
@@ -17,8 +19,6 @@ internal sealed class Mp3StreamDecoder
     private readonly byte[] _main = new byte[MainBufferLength + Padding];
     private readonly float[] _left = new float[1152];
     private readonly float[] _right = new float[1152];
-    private readonly int[] _pcmLeft = new int[1152];
-    private readonly int[] _pcmRight = new int[1152];
     private int _mainLength;
     private int[]? _warmUp;
 
@@ -241,13 +241,7 @@ internal sealed class Mp3StreamDecoder
             return;
         }
 
-        ToInt16(_left.AsSpan(0, produced), _pcmLeft);
-        ToInt16(_right.AsSpan(0, produced), _pcmRight);
-        for (var i = 0; i < produced; i++)
-        {
-            pcm[2 * i] = _pcmLeft[i];
-            pcm[(2 * i) + 1] = _pcmRight[i];
-        }
+        ToInterleavedInt16(_left.AsSpan(0, produced), _right.AsSpan(0, produced), pcm);
     }
 
     private bool DecodeFrame(byte[] file, int offset, MpegAudioHeader header)
@@ -325,6 +319,45 @@ internal sealed class Mp3StreamDecoder
 
         var vbri = offset + 36;
         return vbri + 4 <= file.Length && file.Slice(vbri, 4).SequenceEqual("VBRI"u8);
+    }
+
+    private static void ToInterleavedInt16(ReadOnlySpan<float> left, ReadOnlySpan<float> right, Span<int> output)
+    {
+        var i = 0;
+        if (Sse2.IsSupported || AdvSimd.Arm64.IsSupported)
+        {
+            var scale = Vector128.Create(32768f);
+            var lowest = Vector128.Create(-32768f);
+            var highest = Vector128.Create(32767f);
+            var magic = Vector128.Create(12582912f);
+            for (; i + 4 <= left.Length; i += 4)
+            {
+                var l = Vector128.ConvertToInt32((Vector128.Min(Vector128.Max(Vector128.Create(left.Slice(i, 4)) * scale, lowest), highest) + magic) - magic);
+                var r = Vector128.ConvertToInt32((Vector128.Min(Vector128.Max(Vector128.Create(right.Slice(i, 4)) * scale, lowest), highest) + magic) - magic);
+                if (Sse2.IsSupported)
+                {
+                    Sse2.UnpackLow(l, r).CopyTo(output.Slice(2 * i, 4));
+                    Sse2.UnpackHigh(l, r).CopyTo(output.Slice((2 * i) + 4, 4));
+                }
+                else
+                {
+                    AdvSimd.Arm64.ZipLow(l, r).CopyTo(output.Slice(2 * i, 4));
+                    AdvSimd.Arm64.ZipHigh(l, r).CopyTo(output.Slice((2 * i) + 4, 4));
+                }
+            }
+        }
+
+        for (; i < left.Length; i++)
+        {
+            output[2 * i] = ToInt16(left[i]);
+            output[(2 * i) + 1] = ToInt16(right[i]);
+        }
+    }
+
+    private static int ToInt16(float sample)
+    {
+        var scaled = MathF.Round(sample * 32768f);
+        return scaled >= short.MaxValue ? short.MaxValue : scaled <= short.MinValue ? short.MinValue : (int)scaled;
     }
 
     private static void ToInt16(ReadOnlySpan<float> samples, Span<int> output)

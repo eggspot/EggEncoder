@@ -102,8 +102,9 @@ so unlike everything else they are not checked against ffmpeg. The partial piece
 replaced by it and deleted with their tests. Checked against ffmpeg on every sample of nine files
 (MPEG-1 CBR/VBR joint stereo, no-Xing, mono, transients with short blocks, MPEG-2 22.05 kHz and
 MPEG-2.5 11.025/8 kHz): within 2 LSB. Not decoded: Layer I/II (NLayer did; refused with
-`NotSupportedException`). Long files are decoded in parallel 48-frame segments with byte-identical
-output; see `docs/benchmarks.md` for the speed against ffmpeg. The notes below are the history.
+`NotSupportedException`). It is faster than ffmpeg's decoder on one core, and long files are also decoded
+in parallel 48-frame segments with byte-identical output; see `docs/benchmarks.md`. The notes below
+are the history.
 
 ### What's reusable from the existing in-house MP3 encoder (and what genuinely isn't)
 

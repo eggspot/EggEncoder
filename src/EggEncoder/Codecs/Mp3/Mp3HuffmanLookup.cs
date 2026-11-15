@@ -57,7 +57,7 @@ internal sealed class Mp3HuffmanLookup
 
     private readonly int[] _entries;
 
-    private Mp3HuffmanLookup(HuffmanTable table, int symbols)
+    private Mp3HuffmanLookup(HuffmanTable table, int symbols, int pairWidth)
     {
         var codes = new List<(uint Code, int Length, int Symbol)>();
         for (var symbol = 0; symbol < symbols; symbol++)
@@ -95,7 +95,8 @@ internal sealed class Mp3HuffmanLookup
 
         foreach (var (code, length, symbol) in codes)
         {
-            var leaf = (symbol << 8) | length;
+            var value = pairWidth > 0 ? ((symbol / pairWidth) << 4) | (symbol % pairWidth) : symbol;
+            var leaf = (value << 8) | length;
             if (length <= PrimaryBits)
             {
                 var first = (int)(code << (PrimaryBits - length));
@@ -119,9 +120,9 @@ internal sealed class Mp3HuffmanLookup
         }
     }
 
-    public static Mp3HuffmanLookup CountA { get; } = new(Mp3HuffmanTables.TableA, 16);
+    public static Mp3HuffmanLookup CountA { get; } = new(Mp3HuffmanTables.TableA, 16, 0);
 
-    public static Mp3HuffmanLookup CountB { get; } = new(Mp3HuffmanTables.TableB, 16);
+    public static Mp3HuffmanLookup CountB { get; } = new(Mp3HuffmanTables.TableB, 16, 0);
 
     public static Mp3HuffmanLookup? ForTable(int tableSelect) => BigValueLookups[tableSelect];
 
@@ -140,6 +141,20 @@ internal sealed class Mp3HuffmanLookup
         return entry >> 8;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int Lookup(uint window)
+    {
+        var entry = _entries[window >> (32 - PrimaryBits)];
+        if (entry < 0)
+        {
+            var subBits = entry & 31;
+            var offset = (entry >> 5) & 0xFFFFFF;
+            entry = _entries[offset + (int)((window << PrimaryBits) >> (32 - subBits))];
+        }
+
+        return entry;
+    }
+
     private static Mp3HuffmanLookup?[] BuildBigValueLookups()
     {
         var lookups = new Mp3HuffmanLookup?[32];
@@ -154,7 +169,7 @@ internal sealed class Mp3HuffmanLookup
             var (table, width, _) = Mp3HuffmanTables.GetBigValueTable(select);
             if (!shared.TryGetValue(table, out var lookup))
             {
-                lookup = new Mp3HuffmanLookup(table, width * width);
+                lookup = new Mp3HuffmanLookup(table, width * width, width);
                 shared[table] = lookup;
             }
 

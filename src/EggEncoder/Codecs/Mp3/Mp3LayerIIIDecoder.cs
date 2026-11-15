@@ -1,3 +1,4 @@
+using System.Runtime.Intrinsics;
 using System.Runtime.CompilerServices;
 
 namespace EggEncoder.Codecs.Mp3;
@@ -16,6 +17,7 @@ internal sealed class Mp3LayerIIIDecoder
     private readonly int[] _lsfShortMax = new int[39];
     private readonly int[][] _quantized = [new int[Lines + 4], new int[Lines + 4]];
     private readonly int[] _nonZero = new int[2];
+    private readonly float[] _bandGains = new float[22];
     private readonly float[][] _spectrum = [new float[Lines], new float[Lines]];
     private readonly float[] _reorder = new float[Lines];
     private readonly float[][] _overlap = [new float[Lines], new float[Lines]];
@@ -128,8 +130,16 @@ internal sealed class Mp3LayerIIIDecoder
                 ReadMpeg1Scalefactors(info, channel, granule, ref bits);
             }
 
-            _nonZero[channel] = DecodeHuffman(info, _quantized[channel], ref bits, end);
-            Requantize(header, info, channel);
+            if (!(info.WindowSwitching && info.BlockType == 2) && !header.Intensity)
+            {
+                _nonZero[channel] = DecodeLongBlock(header, info, channel, ref bits, end);
+            }
+            else
+            {
+                _nonZero[channel] = DecodeHuffman(info, _quantized[channel], ref bits, end);
+                Requantize(header, info, channel);
+            }
+
             bitPosition = end;
         }
 
@@ -331,6 +341,142 @@ internal sealed class Mp3LayerIIIDecoder
         }
     }
 
+    private int DecodeLongBlock(MpegAudioHeader header, GranuleInfo info, int channel, ref Mp3BitStream bits, int end)
+    {
+        var gains = _bandGains;
+        var quarter = Mp3DecoderTables.QuarterPowers;
+        var scaleShift = info.ScalefacScale ? 2 : 1;
+        var baseGain = info.GlobalGain - 210 + Mp3DecoderTables.GainOffset;
+        var scalefactors = _longScalefactors[channel];
+        for (var index = 0; index < 22; index++)
+        {
+            var pre = info.Preflag ? Mp3DecoderTables.Pretab[index] : 0;
+            gains[index] = quarter[Math.Clamp(baseGain - ((scalefactors[index] + pre) << scaleShift), 0, quarter.Length - 1)];
+        }
+
+        var spectrum = _spectrum[channel];
+        var starts = Mp3DecoderTables.LongBandStarts[header.SampleRateIndex];
+        var bigEnd = Math.Min(info.BigValues * 2, Lines);
+        var band = 0;
+        var line = 0;
+        line = DecodePairsScaled(spectrum, ref bits, line, Math.Min(info.Region0End, bigEnd), info.TableSelect0, gains, starts, ref band);
+        line = DecodePairsScaled(spectrum, ref bits, line, Math.Min(info.Region1End, bigEnd), info.TableSelect1, gains, starts, ref band);
+        line = DecodePairsScaled(spectrum, ref bits, line, bigEnd, info.TableSelect2, gains, starts, ref band);
+        var lastNonZero = line;
+        var quads = info.Count1Table == 0 ? Mp3HuffmanLookup.CountA : Mp3HuffmanLookup.CountB;
+        while (line + 4 <= Lines && bits.Position < end)
+        {
+            var symbol = quads.Decode(ref bits);
+            var first = line;
+            for (var bit = 3; bit >= 0; bit--, line++)
+            {
+                while (starts[band + 1] <= line)
+                {
+                    band++;
+                }
+
+                if (((symbol >> bit) & 1) == 0)
+                {
+                    spectrum[line] = 0;
+                    continue;
+                }
+
+                spectrum[line] = bits.ReadBit() == 1 ? -gains[band] : gains[band];
+            }
+
+            if (bits.Position > end)
+            {
+                spectrum[first] = spectrum[first + 1] = spectrum[first + 2] = spectrum[first + 3] = 0;
+                line = first;
+                break;
+            }
+
+            lastNonZero = line;
+        }
+
+        Array.Clear(spectrum, line, Lines - line);
+        bits.Position = end;
+        return lastNonZero;
+    }
+
+    private static int DecodePairsScaled(float[] spectrum, ref Mp3BitStream bits, int line, int end, int tableSelect, float[] gains, int[] starts, ref int band)
+    {
+        if (line >= end)
+        {
+            return line;
+        }
+
+        var lookup = Mp3HuffmanLookup.ForTable(tableSelect);
+        if (lookup is null)
+        {
+            if (tableSelect is 4 or 14)
+            {
+                throw new InvalidDataException("MP3: reserved Huffman table");
+            }
+
+            Array.Clear(spectrum, line, end - line);
+            return end;
+        }
+
+        var (_, _, linbits) = Mp3HuffmanTables.GetBigValueTable(tableSelect);
+        var power = Mp3DecoderTables.Power43;
+        while (starts[band + 1] <= line)
+        {
+            band++;
+        }
+
+        var bandEnd = starts[band + 1];
+        var gain = gains[band];
+        for (; line < end; line += 2)
+        {
+            if (line >= bandEnd)
+            {
+                while (starts[band + 1] <= line)
+                {
+                    band++;
+                }
+
+                bandEnd = starts[band + 1];
+                gain = gains[band];
+            }
+
+            var window = bits.Peek(32);
+            var entry = lookup.Lookup(window);
+            var used = entry & 0xFF;
+            var x = (entry >> 12) & 15;
+            var y = (entry >> 8) & 15;
+            if (linbits == 0 || (x < 15 && y < 15))
+            {
+                var hasX = (int)((uint)-x >> 31);
+                var signX = (int)((window << used) >> 31) & hasX;
+                used += hasX;
+                var hasY = (int)((uint)-y >> 31);
+                var signY = (int)((window << used) >> 31) & hasY;
+                used += hasY;
+                spectrum[line] = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(power[x] * gain) ^ (signX << 31));
+                spectrum[line + 1] = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(power[y] * gain) ^ (signY << 31));
+                bits.Skip(used);
+                continue;
+            }
+
+            bits.Skip(used);
+            if (x == 15)
+            {
+                x += bits.Read(linbits);
+            }
+
+            spectrum[line] = x == 0 ? 0 : bits.ReadBit() == 1 ? -power[x] * gain : power[x] * gain;
+            if (y == 15)
+            {
+                y += bits.Read(linbits);
+            }
+
+            spectrum[line + 1] = y == 0 ? 0 : bits.ReadBit() == 1 ? -power[y] * gain : power[y] * gain;
+        }
+
+        return line;
+    }
+
     private static int DecodeHuffman(GranuleInfo info, int[] output, ref Mp3BitStream bits, int end)
     {
         var bigEnd = Math.Min(info.BigValues * 2, Lines);
@@ -388,22 +534,12 @@ internal sealed class Mp3LayerIIIDecoder
             return end;
         }
 
-        var (_, width, linbits) = Mp3HuffmanTables.GetBigValueTable(tableSelect);
-        var shift = width == 16 ? 4 : 0;
+        var (_, _, linbits) = Mp3HuffmanTables.GetBigValueTable(tableSelect);
         for (; line < end; line += 2)
         {
             var symbol = lookup.Decode(ref bits);
-            int x, y;
-            if (shift == 4)
-            {
-                x = symbol >> 4;
-                y = symbol & 15;
-            }
-            else
-            {
-                x = symbol / width;
-                y = symbol % width;
-            }
+            var x = symbol >> 4;
+            var y = symbol & 15;
 
             if (x == 15 && linbits > 0)
             {
@@ -687,7 +823,17 @@ internal sealed class Mp3LayerIIIDecoder
 
     private static void MidSide(float[] left, float[] right, int start, int end)
     {
-        for (var i = start; i < end; i++)
+        var i = start;
+        var scale = Vector128.Create(InverseSquareRoot2);
+        for (; i + 4 <= end; i += 4)
+        {
+            var mid = Vector128.Create(left.AsSpan(i, 4));
+            var side = Vector128.Create(right.AsSpan(i, 4));
+            ((mid + side) * scale).CopyTo(left.AsSpan(i, 4));
+            ((mid - side) * scale).CopyTo(right.AsSpan(i, 4));
+        }
+
+        for (; i < end; i++)
         {
             var mid = left[i];
             var side = right[i];
@@ -753,6 +899,25 @@ internal sealed class Mp3LayerIIIDecoder
 
         var cs = Mp3DecoderTables.AliasCs;
         var ca = Mp3DecoderTables.AliasCa;
+        if (Vector256.IsHardwareAccelerated)
+        {
+            var reverse = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
+            var csVector = Vector256.Create(cs.AsSpan(0, 8));
+            var caVector = Vector256.Create(ca.AsSpan(0, 8));
+            for (var subband = 1; subband <= boundaries; subband++)
+            {
+                var edge = subband * 18;
+                var upper = Vector256.Create(spectrum.AsSpan(edge, 8));
+                var lower = Vector256.Shuffle(Vector256.Create(spectrum.AsSpan(edge - 8, 8)), reverse);
+                var newLower = (lower * csVector) - (upper * caVector);
+                var newUpper = (upper * csVector) + (lower * caVector);
+                newUpper.CopyTo(spectrum.AsSpan(edge, 8));
+                Vector256.Shuffle(newLower, reverse).CopyTo(spectrum.AsSpan(edge - 8, 8));
+            }
+
+            return;
+        }
+
         for (var subband = 1; subband <= boundaries; subband++)
         {
             var edge = subband * 18;
@@ -771,41 +936,35 @@ internal sealed class Mp3LayerIIIDecoder
         Span<float> buffer = stackalloc float[36];
         var shortBlocks = info.WindowSwitching && info.BlockType == 2;
         var longType = info.WindowSwitching ? info.BlockType : 0;
+        var output = _hybrid;
         for (var subband = 0; subband < 32; subband++)
         {
             var offset = subband * 18;
-            var output = _hybrid.AsSpan(offset, 18);
+            var invert = (subband & 1) == 1;
+            if (subband < limit && !(shortBlocks && !(info.Mixed && subband < 2)))
+            {
+                Mp3Imdct.LongWithOverlap(spectrum, offset, output, subband, overlap, Mp3DecoderTables.LongWindows[shortBlocks ? 0 : longType], invert);
+                continue;
+            }
+
             var previous = overlap.AsSpan(offset, 18);
             if (subband >= limit)
             {
-                previous.CopyTo(output);
+                for (var i = 0; i < 18; i++)
+                {
+                    output[(i * 32) + subband] = invert && (i & 1) == 1 ? -previous[i] : previous[i];
+                }
+
                 previous.Clear();
-            }
-            else if (shortBlocks && !(info.Mixed && subband < 2))
-            {
-                Mp3Imdct.Short(spectrum.AsSpan(offset, 18), buffer);
-                for (var i = 0; i < 18; i++)
-                {
-                    output[i] = buffer[i] + previous[i];
-                    previous[i] = buffer[18 + i];
-                }
-            }
-            else
-            {
-                Mp3Imdct.Long(spectrum.AsSpan(offset, 18), buffer, Mp3DecoderTables.LongWindows[shortBlocks ? 0 : longType]);
-                for (var i = 0; i < 18; i++)
-                {
-                    output[i] = buffer[i] + previous[i];
-                    previous[i] = buffer[18 + i];
-                }
+                continue;
             }
 
-            if ((subband & 1) == 1)
+            Mp3Imdct.Short(spectrum.AsSpan(offset, 18), buffer);
+            for (var i = 0; i < 18; i++)
             {
-                for (var i = 1; i < 18; i += 2)
-                {
-                    output[i] = -output[i];
-                }
+                var value = buffer[i] + previous[i];
+                output[(i * 32) + subband] = invert && (i & 1) == 1 ? -value : value;
+                previous[i] = buffer[18 + i];
             }
         }
     }

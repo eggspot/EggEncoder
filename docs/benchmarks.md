@@ -54,21 +54,25 @@ pre-emptively covering everything.
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
 
-### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2, scratch harness, 20 timed decodes after one warm-up)
+### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
-60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to 16-bit PCM; the machine
-was shared with other work, so each figure is the range over repeated runs:
+60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to interleaved 16-bit PCM.
+ffmpeg (2021 build) measured with `-threads 1 -benchmark ... -c:a pcm_s16le -f null -`, best of four
+runs; its MP3 decoder has no threading. Output within 1 LSB of ffmpeg's on every sample.
 
 | Decoder | Time | Real time |
 |---------|-----:|-----:|
-| `Mp3Decoder`, 1 thread | 156-179 ms | about 360x |
-| `Mp3Decoder`, default (up to 4 threads) | 66-107 ms | about 560-900x |
-| ffmpeg 2021 build (`-threads 1 -benchmark`, its MP3 decoder has no threading) | 95-134 ms | about 450-630x |
+| `Mp3Decoder`, 1 thread | 62 ms | about 970x |
+| `Mp3Decoder`, default (4 threads) | 21 ms | about 2,850x |
+| ffmpeg, 1 thread | 73-77 ms | about 800x |
 
-On one core ffmpeg's hand-written SIMD decoder is about 1.7x faster; with the file cut into
-segments decoded in parallel (byte-identical output) this decoder is faster in wall-clock time.
-Before tuning, one core took 207 ms: most of the gain came from a symmetric IMDCT, 256-bit synthesis
-loops, a branch-free requantiser and vectorised PCM conversion.
+How it got there from 207 ms on one core: a symmetric IMDCT, 256-bit synthesis with the 32 DCT
+outputs expanded into the V buffer by reversed vector loads, the hybrid filter writing time-slot-major
+so synthesis reads contiguous slots, fused multiply-add where the CPU has it, requantisation fused into
+Huffman decoding for long blocks with one 32-bit peek per pair (signs read from the same window,
+branch-free) and pair values baked into the lookup entries, and, the largest single step, several
+independent accumulators in the window, matrix and IMDCT loops, which were latency-bound on one chain
+of dependent multiply-adds each.
 
 ### H.264 encode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2, scratch harness timing `Encode` calls)
 
