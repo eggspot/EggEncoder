@@ -147,8 +147,8 @@ namespace EggEncoder.Live.Rtmp
                 }
 
                 _finished = true;
-                _timeout.Dispose();
-                _stall.Dispose();
+                Cancel(_timeout);
+                Cancel(_stall);
             }
         }
 
