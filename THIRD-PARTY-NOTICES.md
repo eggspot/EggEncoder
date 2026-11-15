@@ -101,6 +101,16 @@ licensed under the SIL Open Font License, Version 1.1 (no Reserved Font Name); t
 of the NuGet package. The other test fonts (`synthetic.ttf`, `synthetic-gpos.ttf`) were made for this
 project.
 
+## H.264 decoding — clean-room acknowledgment (no code copied)
+
+`Codecs/H264/*.cs` was written from ITU-T Recommendation H.264 (the 03/2005 edition and the 2003
+final draft): bitstream syntax, CAVLC, intra prediction, dequantization, inverse transforms,
+deblocking and their tables. The code tables (coeff_token, total_zeros, run_before, coded block
+pattern, alpha/beta/tC0, chroma QP, default scaling lists) were read from the Recommendation's text.
+No source of ffmpeg, x264, openh264, the JM reference decoder or any other decoder was read or
+copied. ffmpeg and x264 were used only as black boxes: x264 to make the test streams, ffmpeg to
+produce the per-frame MD5 sums the tests compare against.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke

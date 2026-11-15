@@ -136,6 +136,21 @@ per frame size (vertical sizes scaled by height / PlayResY, margins by width / P
 size × unitsPerEm / (winAscent + winDescent)); BorderStyle 3 becomes a background box in the outline
 colour; `PlainText` handles `\N`, `\h`, `\n` and strips `{...}` tags.
 
+### H.264 decoder (`src/EggEncoder/Codecs/H264/`)
+
+Backlog items 24-27, clean-room from ITU-T H.264 (tables read from the Recommendation's text; see
+THIRD-PARTY-NOTICES.md). `H264Decoder` (public) takes one access unit per `Decode` call (avcC
+length-prefixed or Annex B), parses parameter sets into `SequenceParameterSet`/
+`PictureParameterSet` (internal; `Media.H264SpsParser` stays the small public probe), starts an
+`H264Picture` (padded `VideoFrame` from the pool + per-macroblock arrays: kind, slice number, QP,
+intra modes, CAVLC totals, motion vectors and reference ids per 4x4/8x8) on the first slice and
+decodes each slice with `SliceDecoder` (parse one macroblock into `MacroblockSyntax`, then
+reconstruct it). After the last slice, `DeblockingFilter` runs over the picture and the cropped area
+is copied into a fresh frame for the caller. Refused: >8-bit, non-4:2:0, interlaced, slice groups,
+SP/SI, data partitioning, lossless. Item 24 decodes I slices with CAVLC; P (25), CABAC (26) and B/High
+(27) extend `SliceDecoder` and add the DPB. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit.
+
 ### Media packet model (`src/EggEncoder/Media/`)
 
 The packet-level model shared by every live source and output in `docs/live-ingest-restream-plan.md`
