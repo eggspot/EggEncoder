@@ -135,56 +135,61 @@ internal static class BlockCost
     public static int Sa8d16x16(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
     {
         var total = 0;
-        Span<int> d = stackalloc int[64];
         for (var block = 0; block < 4; block++)
         {
             var bx = (block & 1) * 8;
             var by = (block >> 1) * 8;
-            for (var y = 0; y < 8; y++)
-            {
-                for (var x = 0; x < 8; x++)
-                {
-                    d[(y * 8) + x] = source[((by + y) * sourceStride) + bx + x] - prediction[((by + y) * predictionStride) + bx + x];
-                }
-            }
-
-            for (var y = 0; y < 8; y++)
-            {
-                Hadamard8(d.Slice(y * 8, 8), 1);
-            }
-
-            var sum = 0;
-            for (var x = 0; x < 8; x++)
-            {
-                Hadamard8(d[x..], 8);
-                for (var y = 0; y < 8; y++)
-                {
-                    sum += Math.Abs(d[x + (y * 8)]);
-                }
-            }
-
+            var sum = Sa8d8x8(source[((by * sourceStride) + bx)..], sourceStride, prediction[((by * predictionStride) + bx)..], predictionStride);
             total += (sum + 2) >> 2;
         }
 
         return total;
     }
 
-    private static void Hadamard8(Span<int> v, int step)
+    private static int Sa8d8x8(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
     {
-        for (var span = 1; span < 8; span <<= 1)
-        {
-            for (var i = 0; i < 8; i += span << 1)
-            {
-                for (var j = i; j < i + span; j++)
-                {
-                    var a = v[j * step];
-                    var b = v[(j + span) * step];
-                    v[j * step] = a + b;
-                    v[(j + span) * step] = a - b;
-                }
-            }
-        }
+        var r0 = Difference(source, prediction);
+        var r1 = Difference(source[sourceStride..], prediction[predictionStride..]);
+        var r2 = Difference(source[(2 * sourceStride)..], prediction[(2 * predictionStride)..]);
+        var r3 = Difference(source[(3 * sourceStride)..], prediction[(3 * predictionStride)..]);
+        var r4 = Difference(source[(4 * sourceStride)..], prediction[(4 * predictionStride)..]);
+        var r5 = Difference(source[(5 * sourceStride)..], prediction[(5 * predictionStride)..]);
+        var r6 = Difference(source[(6 * sourceStride)..], prediction[(6 * predictionStride)..]);
+        var r7 = Difference(source[(7 * sourceStride)..], prediction[(7 * predictionStride)..]);
+        var a0 = r0 + r1;
+        var a1 = r0 - r1;
+        var a2 = r2 + r3;
+        var a3 = r2 - r3;
+        var a4 = r4 + r5;
+        var a5 = r4 - r5;
+        var a6 = r6 + r7;
+        var a7 = r6 - r7;
+        var b0 = a0 + a2;
+        var b1 = a1 + a3;
+        var b2 = a0 - a2;
+        var b3 = a1 - a3;
+        var b4 = a4 + a6;
+        var b5 = a5 + a7;
+        var b6 = a4 - a6;
+        var b7 = a5 - a7;
+        var magnitudes = Horizontal8(b0 + b4) + Horizontal8(b1 + b5) + Horizontal8(b2 + b6) + Horizontal8(b3 + b7)
+            + Horizontal8(b0 - b4) + Horizontal8(b1 - b5) + Horizontal8(b2 - b6) + Horizontal8(b3 - b7);
+        return (int)Vector128.Sum(magnitudes);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<uint> Horizontal8(Vector128<short> v)
+    {
+        var oddLanes = Vector128.Create((short)0, -1, 0, -1, 0, -1, 0, -1);
+        var secondPairs = Vector128.Create((short)0, 0, -1, -1, 0, 0, -1, -1);
+        var upperHalf = Vector128.Create((short)0, 0, 0, 0, -1, -1, -1, -1);
+        var x = ((v ^ oddLanes) - oddLanes) + Vector128.Shuffle(v, Vector128.Create((short)1, 0, 3, 2, 5, 4, 7, 6));
+        var y = ((x ^ secondPairs) - secondPairs) + Vector128.Shuffle(x, Vector128.Create((short)2, 3, 0, 1, 6, 7, 4, 5));
+        var z = ((y ^ upperHalf) - upperHalf) + Vector128.Shuffle(y, Vector128.Create((short)4, 5, 6, 7, 0, 1, 2, 3));
+        var magnitude = Vector128.Abs(z).AsUInt16();
+        return Vector128.WidenLower(magnitude) + Vector128.WidenUpper(magnitude);
+    }
+
 
     private static Vector128<int> Satd8x4(ReadOnlySpan<byte> source, int sourceStride, ReadOnlySpan<byte> prediction, int predictionStride)
     {
