@@ -25,6 +25,8 @@ internal sealed partial class SliceDecoder
     private int _mbX;
     private int _mbY;
 
+    public RowProgress? Progress { get; init; }
+
     public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer, H264Picture[] referencesL0, H264Picture[] referencesL1, CabacDecoder? cabac = null, CabacNeighbourState? cabacState = null)
     {
         _cabac = cabac;
@@ -127,6 +129,11 @@ internal sealed partial class SliceDecoder
         }
 
         _mbX = _macroblock % _width;
+        if (_mbX == 0)
+        {
+            Progress?.Report(0, _macroblock);
+        }
+
         _mbY = _macroblock / _width;
         _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16).Clear();
         _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8).Clear();
