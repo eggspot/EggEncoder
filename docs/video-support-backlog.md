@@ -704,7 +704,7 @@ Rules for every Phase 5 item, on top of the ones above:
 
 ### Phase 2 — Pure-C# legacy codec (patent-clear, lower real-world priority)
 
-- [ ] **8. MPEG-2 Video decode (pure C#)**
+- [x] **8. MPEG-2 Video decode (pure C#)**
   - **Feasibility**: genuinely implementable in pure C# — MPEG-2's last US patent (#7,334,248)
     expired February 13, 2018, confirmed via multiple sources (now 8 years clear as of this
     writing). It's meaningfully smaller/simpler than H.264/VP9/AV1 (no in-loop deblocking filter,
@@ -718,7 +718,11 @@ Rules for every Phase 5 item, on top of the ones above:
   - **Depends on**: 1, 2 (container plumbing; MPEG-2 is typically carried in MPEG-TS/PS, which is
     its own small container work not otherwise on this list — scope that as part of this item or
     split it out when picked up, use judgment at the time).
-  - Status: not started.
+  - Status: done for frame pictures. `Codecs/Mpeg2/Mpeg2VideoDecoder` decodes Main profile 4:2:0 elementary streams,
+    progressive and interlaced frame pictures (frame/field prediction and DCT, both coefficient tables, alternate
+    scan, non-linear quantiser), within IDCT accuracy of ffmpeg (PSNR > 40 dB per frame on the fixtures). Not done:
+    field pictures and dual-prime (refused; ffmpeg's encoder can't make test fixtures for them), MPEG-1, and an
+    MPEG-PS/TS demuxer to feed it from files.
 
 ### Phase 3 — Additional containers (do after at least one native codec exists, so there's a real payload worth muxing)
 
