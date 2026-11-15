@@ -307,6 +307,25 @@ namespace EggEncoder.UnitTests.Video.Composition
         }
 
         [Fact]
+        public void Render_To_A_Path_That_Fails_Should_Delete_The_Partial_File()
+        {
+            var output = Path.Combine(_directory, "failed.mp4");
+            var composition = new VideoComposition
+            {
+                Width = 32,
+                Height = 32,
+                Scenes = [new CompositionScene { Source = Clip("a.mp4", 6, Blue) }]
+            };
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            var act = () => composition.Render(output, cancellationToken: cancellation.Token);
+
+            act.Should().Throw<OperationCanceledException>();
+            File.Exists(output).Should().BeFalse();
+        }
+
+        [Fact]
         public void Render_Clip_Without_H264_Should_Throw_NotSupportedException()
         {
             var composition = new VideoComposition { Width = 32, Height = 32, Scenes = [new CompositionScene { Source = Mp4FileSourceTest.HevcFixture }] };

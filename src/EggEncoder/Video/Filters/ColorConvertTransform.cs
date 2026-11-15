@@ -52,7 +52,7 @@ public sealed class ColorConvertTransform : IVideoFrameTransform
 
     private VideoFrame Convert(VideoFrame source)
     {
-        var output = VideoFrame.Create(source.Width, source.Height, _range, _matrix);
+        var output = source.Pool.Rent(source.Width, source.Height, _range, _matrix);
         output.Timestamp = source.Timestamp;
         output.Duration = source.Duration;
         var matrix = YuvColor.ConversionMatrix(source.Matrix, _matrix);

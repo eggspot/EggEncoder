@@ -347,10 +347,11 @@ internal sealed class CompositionFrameSource
         var halfFrame = rate.FrameDuration / 2;
         var next = plan.FirstFrame;
         VideoFrame? current = null;
+        (VideoFrame Frame, TimeSpan SourceTime)? pending = null;
         try
         {
             using var decoded = reader.ReadFrames(scene.Start).GetEnumerator();
-            var pending = Next(decoded, prepare);
+            pending = Next(decoded, prepare);
             while (next < plan.EndFrame)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -374,11 +375,10 @@ internal sealed class CompositionFrameSource
                 overlays.Apply(output, emit);
                 next++;
             }
-
-            pending?.Frame.Dispose();
         }
         finally
         {
+            pending?.Frame.Dispose();
             current?.Dispose();
         }
     }

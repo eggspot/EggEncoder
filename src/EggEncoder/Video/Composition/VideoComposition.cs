@@ -85,14 +85,22 @@ public sealed record VideoComposition
         return new CompositionRenderer(this).Render(destination, progress, cancellationToken);
     }
 
-    /// <summary>Renders the composition into a new file at <paramref name="path"/>.</summary>
+    /// <summary>Renders the composition into a new file at <paramref name="path"/>, deleted again if the render fails.</summary>
     /// <inheritdoc cref="Render(Stream, IProgress{double}?, CancellationToken)"/>
     public CompositionResult Render(string path, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);
         Validate();
-        using var file = File.Create(path);
-        return new CompositionRenderer(this).Render(file, progress, cancellationToken);
+        try
+        {
+            using var file = File.Create(path);
+            return new CompositionRenderer(this).Render(file, progress, cancellationToken);
+        }
+        catch
+        {
+            File.Delete(path);
+            throw;
+        }
     }
 
     /// <summary>Renders on a thread-pool thread.</summary>
