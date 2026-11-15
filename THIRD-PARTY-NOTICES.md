@@ -77,6 +77,30 @@ filter is a Kaiser-windowed sinc, not the standard's example filter. No source o
 `ebur128`, `loudnorm` or `amix` filters or of libebur128 was copied; ffmpeg was used only as a
 black-box reference to produce the loudness, true-peak and decode values the tests compare against.
 
+## Sidechain ducking — clean-room acknowledgment (no code copied)
+
+`Pcm/SidechainCompressor.cs` follows the parameters, ranges and timing that ffmpeg documents for its
+`sidechaincompress` filter, written with a standard log-domain soft-knee compressor; no ffmpeg source
+was copied. ffmpeg was used only as a black box to produce the gains the tests compare against.
+
+## TrueType fonts and text rendering — clean-room acknowledgment (no code copied)
+
+`Video/Text/*.cs` (font parsing, glyph outlines, kerning, rasterization, layout) was written from the
+OpenType specification's table definitions (`head`, `hhea`, `maxp`, `OS/2`, `hmtx`, `loca`, `glyf`,
+`cmap` formats 4 and 12, `kern`, `GPOS` pair adjustment) and this project's own derivations; the
+rasterizer accumulates exact signed areas of line pieces split at pixel boundaries. No source of
+FreeType, stb_truetype, SixLabors.Fonts, libass or any other font engine was read or copied.
+
+## Noto Sans (test fixture only, not shipped)
+
+`src/EggEncoder.UnitTests/Video/Text/NotoSans-subset.ttf` is a subset (Latin and Vietnamese
+characters, kerning kept, hinting removed, made with fontTools) of Noto Sans Regular,
+Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic),
+licensed under the SIL Open Font License, Version 1.1 (no Reserved Font Name); the full licence is in
+`src/EggEncoder.UnitTests/Video/Text/NotoSans-OFL.txt`. It is used only by the tests and is not part
+of the NuGet package. The other test fonts (`synthetic.ttf`, `synthetic-gpos.ttf`) were made for this
+project.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke
