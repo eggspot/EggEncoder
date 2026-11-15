@@ -36,45 +36,72 @@ internal static class IntraPrediction
         return topLeft ? plane[offset - stride - 1] : 0;
     }
 
+    public const int EdgeValueCount = 41;
+
+    private const int ThreeTap = 0;
+    private const int TwoTap = 14;
+    private const int Raw = 27;
+
+    private static readonly byte[][] ModeTables = BuildModeTables();
+
     public static void Predict4x4(Span<int> above, Span<int> side, int corner, int mode, bool left, bool top, bool topLeft, Span<byte> output, int outputStride)
+    {
+        Span<int> values = stackalloc int[EdgeValueCount];
+        Edge4x4Values(above, side, corner, values);
+        Predict4x4(values, mode, left, top, topLeft, output, outputStride);
+    }
+
+    public static void Edge4x4Values(ReadOnlySpan<int> above, ReadOnlySpan<int> side, int corner, Span<int> values)
+    {
+        Span<int> edge = stackalloc int[14];
+        edge[0] = side[3];
+        edge[1] = side[2];
+        edge[2] = side[1];
+        edge[3] = side[0];
+        edge[4] = corner;
+        for (var x = 0; x < 8; x++)
+        {
+            edge[5 + x] = above[x];
+        }
+
+        edge[13] = above[7];
+        for (var k = 0; k < 14; k++)
+        {
+            values[ThreeTap + k] = (edge[Math.Max(k - 1, 0)] + (2 * edge[k]) + edge[Math.Min(k + 1, 13)] + 2) >> 2;
+            values[Raw + k] = edge[k];
+        }
+
+        for (var k = 0; k < 13; k++)
+        {
+            values[TwoTap + k] = (edge[k] + edge[k + 1] + 1) >> 1;
+        }
+    }
+
+    public static void Predict4x4(ReadOnlySpan<int> values, int mode, bool left, bool top, bool topLeft, Span<byte> output, int outputStride)
     {
         switch (mode)
         {
             case 0:
                 Require(top, "vertical");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        output[(y * outputStride) + x] = (byte)above[x];
-                    }
-                }
-
                 break;
             case 1:
                 Require(left, "horizontal");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        output[(y * outputStride) + x] = (byte)side[y];
-                    }
-                }
-
                 break;
             case 2:
                 int dc;
+                var aboveSum = values[Raw + 5] + values[Raw + 6] + values[Raw + 7] + values[Raw + 8];
+                var leftSum = values[Raw] + values[Raw + 1] + values[Raw + 2] + values[Raw + 3];
                 if (top && left)
                 {
-                    dc = (above[0] + above[1] + above[2] + above[3] + side[0] + side[1] + side[2] + side[3] + 4) >> 3;
+                    dc = (aboveSum + leftSum + 4) >> 3;
                 }
                 else if (left)
                 {
-                    dc = (side[0] + side[1] + side[2] + side[3] + 2) >> 2;
+                    dc = (leftSum + 2) >> 2;
                 }
                 else if (top)
                 {
-                    dc = (above[0] + above[1] + above[2] + above[3] + 2) >> 2;
+                    dc = (aboveSum + 2) >> 2;
                 }
                 else
                 {
@@ -85,151 +112,95 @@ internal static class IntraPrediction
                 {
                     output.Slice(y * outputStride, 4).Fill((byte)dc);
                 }
-                break;
+
+                return;
             case 3:
                 Require(top, "diagonal down left");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        output[(y * outputStride) + x] = (byte)(x == 3 && y == 3
-                            ? (above[6] + (3 * above[7]) + 2) >> 2
-                            : (above[x + y] + (2 * above[x + y + 1]) + above[x + y + 2] + 2) >> 2);
-                    }
-                }
-
                 break;
             case 4:
                 Require(top && left && topLeft, "diagonal down right");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        int value;
-                        if (x > y)
-                        {
-                            value = (Above(above, corner, x - y - 2) + (2 * Above(above, corner, x - y - 1)) + above[x - y] + 2) >> 2;
-                        }
-                        else if (x < y)
-                        {
-                            value = (Left(side, corner, y - x - 2) + (2 * Left(side, corner, y - x - 1)) + side[y - x] + 2) >> 2;
-                        }
-                        else
-                        {
-                            value = (above[0] + (2 * corner) + side[0] + 2) >> 2;
-                        }
-
-                        output[(y * outputStride) + x] = (byte)value;
-                    }
-                }
-
                 break;
             case 5:
                 Require(top && left && topLeft, "vertical right");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        var zVR = (2 * x) - y;
-                        int value;
-                        if (zVR >= 0 && (zVR & 1) == 0)
-                        {
-                            value = (Above(above, corner, x - (y >> 1) - 1) + Above(above, corner, x - (y >> 1)) + 1) >> 1;
-                        }
-                        else if (zVR >= 0)
-                        {
-                            value = (Above(above, corner, x - (y >> 1) - 2) + (2 * Above(above, corner, x - (y >> 1) - 1)) + Above(above, corner, x - (y >> 1)) + 2) >> 2;
-                        }
-                        else if (zVR == -1)
-                        {
-                            value = (side[0] + (2 * corner) + above[0] + 2) >> 2;
-                        }
-                        else
-                        {
-                            value = (Left(side, corner, y - 1) + (2 * Left(side, corner, y - 2)) + Left(side, corner, y - 3) + 2) >> 2;
-                        }
-
-                        output[(y * outputStride) + x] = (byte)value;
-                    }
-                }
-
                 break;
             case 6:
                 Require(top && left && topLeft, "horizontal down");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        var zHD = (2 * y) - x;
-                        int value;
-                        if (zHD >= 0 && (zHD & 1) == 0)
-                        {
-                            value = (Left(side, corner, y - (x >> 1) - 1) + Left(side, corner, y - (x >> 1)) + 1) >> 1;
-                        }
-                        else if (zHD >= 0)
-                        {
-                            value = (Left(side, corner, y - (x >> 1) - 2) + (2 * Left(side, corner, y - (x >> 1) - 1)) + Left(side, corner, y - (x >> 1)) + 2) >> 2;
-                        }
-                        else if (zHD == -1)
-                        {
-                            value = (side[0] + (2 * corner) + above[0] + 2) >> 2;
-                        }
-                        else
-                        {
-                            value = (Above(above, corner, x - 1) + (2 * Above(above, corner, x - 2)) + Above(above, corner, x - 3) + 2) >> 2;
-                        }
-
-                        output[(y * outputStride) + x] = (byte)value;
-                    }
-                }
-
                 break;
             case 7:
                 Require(top, "vertical left");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        var i = x + (y >> 1);
-                        output[(y * outputStride) + x] = (byte)((y & 1) == 0
-                            ? (above[i] + above[i + 1] + 1) >> 1
-                            : (above[i] + (2 * above[i + 1]) + above[i + 2] + 2) >> 2);
-                    }
-                }
-
                 break;
             case 8:
                 Require(left, "horizontal up");
-                for (var y = 0; y < 4; y++)
-                {
-                    for (var x = 0; x < 4; x++)
-                    {
-                        var zHU = x + (2 * y);
-                        int value;
-                        if (zHU > 5)
-                        {
-                            value = side[3];
-                        }
-                        else if (zHU == 5)
-                        {
-                            value = (side[2] + (3 * side[3]) + 2) >> 2;
-                        }
-                        else if ((zHU & 1) == 0)
-                        {
-                            value = (side[y + (x >> 1)] + side[y + (x >> 1) + 1] + 1) >> 1;
-                        }
-                        else
-                        {
-                            value = (side[y + (x >> 1)] + (2 * side[y + (x >> 1) + 1]) + side[y + (x >> 1) + 2] + 2) >> 2;
-                        }
-
-                        output[(y * outputStride) + x] = (byte)value;
-                    }
-                }
-
                 break;
             default:
                 throw new InvalidDataException($"H.264: intra 4x4 prediction mode {mode} is invalid");
+        }
+
+        var table = ModeTables[mode];
+        for (var y = 0; y < 4; y++)
+        {
+            var row = output.Slice(y * outputStride, 4);
+            row[0] = (byte)values[table[y * 4]];
+            row[1] = (byte)values[table[(y * 4) + 1]];
+            row[2] = (byte)values[table[(y * 4) + 2]];
+            row[3] = (byte)values[table[(y * 4) + 3]];
+        }
+    }
+
+    private static byte[][] BuildModeTables()
+    {
+        var tables = new byte[9][];
+        for (var mode = 0; mode < 9; mode++)
+        {
+            var table = new byte[16];
+            for (var y = 0; y < 4; y++)
+            {
+                for (var x = 0; x < 4; x++)
+                {
+                    table[(y * 4) + x] = (byte)ModeValueIndex(mode, x, y);
+                }
+            }
+
+            tables[mode] = table;
+        }
+
+        return tables;
+    }
+
+    private static int ModeValueIndex(int mode, int x, int y)
+    {
+        switch (mode)
+        {
+            case 0:
+                return Raw + 5 + x;
+            case 1:
+                return Raw + 3 - y;
+            case 3:
+                return ThreeTap + 6 + x + y;
+            case 4:
+                return ThreeTap + 4 + x - y;
+            case 5:
+                var zVr = (2 * x) - y;
+                return zVr >= 0 ? ((zVr & 1) == 0 ? TwoTap : ThreeTap) + 4 + x - (y >> 1)
+                    : zVr == -1 ? ThreeTap + 4
+                    : ThreeTap + 5 - y;
+            case 6:
+                var zHd = (2 * y) - x;
+                return zHd >= 0 ? ((zHd & 1) == 0 ? TwoTap + 3 - y + (x >> 1) : ThreeTap + 4 - y + (x >> 1))
+                    : zHd == -1 ? ThreeTap + 4
+                    : ThreeTap + 3 + x;
+            case 7:
+                var i = x + (y >> 1);
+                return (y & 1) == 0 ? TwoTap + 5 + i : ThreeTap + 6 + i;
+            case 8:
+                var zHu = x + (2 * y);
+                var j = y + (x >> 1);
+                return zHu > 5 ? Raw
+                    : zHu == 5 ? ThreeTap
+                    : (zHu & 1) == 0 ? TwoTap + 2 - j
+                    : ThreeTap + 2 - j;
+            default:
+                return 0;
         }
     }
 
@@ -373,10 +344,6 @@ internal static class IntraPrediction
             }
         }
     }
-
-    private static int Above(Span<int> above, int corner, int index) => index < 0 ? corner : above[index];
-
-    private static int Left(Span<int> side, int corner, int index) => index < 0 ? corner : side[index];
 
     private static void Fill(byte[] plane, int offset, int stride, int width, int height, int value)
     {
