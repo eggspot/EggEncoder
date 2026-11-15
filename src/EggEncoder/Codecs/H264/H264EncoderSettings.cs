@@ -39,10 +39,16 @@ public sealed record H264EncoderSettings
     /// <summary>The profile to write; High by default.</summary>
     public H264Profile Profile { get; init; } = H264Profile.High;
 
-    /// <summary>Sample range written to the stream; the first frame's range when <c>null</c>.</summary>
+    /// <summary>
+    /// Threads analysing macroblock rows in a wavefront; 0 (the default) for one per processor. The
+    /// output is the same for every value.
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; init; }
+
+    /// <summary>Sample range written to the stream; limited (TV) range when <c>null</c>.</summary>
     public VideoColorRange? ColorRange { get; init; }
 
-    /// <summary>YCbCr matrix written to the stream; the first frame's matrix when <c>null</c>.</summary>
+    /// <summary>YCbCr matrix written to the stream; BT.601 below 720 lines and BT.709 from 720 up when <c>null</c>.</summary>
     public VideoColorMatrix? ColorMatrix { get; init; }
 }
 

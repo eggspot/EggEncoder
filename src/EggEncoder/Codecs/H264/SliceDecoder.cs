@@ -12,7 +12,7 @@ internal sealed partial class SliceDecoder
     private readonly int _sliceNumber;
     private readonly H264BitReader _reader;
     private readonly Dequantizer _dequantizer;
-    private readonly MacroblockSyntax _syntax = new();
+    private MacroblockSyntax _syntax = new();
     private readonly int _width;
     private readonly int[] _dequantized = new int[64];
     private readonly H264Picture[] _referencesL0;

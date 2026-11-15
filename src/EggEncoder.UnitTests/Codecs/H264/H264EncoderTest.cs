@@ -92,6 +92,21 @@ namespace EggEncoder.UnitTests.Codecs.H264
             Encode(settings, frames).Stream.Should().Equal(Encode(settings, frames).Stream);
         }
 
+        [Theory]
+        [InlineData(H264Profile.Baseline)]
+        [InlineData(H264Profile.High)]
+        public void Wavefront_Threads_Should_Not_Change_The_Output(H264Profile profile)
+        {
+            var frames = SyntheticFrames(176, 144, 6);
+            var settings = new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), Profile = profile };
+
+            var single = Encode(settings with { MaxDegreeOfParallelism = 1 }, frames);
+            var threaded = Encode(settings with { MaxDegreeOfParallelism = 4 }, frames);
+
+            threaded.Stream.Should().Equal(single.Stream);
+            DecodeToMd5(threaded.Stream).Should().Equal(single.Reconstructions);
+        }
+
         [Fact]
         public void Lower_Rate_Factor_Should_Produce_A_Larger_Stream()
         {
@@ -190,6 +205,57 @@ namespace EggEncoder.UnitTests.Codecs.H264
                         total.Should().Be(written);
                         read.Should().Equal(block);
                     }
+                }
+            }
+        }
+
+        [Fact]
+        public void Satd_Should_Equal_The_Sum_Of_Hadamard_Magnitudes()
+        {
+            var random = new Random(9);
+            foreach (var (width, height) in new[] { (16, 16), (8, 8), (4, 4), (16, 8) })
+            {
+                for (var round = 0; round < 50; round++)
+                {
+                    var source = new byte[32 * 20];
+                    var prediction = new byte[24 * 20];
+                    random.NextBytes(source);
+                    random.NextBytes(prediction);
+                    var expected = 0;
+                    for (var by = 0; by < height; by += 4)
+                    {
+                        for (var bx = 0; bx < width; bx += 4)
+                        {
+                            var d = new int[4, 4];
+                            for (var y = 0; y < 4; y++)
+                            {
+                                for (var x = 0; x < 4; x++)
+                                {
+                                    d[y, x] = source[((by + y) * 32) + bx + x] - prediction[((by + y) * 24) + bx + x];
+                                }
+                            }
+
+                            int[] h = [1, 1, 1, 1, 1, -1, 1, -1, 1, 1, -1, -1, 1, -1, -1, 1];
+                            for (var u = 0; u < 4; u++)
+                            {
+                                for (var v = 0; v < 4; v++)
+                                {
+                                    var sum = 0;
+                                    for (var y = 0; y < 4; y++)
+                                    {
+                                        for (var x = 0; x < 4; x++)
+                                        {
+                                            sum += h[(u * 4) + y] * h[(v * 4) + x] * d[y, x];
+                                        }
+                                    }
+
+                                    expected += Math.Abs(sum);
+                                }
+                            }
+                        }
+                    }
+
+                    BlockCost.Satd(source, 32, prediction, 24, width, height).Should().Be(expected >> 1);
                 }
             }
         }

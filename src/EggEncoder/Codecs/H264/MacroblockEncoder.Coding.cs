@@ -329,7 +329,7 @@ internal sealed partial class MacroblockEncoder
         }
     }
 
-    private void WriteMacroblock(BitWriter bits, MacroblockSyntax syntax, int mvdX, int mvdY)
+    private void WriteMacroblock(BitWriter bits, MacroblockSyntax syntax)
     {
         var inter = _reference is not null;
         switch (syntax.Kind)
@@ -355,8 +355,8 @@ internal sealed partial class MacroblockEncoder
                 break;
             default:
                 bits.WriteUe(0);
-                bits.WriteSe(mvdX);
-                bits.WriteSe(mvdY);
+                bits.WriteSe(syntax.Partitions[0].MvdL0X);
+                bits.WriteSe(syntax.Partitions[0].MvdL0Y);
                 bits.WriteUe((uint)InterCodeNumbers[syntax.CodedBlockPatternLuma | (syntax.CodedBlockPatternChroma << 4)]);
                 break;
         }

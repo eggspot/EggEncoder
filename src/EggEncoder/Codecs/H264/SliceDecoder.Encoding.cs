@@ -6,6 +6,15 @@ internal sealed partial class SliceDecoder
 
     public int Macroblock => _macroblock;
 
+    public void UseSyntax(MacroblockSyntax syntax) => _syntax = syntax;
+
+    public void SetPosition(int address)
+    {
+        _macroblock = address;
+        _mbX = address % _width;
+        _mbY = address / _width;
+    }
+
     public void StartMacroblock(int address)
     {
         _macroblock = address;

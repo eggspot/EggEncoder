@@ -15,6 +15,7 @@ internal sealed partial class MacroblockEncoder
     private readonly H264Picture _picture;
     private readonly VideoFrame _source;
     private readonly H264Picture? _reference;
+    private readonly HalfPelPlanes? _halfPel;
     private readonly int _qp;
     private readonly int _chromaQp;
     private readonly int _lambda;
@@ -29,7 +30,6 @@ internal sealed partial class MacroblockEncoder
     private readonly byte[] _lumaPrediction = new byte[256];
     private readonly byte[] _cbPrediction = new byte[64];
     private readonly byte[] _crPrediction = new byte[64];
-    private readonly byte[] _trial = new byte[256];
     private readonly MacroblockSyntax _intra4x4 = new();
     private readonly byte[] _intra4x4Modes = new byte[16];
     private int _mbX;
@@ -38,8 +38,9 @@ internal sealed partial class MacroblockEncoder
     private int _offsetU;
     private int _offsetV;
 
-    public MacroblockEncoder(SliceDecoder slice, H264Picture picture, VideoFrame source, H264Picture? reference, int qp, Dequantizer dequantizer, int chromaQpOffset)
+    public MacroblockEncoder(SliceDecoder slice, H264Picture picture, VideoFrame source, H264Picture? reference, HalfPelPlanes? halfPel, int qp, Dequantizer dequantizer, int chromaQpOffset)
     {
+        _halfPel = halfPel;
         _slice = slice;
         _picture = picture;
         _source = source;
@@ -60,12 +61,32 @@ internal sealed partial class MacroblockEncoder
 
     private Span<byte> SourceV => _source.Buffer.AsSpan(_source.OffsetV + (_mbY * 8 * _source.StrideUV) + (_mbX * 8));
 
-    public void EncodeSlice(BitWriter bits, CabacEncoder? cabac, SliceType type)
+    public bool Analyse(int address)
     {
-        var width = _picture.WidthInMacroblocks;
-        var count = width * _picture.HeightInMacroblocks;
-        var skipRun = 0;
         var frame = _picture.Frame;
+        var width = _picture.WidthInMacroblocks;
+        _mbX = address % width;
+        _mbY = address / width;
+        _lumaOffset = frame.OffsetY + (_mbY * 16 * _strideY) + (_mbX * 16);
+        _offsetU = frame.OffsetU + (_mbY * 8 * _strideUV) + (_mbX * 8);
+        _offsetV = frame.OffsetV + (_mbY * 8 * _strideUV) + (_mbX * 8);
+        _slice.StartMacroblock(address);
+        if (_reference is not null && TryEncodeSkip())
+        {
+            _slice.ReconstructSkippedMacroblock();
+            return true;
+        }
+
+        Decide();
+        _slice.ReconstructCurrentMacroblock();
+        return false;
+    }
+
+    public static void WriteSlice(BitWriter bits, CabacEncoder? cabac, SliceType type, int qp, MacroblockEncoder writer, MacroblockSyntax[] syntaxes, bool[] skipped, Action<int> waitForMacroblock)
+    {
+        var slice = writer._slice;
+        var count = skipped.Length;
+        var skipRun = 0;
         if (cabac is not null)
         {
             while (bits.BitPosition % 8 != 0)
@@ -73,53 +94,45 @@ internal sealed partial class MacroblockEncoder
                 bits.WriteBits(1, 1);
             }
 
-            cabac.InitializeContexts(type, 0, _qp);
+            cabac.InitializeContexts(type, 0, qp);
             cabac.Start(bits);
-            _slice.StartCabacWriting();
+            slice.StartCabacWriting();
         }
 
         for (var macroblock = 0; macroblock < count; macroblock++)
         {
-            _mbX = macroblock % width;
-            _mbY = macroblock / width;
-            _lumaOffset = frame.OffsetY + (_mbY * 16 * _strideY) + (_mbX * 16);
-            _offsetU = frame.OffsetU + (_mbY * 8 * _strideUV) + (_mbX * 8);
-            _offsetV = frame.OffsetV + (_mbY * 8 * _strideUV) + (_mbX * 8);
-            _slice.StartMacroblock(macroblock);
-            if (_reference is not null && TryEncodeSkip())
+            waitForMacroblock(macroblock);
+            slice.SetPosition(macroblock);
+            var syntax = syntaxes[macroblock];
+            slice.UseSyntax(syntax);
+            if (cabac is not null)
             {
-                _slice.ReconstructSkippedMacroblock();
-                if (cabac is not null)
+                if (skipped[macroblock])
                 {
-                    _slice.WriteSkippedMacroblockCabac(cabac);
-                    cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
+                    slice.WriteSkippedMacroblockCabac(cabac);
                 }
                 else
                 {
-                    skipRun++;
+                    slice.WriteMacroblockCabac(cabac);
                 }
 
+                cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
                 continue;
             }
 
-            var syntax = _slice.Syntax;
-            if (_reference is not null && cabac is null)
+            if (skipped[macroblock])
+            {
+                skipRun++;
+                continue;
+            }
+
+            if (type == SliceType.P)
             {
                 bits.WriteUe((uint)skipRun);
                 skipRun = 0;
             }
 
-            var (mvX, mvY) = Decide();
-            _slice.ReconstructCurrentMacroblock();
-            if (cabac is not null)
-            {
-                _slice.WriteMacroblockCabac(cabac);
-                cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
-            }
-            else
-            {
-                WriteMacroblock(bits, syntax, mvX, mvY);
-            }
+            writer.WriteMacroblock(bits, syntax);
         }
 
         if (cabac is not null)
@@ -136,7 +149,7 @@ internal sealed partial class MacroblockEncoder
         bits.WriteTrailingBits();
     }
 
-    private (int MvdX, int MvdY) Decide()
+    private void Decide()
     {
         var syntax = _slice.Syntax;
         if (_reference is null)
@@ -153,7 +166,7 @@ internal sealed partial class MacroblockEncoder
             }
 
             EncodeIntraChroma();
-            return (0, 0);
+            return;
         }
 
         var predicted = _slice.PredictedMotion16x16();
@@ -172,11 +185,10 @@ internal sealed partial class MacroblockEncoder
             }
 
             EncodeIntraChroma();
-            return (0, 0);
+            return;
         }
 
         EncodeInter(mvX, mvY, predicted.X, predicted.Y);
-        return (mvX - predicted.X, mvY - predicted.Y);
     }
 
     private bool TryEncodeSkip()
@@ -189,6 +201,17 @@ internal sealed partial class MacroblockEncoder
             var bx = MacroblockLayout.BlockX[block] * 4;
             var by = MacroblockLayout.BlockY[block] * 4;
             ResidualBlock(source[((by * _source.StrideY) + bx)..], _source.StrideY, _lumaPrediction.AsSpan((by * 16) + bx), 16);
+            var sum = 0;
+            for (var i = 0; i < 16; i++)
+            {
+                sum += _residual[i];
+            }
+
+            if (Quantizer.DcLevel(sum, _qp, intra: false) > 1)
+            {
+                return false;
+            }
+
             ForwardTransform.Core4x4(_residual.AsSpan(0, 16), _coefficients);
             if (Quantizer.Quantize4x4(_coefficients, _raster, _scanned, _qp, intra: false, 0) != 0 && DecimationScore(_scanned) > 2)
             {
@@ -289,6 +312,8 @@ internal sealed partial class MacroblockEncoder
     public int MacroblockY => _mbY;
 
     public H264Picture Reference => _reference!;
+
+    public HalfPelPlanes HalfPel => _halfPel!;
 
     public H264Picture Picture => _picture;
 

@@ -37,20 +37,23 @@ internal static class DeblockingFilter
         ]
     ];
 
-    public static void Apply(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices)
+    public static void Apply(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices) =>
+        ApplyRows(picture, slices, 0, picture.HeightInMacroblocks);
+
+    public static void ApplyRows(H264Picture picture, IReadOnlyList<SliceFilterParameters> slices, int firstRow, int endRow)
     {
         var width = picture.WidthInMacroblocks;
         var count = width * picture.HeightInMacroblocks;
         var masks = ArrayPool<ushort>.Shared.Rent(count);
         try
         {
-            for (var macroblock = 0; macroblock < count; macroblock++)
+            for (var macroblock = Math.Max(0, firstRow - 1) * width; macroblock < endRow * width; macroblock++)
             {
                 masks[macroblock] = CoefficientMask(picture, macroblock);
             }
 
             Span<byte> strengths = stackalloc byte[4];
-            for (var macroblock = 0; macroblock < count; macroblock++)
+            for (var macroblock = firstRow * width; macroblock < endRow * width; macroblock++)
             {
                 var slice = picture.SliceNumbers[macroblock];
                 if (slice < 0)

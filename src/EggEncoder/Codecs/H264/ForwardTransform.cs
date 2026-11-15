@@ -125,6 +125,13 @@ internal static class Quantizer
         return nonzero;
     }
 
+    public static int DcLevel(int coefficient, int qp, bool intra)
+    {
+        var shift = 15 + (qp / 6);
+        var rounding = intra ? (1 << shift) / 3 : (1 << shift) / 6;
+        return (int)(((Math.Abs(coefficient) * (long)Factors[qp % 6][0]) + rounding) >> shift);
+    }
+
     public static int QuantizeDc(ReadOnlySpan<int> values, Span<short> levels, int qp, bool intra)
     {
         var shift = 16 + (qp / 6);
