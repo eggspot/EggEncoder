@@ -26,13 +26,17 @@ public sealed partial class H264Encoder : IDisposable
     private readonly Dequantizer _dequantizer;
     private readonly H264RateControl _rateControl;
     private readonly int _keyframeInterval;
-    private readonly VideoFrame _source;
+    private readonly VideoColorRange _range;
+    private readonly VideoColorMatrix _matrix;
     private readonly int _parallelism;
     private readonly int _maxDelayedFrames;
+    private readonly int _framesAtOnce;
+    private readonly int _workersPerFrame;
     private readonly Queue<PendingFrame> _pending = new();
     private readonly Stack<PendingFrame> _spareFrames = new();
     private H264Picture? _reference;
-    private HalfPelPlanes? _halfPel;
+    private PendingFrame? _newest;
+    private PendingFrame? _handedOutLast;
     private long _frameIndex;
     private int _frameNum;
     private int _idrPictureId;
@@ -77,9 +81,12 @@ public sealed partial class H264Encoder : IDisposable
         _ppsNal = NalUnitWriter.Build(0x68, ppsRbsp);
         _dequantizer = new Dequantizer(_pps.ScalingListsFor(_sps));
         _rateControl = new H264RateControl(settings.ConstantRateFactor);
-        _source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, range, matrix);
+        _range = range;
+        _matrix = matrix;
         _parallelism = settings.MaxDegreeOfParallelism > 0 ? settings.MaxDegreeOfParallelism : Environment.ProcessorCount;
         _maxDelayedFrames = settings.MaxDelayedFrames;
+        _framesAtOnce = Math.Min(_parallelism, _maxDelayedFrames + 1);
+        _workersPerFrame = Math.Max(1, _parallelism / _framesAtOnce);
     }
 
     /// <summary>The <c>avcC</c> record (SPS and PPS) a container needs to play the output.</summary>
@@ -112,9 +119,10 @@ public sealed partial class H264Encoder : IDisposable
         }
 
         HandOutFinishedFrames(output);
-        CopySource(frame);
+        var pending = RentPendingFrame();
+        CopySource(frame, pending.Source);
         var keyframe = _frameIndex % _keyframeInterval == 0;
-        var qp = _rateControl.NextQp(keyframe, keyframe ? 0 : Complexity());
+        var qp = _rateControl.NextQp(keyframe, keyframe ? 0 : Complexity(pending.Source, _newest!.Source));
         if (keyframe)
         {
             _frameNum = 0;
@@ -128,7 +136,6 @@ public sealed partial class H264Encoder : IDisposable
             IsIdr = keyframe
         };
         picture.ResetMacroblocks();
-        var pending = RentPendingFrame();
         try
         {
             var header = new SliceHeader
@@ -142,12 +149,14 @@ public sealed partial class H264Encoder : IDisposable
                 ReferenceCountL0 = 1
             };
             var references = keyframe ? Array.Empty<H264Picture>() : [_reference!];
+            var referenceFrame = keyframe ? null : _newest;
             pending.Bits = new BitWriter();
             pending.NalHeader = (header.NalReferenceIdc << 5) | (keyframe ? 5 : 1);
             pending.IsKeyframe = keyframe;
             pending.Timestamp = frame.Timestamp;
+            pending.Planes = HalfPelPlanes.ForFrame(picture.Frame, pending.Planes);
+            pending.Lines = new RowProgress(1, WavefrontSpinRounds);
             WriteSliceHeader(pending.Bits, header, keyframe);
-            EncodeMacroblocks(picture, header, references, qp, keyframe, pending);
             picture.Hold();
             pending.Pictures.Add(picture);
             foreach (var reference in references)
@@ -156,15 +165,21 @@ public sealed partial class H264Encoder : IDisposable
                 pending.Pictures.Add(reference);
             }
 
+            var job = pending;
+            pending.Writer = Task.Factory.StartNew(
+                () => EncodeFrame(picture, header, references, qp, keyframe, job, referenceFrame),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
             _pending.Enqueue(pending);
+            _newest = pending;
             pending = null;
-            ExtendBorders(picture.Frame);
-            _halfPel = HalfPelPlanes.Build(picture, _parallelism, _halfPel);
         }
         catch
         {
             if (pending is not null)
             {
+                pending.ReleasePictures();
                 _spareFrames.Push(pending);
             }
 
@@ -223,11 +238,17 @@ public sealed partial class H264Encoder : IDisposable
             }
 
             pending.ReleasePictures();
+            pending.Source.Dispose();
+        }
+
+        _handedOutLast?.Source.Dispose();
+        while (_spareFrames.TryPop(out var spare))
+        {
+            spare.Source.Dispose();
         }
 
         _reference?.Release();
         _reference = null;
-        _source.Dispose();
     }
 
     private PendingFrame RentPendingFrame()
@@ -237,7 +258,8 @@ public sealed partial class H264Encoder : IDisposable
             return spare;
         }
 
-        return new PendingFrame(_sps.MacroblockCount, _pps.EntropyCodingCabac);
+        var source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, _range, _matrix);
+        return new PendingFrame(_sps.MacroblockCount, _pps.EntropyCodingCabac, source);
     }
 
     private void HandOutFinishedFrames(Action<H264EncodedFrame> output)
@@ -264,13 +286,39 @@ public sealed partial class H264Encoder : IDisposable
             pending.ReleasePictures();
             pending.Writer = null;
             pending.Bits = null;
-            _spareFrames.Push(pending);
+            if (_handedOutLast is not null)
+            {
+                _spareFrames.Push(_handedOutLast);
+            }
+
+            _handedOutLast = pending;
         }
 
         output(encoded);
     }
 
-    private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, PendingFrame pending)
+    private void EncodeFrame(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, PendingFrame pending, PendingFrame? referenceFrame)
+    {
+        try
+        {
+            var publisher = _framesAtOnce > 1 ? new ReferencePublisher(picture, pending.Planes!, pending.Lines!) : null;
+            EncodeMacroblocks(picture, header, references, qp, keyframe, pending, referenceFrame, publisher);
+            if (publisher is null)
+            {
+                ExtendBorders(picture.Frame);
+                pending.Planes!.Fill(picture, _workersPerFrame);
+            }
+
+            pending.Lines!.Report(0, ReferencePublisher.Complete);
+        }
+        catch
+        {
+            pending.Lines!.Cancel();
+            throw;
+        }
+    }
+
+    private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, PendingFrame pending, PendingFrame? referenceFrame, ReferencePublisher? publisher)
     {
         var bits = pending.Bits!;
         var syntaxes = pending.Syntaxes;
@@ -279,15 +327,21 @@ public sealed partial class H264Encoder : IDisposable
         var cabacState = pending.CabacState;
         var width = _sps.WidthInMacroblocks;
         var rows = _sps.HeightInMacroblocks;
-        var workers = Math.Clamp(_parallelism, 1, rows);
+        var workers = Math.Clamp(_workersPerFrame, 1, rows);
         var progress = new RowProgress(rows, WavefrontSpinRounds);
         var nextRow = -1;
         var encoders = new MacroblockEncoder[workers + 1];
         var slices = new SliceDecoder[workers + 1];
+        var referencePicture = keyframe ? null : references[0];
         for (var i = 0; i <= workers; i++)
         {
             slices[i] = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, cabacState);
-            encoders[i] = new MacroblockEncoder(slices[i], picture, _source, keyframe ? null : _reference, keyframe ? null : _halfPel, qp, _dequantizer, _pps.ChromaQpIndexOffset, _pps.Transform8x8Mode);
+            encoders[i] = new MacroblockEncoder(slices[i], picture, pending.Source, referencePicture, referenceFrame?.Planes, qp, _dequantizer, _pps.ChromaQpIndexOffset, _pps.Transform8x8Mode);
+        }
+
+        void AwaitReferenceRows(int row)
+        {
+            referenceFrame?.Lines!.WaitFor(0, ReferencePublisher.LinesNeeded(row, picture.Frame.Height));
         }
 
         SliceFilterParameters[] filters = [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)];
@@ -309,46 +363,69 @@ public sealed partial class H264Encoder : IDisposable
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
 
+        void AnalyseRow(int worker, int row)
+        {
+            AwaitReferenceRows(row);
+            for (var x = 0; x < width; x++)
+            {
+                if (row > 0)
+                {
+                    progress.WaitFor(row - 1, Math.Min(x + 2, width));
+                }
+
+                var address = (row * width) + x;
+                slices[worker].UseSyntax(syntaxes[address]);
+                skipped[address] = encoders[worker].Analyse(address);
+                progress.Report(row, x + 1);
+            }
+        }
+
         void Analyse(int worker)
         {
             int row;
             while ((row = Interlocked.Increment(ref nextRow)) < rows)
             {
-                for (var x = 0; x < width; x++)
-                {
-                    if (row > 0)
-                    {
-                        progress.WaitFor(row - 1, Math.Min(x + 2, width));
-                    }
-
-                    var address = (row * width) + x;
-                    slices[worker].UseSyntax(syntaxes[address]);
-                    skipped[address] = encoders[worker].Analyse(address);
-                    progress.Report(row, x + 1);
-                }
+                AnalyseRow(worker, row);
             }
         }
 
         void Write() => MacroblockEncoder.WriteSlice(bits, cabac, header.Type, qp, encoders[workers], syntaxes, skipped, address => progress.WaitFor(address / width, (address % width) + 1));
+
+        void DeblockRow(int row)
+        {
+            DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
+            publisher?.Publish(row == rows - 1 ? picture.Frame.Height : (16 * row) + 13);
+        }
 
         void Deblock()
         {
             for (var row = 0; row < rows; row++)
             {
                 progress.WaitFor(Math.Min(row + 1, rows - 1), width);
-                DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
+                DeblockRow(row);
             }
+
+            publisher?.PublishComplete();
         }
 
         if (workers == 1)
         {
-            Analyse(0);
+            for (var row = 0; row < rows; row++)
+            {
+                AnalyseRow(0, row);
+                if (row > 0)
+                {
+                    DeblockRow(row - 1);
+                }
+            }
+
+            DeblockRow(rows - 1);
+            publisher?.PublishComplete();
             Write();
-            Deblock();
             return;
         }
 
-        var tasks = new Task[workers + 1];
+        var tasks = new Task[workers + 2];
         for (var i = 0; i < workers; i++)
         {
             var worker = i;
@@ -356,35 +433,25 @@ public sealed partial class H264Encoder : IDisposable
         }
 
         tasks[workers] = Run(Deblock);
-        var writer = Run(Write);
+        tasks[workers + 1] = Run(Write);
         try
         {
             Task.WaitAll(tasks);
         }
         catch (AggregateException e)
         {
-            try
-            {
-                writer.Wait();
-            }
-            catch (AggregateException)
-            {
-            }
-
             var cause = e.InnerExceptions.FirstOrDefault(inner => inner is not OperationCanceledException) ?? e.InnerExceptions[0];
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cause).Throw();
         }
-
-        pending.Writer = writer;
     }
 
-    private void CopySource(VideoFrame frame)
+    private static void CopySource(VideoFrame frame, VideoFrame destination)
     {
-        var width = _source.Width;
-        var height = _source.Height;
+        var width = destination.Width;
+        var height = destination.Height;
         for (var y = 0; y < height; y++)
         {
-            var target = _source.GetRow(VideoPlane.Y, y);
+            var target = destination.GetRow(VideoPlane.Y, y);
             var row = frame.GetRow(VideoPlane.Y, Math.Min(y, frame.Height - 1));
             row.CopyTo(target);
             target[frame.Width..width].Fill(row[^1]);
@@ -394,7 +461,7 @@ public sealed partial class H264Encoder : IDisposable
         {
             foreach (var plane in (ReadOnlySpan<VideoPlane>)[VideoPlane.U, VideoPlane.V])
             {
-                var target = _source.GetRow(plane, y);
+                var target = destination.GetRow(plane, y);
                 var row = frame.GetRow(plane, Math.Min(y, frame.ChromaHeight - 1));
                 row.CopyTo(target);
                 target[frame.ChromaWidth..(width / 2)].Fill(row[^1]);
@@ -402,15 +469,14 @@ public sealed partial class H264Encoder : IDisposable
         }
     }
 
-    private double Complexity()
+    private static double Complexity(VideoFrame current, VideoFrame previousFrame)
     {
-        var reference = _reference!.Frame;
         long total = 0;
         var samples = 0;
-        for (var y = 0; y < _source.Height; y += 4)
+        for (var y = 0; y < current.Height; y += 4)
         {
-            var source = _source.GetRow(VideoPlane.Y, y);
-            var previous = reference.GetRow(VideoPlane.Y, y);
+            var source = current.GetRow(VideoPlane.Y, y);
+            var previous = previousFrame.GetRow(VideoPlane.Y, y);
             for (var x = 0; x < source.Length; x += 4)
             {
                 total += Math.Abs(source[x] - previous[x]);
@@ -423,34 +489,121 @@ public sealed partial class H264Encoder : IDisposable
 
     private static void ExtendBorders(VideoFrame frame)
     {
-        ExtendPlane(frame.Buffer, frame.OffsetY, frame.StrideY, frame.Width, frame.Height, Padding);
-        ExtendPlane(frame.Buffer, frame.OffsetU, frame.StrideUV, frame.ChromaWidth, frame.ChromaHeight, Padding / 2);
-        ExtendPlane(frame.Buffer, frame.OffsetV, frame.StrideUV, frame.ChromaWidth, frame.ChromaHeight, Padding / 2);
+        ReferencePublisher.ExtendSides(frame, 0, frame.Height);
+        ReferencePublisher.ExtendTop(frame);
+        ReferencePublisher.ExtendBottom(frame);
+    }
+}
+
+internal sealed class ReferencePublisher
+{
+    public const int Complete = int.MaxValue;
+    public const int MaxDownwardVector = 64;
+    private const int LinesBelowReach = 12;
+
+    private readonly H264Picture _picture;
+    private readonly HalfPelPlanes _planes;
+    private readonly RowProgress _lines;
+    private int _published;
+    private int _planeRowsFilled;
+
+    public ReferencePublisher(H264Picture picture, HalfPelPlanes planes, RowProgress lines)
+    {
+        _picture = picture;
+        _planes = planes;
+        _lines = lines;
     }
 
-    private static void ExtendPlane(byte[] buffer, int offset, int stride, int width, int height, int padding)
+    public static int LinesNeeded(int macroblockRow, int height)
     {
-        for (var y = 0; y < height; y++)
+        var lines = (16 * (macroblockRow + 1)) + MaxDownwardVector + LinesBelowReach;
+        return lines >= height ? Complete : lines;
+    }
+
+    public void Publish(int lines)
+    {
+        var frame = _picture.Frame;
+        if (lines <= _published)
+        {
+            return;
+        }
+
+        ExtendSides(frame, _published, lines);
+        if (_published == 0)
+        {
+            ExtendTop(frame);
+        }
+
+        _published = lines;
+        FillPlaneRows(Math.Min(_planes.RowCount, lines - 3 + HalfPelPlanes.Margin));
+        _lines.Report(0, lines);
+    }
+
+    public void PublishComplete()
+    {
+        var frame = _picture.Frame;
+        Publish(frame.Height);
+        ExtendBottom(frame);
+        FillPlaneRows(_planes.RowCount);
+        _lines.Report(0, Complete);
+    }
+
+    public static void ExtendSides(VideoFrame frame, int firstLine, int endLine)
+    {
+        ExtendRowSides(frame.Buffer, frame.OffsetY, frame.StrideY, frame.Width, H264Picture.Padding, firstLine, endLine);
+        var chromaEnd = endLine == frame.Height ? frame.ChromaHeight : endLine / 2;
+        ExtendRowSides(frame.Buffer, frame.OffsetU, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, firstLine / 2, chromaEnd);
+        ExtendRowSides(frame.Buffer, frame.OffsetV, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, firstLine / 2, chromaEnd);
+    }
+
+    public static void ExtendTop(VideoFrame frame)
+    {
+        CopyRowOutward(frame.Buffer, frame.OffsetY, frame.StrideY, frame.Width, H264Picture.Padding, 0, -1);
+        CopyRowOutward(frame.Buffer, frame.OffsetU, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, 0, -1);
+        CopyRowOutward(frame.Buffer, frame.OffsetV, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, 0, -1);
+    }
+
+    public static void ExtendBottom(VideoFrame frame)
+    {
+        CopyRowOutward(frame.Buffer, frame.OffsetY, frame.StrideY, frame.Width, H264Picture.Padding, frame.Height - 1, 1);
+        CopyRowOutward(frame.Buffer, frame.OffsetU, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, frame.ChromaHeight - 1, 1);
+        CopyRowOutward(frame.Buffer, frame.OffsetV, frame.StrideUV, frame.ChromaWidth, H264Picture.Padding / 2, frame.ChromaHeight - 1, 1);
+    }
+
+    private void FillPlaneRows(int endRow)
+    {
+        if (endRow > _planeRowsFilled)
+        {
+            _planes.FillRows(_picture, _planeRowsFilled, endRow);
+            _planeRowsFilled = endRow;
+        }
+    }
+
+    private static void ExtendRowSides(byte[] buffer, int offset, int stride, int width, int padding, int firstRow, int endRow)
+    {
+        for (var y = firstRow; y < endRow; y++)
         {
             var row = offset + (y * stride);
             buffer.AsSpan(row - padding, padding).Fill(buffer[row]);
             buffer.AsSpan(row + width, padding).Fill(buffer[row + width - 1]);
         }
+    }
 
-        var first = buffer.AsSpan(offset - padding, width + (2 * padding));
-        var last = buffer.AsSpan(offset + ((height - 1) * stride) - padding, width + (2 * padding));
+    private static void CopyRowOutward(byte[] buffer, int offset, int stride, int width, int padding, int edgeRow, int direction)
+    {
+        var edge = buffer.AsSpan(offset + (edgeRow * stride) - padding, width + (2 * padding));
         for (var y = 1; y <= padding; y++)
         {
-            first.CopyTo(buffer.AsSpan(offset - (y * stride) - padding, width + (2 * padding)));
-            last.CopyTo(buffer.AsSpan(offset + ((height - 1 + y) * stride) - padding, width + (2 * padding)));
+            edge.CopyTo(buffer.AsSpan(offset + ((edgeRow + (direction * y)) * stride) - padding, width + (2 * padding)));
         }
     }
 }
 
 internal sealed class PendingFrame
 {
-    public PendingFrame(int macroblockCount, bool cabac)
+    public PendingFrame(int macroblockCount, bool cabac, VideoFrame source)
     {
+        Source = source;
         Syntaxes = new MacroblockSyntax[macroblockCount];
         for (var i = 0; i < macroblockCount; i++)
         {
@@ -474,6 +627,12 @@ internal sealed class PendingFrame
     public CabacNeighbourState? CabacState { get; }
 
     public List<H264Picture> Pictures { get; } = new();
+
+    public VideoFrame Source { get; }
+
+    public HalfPelPlanes? Planes { get; set; }
+
+    public RowProgress? Lines { get; set; }
 
     public BitWriter? Bits { get; set; }
 

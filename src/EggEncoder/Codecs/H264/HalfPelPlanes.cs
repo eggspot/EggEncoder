@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using EggEncoder.Video;
 
 namespace EggEncoder.Codecs.H264;
 
@@ -33,26 +34,26 @@ internal sealed class HalfPelPlanes
 
     public int Origin { get; }
 
-    public static HalfPelPlanes Build(H264Picture picture, int parallelism, HalfPelPlanes? reuse)
+    public int RowCount => _height + (2 * Margin);
+
+    public static HalfPelPlanes ForFrame(VideoFrame frame, HalfPelPlanes? reuse) =>
+        reuse is not null && reuse._width == frame.Width && reuse._height == frame.Height ? reuse : new HalfPelPlanes(frame.Width, frame.Height);
+
+    public void Fill(H264Picture picture, int parallelism)
     {
-        var frame = picture.Frame;
-        var planes = reuse is not null && reuse._width == frame.Width && reuse._height == frame.Height ? reuse : new HalfPelPlanes(frame.Width, frame.Height);
-        var rows = frame.Height + (2 * Margin);
+        var rows = RowCount;
         var bands = Math.Clamp(parallelism, 1, 16);
         if (bands == 1)
         {
-            planes.FillRows(picture, 0, rows);
-        }
-        else
-        {
-            Parallel.For(0, bands, new ParallelOptions { MaxDegreeOfParallelism = bands }, band =>
-                planes.FillRows(picture, rows * band / bands, rows * (band + 1) / bands));
+            FillRows(picture, 0, rows);
+            return;
         }
 
-        return planes;
+        Parallel.For(0, bands, new ParallelOptions { MaxDegreeOfParallelism = bands }, band =>
+            FillRows(picture, rows * band / bands, rows * (band + 1) / bands));
     }
 
-    private void FillRows(H264Picture picture, int firstRow, int endRow)
+    public void FillRows(H264Picture picture, int firstRow, int endRow)
     {
         var frame = picture.Frame;
         var source = frame.Buffer;

@@ -182,7 +182,7 @@ internal static class MotionSearch
             MinX = -Margin - _baseX;
             MaxX = frame.Width - 16 + Margin - _baseX;
             MinY = -Margin - _baseY;
-            MaxY = frame.Height - 16 + Margin - _baseY;
+            MaxY = Math.Min(frame.Height - 16 + Margin - _baseY, ReferencePublisher.MaxDownwardVector);
         }
 
         public int MinX { get; }
