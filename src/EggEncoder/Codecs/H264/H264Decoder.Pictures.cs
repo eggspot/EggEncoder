@@ -5,7 +5,7 @@ namespace EggEncoder.Codecs.H264;
 public sealed partial class H264Decoder
 {
     private readonly List<SliceFilterParameters> _sliceFilters = new();
-    private readonly Dictionary<PictureParameterSet, (SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
+    private readonly Dictionary<int, (PictureParameterSet Pps, SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
     private H264Picture? _current;
     private SliceHeader? _currentFirstSlice;
 
@@ -42,13 +42,13 @@ public sealed partial class H264Decoder
 
     private Dequantizer DequantizerFor(PictureParameterSet pps, SequenceParameterSet sps)
     {
-        if (_dequantizers.TryGetValue(pps, out var cached) && cached.Sps == sps)
+        if (_dequantizers.TryGetValue(pps.Id, out var cached) && cached.Pps == pps && cached.Sps == sps)
         {
             return cached.Dequantizer;
         }
 
         var dequantizer = new Dequantizer(pps.ScalingListsFor(sps));
-        _dequantizers[pps] = (sps, dequantizer);
+        _dequantizers[pps.Id] = (pps, sps, dequantizer);
         return dequantizer;
     }
 
