@@ -12,6 +12,52 @@ namespace EggEncoder.UnitTests.Codecs.H264
     {
         private static readonly VideoFramePool Pool = new();
 
+        [Fact]
+        public void Encode_1080x1920_On_Four_Threads_Should_Run_In_Real_Time()
+        {
+            var path = Environment.GetEnvironmentVariable("EGGENCODER_H264_ENCODE_TARGET_FILE");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            var data = File.ReadAllBytes(path);
+            const int width = 1080;
+            const int height = 1920;
+            var frameBytes = width * height * 3 / 2;
+            var frames = new List<VideoFrame>();
+            for (var offset = 0; offset + frameBytes <= data.Length; offset += frameBytes)
+            {
+                var frame = Pool.Rent(width, height);
+                var position = offset;
+                for (var y = 0; y < height; y++, position += width)
+                {
+                    data.AsSpan(position, width).CopyTo(frame.GetRow(VideoPlane.Y, y));
+                }
+
+                foreach (var plane in new[] { VideoPlane.U, VideoPlane.V })
+                {
+                    for (var y = 0; y < height / 2; y++, position += width / 2)
+                    {
+                        data.AsSpan(position, width / 2).CopyTo(frame.GetRow(plane, y));
+                    }
+                }
+
+                frames.Add(frame);
+            }
+
+            using var encoder = new H264Encoder(new H264EncoderSettings { Width = width, Height = height, FrameRate = new VideoFrameRate(30), Profile = H264Profile.High, MaxDegreeOfParallelism = 4 });
+            var watch = Stopwatch.StartNew();
+            foreach (var frame in frames)
+            {
+                encoder.Encode(frame, _ => { });
+            }
+
+            watch.Stop();
+            frames.ForEach(f => f.Dispose());
+            (frames.Count / watch.Elapsed.TotalSeconds).Should().BeGreaterThanOrEqualTo(30);
+        }
+
         [Theory]
         [InlineData(64, 48, H264Profile.Baseline, 18)]
         [InlineData(64, 48, H264Profile.High, 30)]
@@ -90,6 +136,21 @@ namespace EggEncoder.UnitTests.Codecs.H264
             var settings = new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), ConstantRateFactor = 26 };
 
             Encode(settings, frames).Stream.Should().Equal(Encode(settings, frames).Stream);
+        }
+
+        [Theory]
+        [InlineData(H264Profile.Baseline)]
+        [InlineData(H264Profile.High)]
+        public void Wavefront_Threads_Should_Not_Change_The_Output(H264Profile profile)
+        {
+            var frames = SyntheticFrames(176, 144, 6);
+            var settings = new H264EncoderSettings { Width = 176, Height = 144, FrameRate = new VideoFrameRate(25), Profile = profile };
+
+            var single = Encode(settings with { MaxDegreeOfParallelism = 1 }, frames);
+            var threaded = Encode(settings with { MaxDegreeOfParallelism = 4 }, frames);
+
+            threaded.Stream.Should().Equal(single.Stream);
+            DecodeToMd5(threaded.Stream).Should().Equal(single.Reconstructions);
         }
 
         [Fact]
@@ -190,6 +251,101 @@ namespace EggEncoder.UnitTests.Codecs.H264
                         total.Should().Be(written);
                         read.Should().Equal(block);
                     }
+                }
+            }
+        }
+
+        [Fact]
+        public void Satd_Should_Equal_The_Sum_Of_Hadamard_Magnitudes()
+        {
+            var random = new Random(9);
+            foreach (var (width, height) in new[] { (16, 16), (8, 8), (4, 4), (16, 8) })
+            {
+                for (var round = 0; round < 50; round++)
+                {
+                    var source = new byte[32 * 20];
+                    var prediction = new byte[24 * 20];
+                    random.NextBytes(source);
+                    random.NextBytes(prediction);
+                    var expected = 0;
+                    for (var by = 0; by < height; by += 4)
+                    {
+                        for (var bx = 0; bx < width; bx += 4)
+                        {
+                            var d = new int[4, 4];
+                            for (var y = 0; y < 4; y++)
+                            {
+                                for (var x = 0; x < 4; x++)
+                                {
+                                    d[y, x] = source[((by + y) * 32) + bx + x] - prediction[((by + y) * 24) + bx + x];
+                                }
+                            }
+
+                            int[] h = [1, 1, 1, 1, 1, -1, 1, -1, 1, 1, -1, -1, 1, -1, -1, 1];
+                            for (var u = 0; u < 4; u++)
+                            {
+                                for (var v = 0; v < 4; v++)
+                                {
+                                    var sum = 0;
+                                    for (var y = 0; y < 4; y++)
+                                    {
+                                        for (var x = 0; x < 4; x++)
+                                        {
+                                            sum += h[(u * 4) + y] * h[(v * 4) + x] * d[y, x];
+                                        }
+                                    }
+
+                                    expected += Math.Abs(sum);
+                                }
+                            }
+                        }
+                    }
+
+                    BlockCost.Satd(source, 32, prediction, 24, width, height).Should().Be(expected >> 1);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Transform_And_Quantisation_Should_Round_Trip_Through_The_Decoder_At_Low_Qp(bool eightByEight)
+        {
+            var random = new Random(5);
+            var dequantizer = new Dequantizer(ScalingLists.FlatSet());
+            var size = eightByEight ? 8 : 4;
+            for (var round = 0; round < 200; round++)
+            {
+                var residual = new int[size * size];
+                for (var i = 0; i < residual.Length; i++)
+                {
+                    residual[i] = random.Next(-60, 61);
+                }
+
+                var coefficients = new int[64];
+                var raster = new short[64];
+                var scanned = new short[64];
+                var dequantized = new int[64];
+                var plane = new byte[size * size];
+                Array.Fill(plane, (byte)128);
+                if (eightByEight)
+                {
+                    ForwardTransform.Core8x8(residual, coefficients);
+                    Quantizer.Quantize8x8(coefficients, raster, scanned, 4, intra: false);
+                    dequantizer.Dequantize8x8(raster, dequantized, 4, 1);
+                    InverseTransform.Add8x8(dequantized, plane, 0, 8);
+                }
+                else
+                {
+                    ForwardTransform.Core4x4(residual, coefficients);
+                    Quantizer.Quantize4x4(coefficients, raster, scanned, 4, intra: false, 0);
+                    dequantizer.Dequantize4x4(raster, dequantized, 4, 3, keepDc: false);
+                    InverseTransform.Add4x4(dequantized, plane, 0, 4);
+                }
+
+                for (var i = 0; i < residual.Length; i++)
+                {
+                    (plane[i] - 128 - residual[i]).Should().BeInRange(-2, 2);
                 }
             }
         }

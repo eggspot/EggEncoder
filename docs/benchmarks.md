@@ -36,6 +36,7 @@ inside each iteration instead.
 | `AacStreamingBenchmarks` | `AacEncoderSession`'s own incremental push throughput (1024-sample blocks, 5s mono) and allocation behavior — the encoder most directly used in a real-time/streaming pipeline (see `docs/streaming-plan.md`) |
 | `VideoFilterBenchmarks` | One 1080x1920 frame through `FitTransform` (Cover, bicubic, from 1920x1080), `BoxBlurTransform` (radius 20/10) and `OverlayTransform` (a 400x200 logo), one thread each — the per-frame cost of the filters a video render spends most of its time in (video backlog item 21). Each iteration includes cloning the input frame |
 | `H264DecodeBenchmarks` | `H264Decoder` on a whole Annex B file named by `EGGENCODER_H264_BENCHMARK_FILE` (no H.264 file is checked in for this; make one locally, for example with ffmpeg/x264), one thread, frames disposed as they come out |
+| `H264EncodeBenchmarks` | `H264Encoder` on 30 frames of 1080x1920 (a synthetic pattern, or raw `yuv420p` frames named by `EGGENCODER_H264_ENCODE_BENCHMARK_FILE`), High profile CRF 23, on 1 and 4 threads |
 | `CodecDecodeBenchmarks` | Pure decode throughput, isolated from encoding, for `FlacDecoder`/`Mp3Decoder`/`WavPackDecoder`/`TtaDecoder`/`AlacDecoder`/`WmaDecoder`/`AacDecoder` — FLAC/WavPack/TTA are `docs/managed-codec-rewrite-plan.md`'s own from-scratch managed rewrites; MP3 decode is still NLayer-backed, pending `docs/external-dependency-removal-plan.md` Phase 1, so its number is the baseline the in-house decoder will be compared against. AAC is a mono fixture (`AacEncoder` is mono-only), so its number is per mono stream |
 
 ## What's not covered
@@ -51,6 +52,25 @@ pre-emptively covering everything.
 
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
+
+### H.264 encode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2, scratch harness timing `Encode` calls)
+
+30 frames of 1080x1920 `testsrc2` (mostly flat bars, a few moving objects), High profile:
+
+| Setting | Frames per second | Size | Luma PSNR |
+|---------|-----:|-----:|-----:|
+| CRF 23, 1 thread | 9.8 | 1,634,541 B | 50.2 dB |
+| CRF 23, 4 threads | 13.5 | same bytes | same |
+| CRF 28, 4 threads | 15.9 | 1,126,042 B | 45.8 dB |
+| CRF 29, 4 threads | 15.4 | 1,009,000 B | 44.7 dB |
+| x264 `veryfast crf 20`, 4 threads | about 50 | 955,302 B | 45.5 dB |
+
+At equal PSNR (45.5 dB, interpolated between CRF 28 and 29) the output is about 14.5% larger than
+x264's. 60 frames of a detailed clip (a zooming Mandelbrot set with temporal noise) run at 3.0 fps on
+one thread and 5.5 fps on four. The 4-thread rate is limited by the single entropy-writing stage and
+by the wavefront on frames whose expensive macroblocks sit in a few columns. Before this entry the
+wavefront waited by spinning and yielding, and a 4-thread run of the detailed clip on a busy machine
+once took 2,564 s; a blocking wait after a short spin fixed it (10.9 s).
 
 ### H.264 decode (Intel Core i7-8850H, .NET 10.0.12, AVX2, short job, `--inProcess`)
 

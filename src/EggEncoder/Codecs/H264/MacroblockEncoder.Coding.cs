@@ -248,6 +248,13 @@ internal sealed partial class MacroblockEncoder
             scores[block >> 2] += counts[block] == 0 ? 0 : DecimationScore(_scanned);
         }
 
+        if (_transform8x8 && UseTransform8x8(source))
+        {
+            EncodeInterLuma8x8(source, totals);
+            EncodeChromaResidual(intra: false);
+            return;
+        }
+
         var totalScore = scores[0] + scores[1] + scores[2] + scores[3];
         var pattern = 0;
         for (var block = 0; block < 16; block++)
@@ -266,6 +273,71 @@ internal sealed partial class MacroblockEncoder
 
         syntax.CodedBlockPatternLuma = pattern;
         EncodeChromaResidual(intra: false);
+    }
+
+    private bool UseTransform8x8(ReadOnlySpan<byte> source) =>
+        BlockCost.Sa8d16x16(source, _source.StrideY, _lumaPrediction, 16) < BlockCost.Satd(source, _source.StrideY, _lumaPrediction, 16, 16, 16);
+
+    private void EncodeInterLuma8x8(ReadOnlySpan<byte> source, Span<byte> totals)
+    {
+        var syntax = _slice.Syntax;
+        syntax.LumaCoefficients.AsSpan().Clear();
+        Array.Clear(syntax.LumaBlockCoded);
+        totals.Clear();
+        syntax.Transform8x8 = true;
+        Span<int> residual = stackalloc int[64];
+        Span<int> coefficients = stackalloc int[64];
+        Span<short> scannedBlocks = stackalloc short[256];
+        Span<int> scores = stackalloc int[4];
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            var x0 = (block8 & 1) * 8;
+            var y0 = (block8 >> 1) * 8;
+            for (var y = 0; y < 8; y++)
+            {
+                for (var x = 0; x < 8; x++)
+                {
+                    residual[(y * 8) + x] = source[((y0 + y) * _source.StrideY) + x0 + x] - _lumaPrediction[((y0 + y) * 16) + x0 + x];
+                }
+            }
+
+            ForwardTransform.Core8x8(residual, coefficients);
+            var scanned = scannedBlocks.Slice(block8 * 64, 64);
+            var nonzero = Quantizer.Quantize8x8(coefficients, syntax.LumaCoefficients.AsSpan(block8 * 64, 64), scanned, _qp, intra: false);
+            scores[block8] = nonzero == 0 ? 0 : DecimationScore(scanned, DecimationScores8x8);
+        }
+
+        var totalScore = scores[0] + scores[1] + scores[2] + scores[3];
+        var pattern = 0;
+        for (var block8 = 0; block8 < 4; block8++)
+        {
+            if (scores[block8] < 4 || totalScore < 6)
+            {
+                syntax.LumaCoefficients.AsSpan(block8 * 64, 64).Clear();
+                continue;
+            }
+
+            var scanned = scannedBlocks.Slice(block8 * 64, 64);
+            syntax.LumaBlock8x8Coded[block8] = true;
+            pattern |= 1 << block8;
+            for (var part = 0; part < 4; part++)
+            {
+                var count = 0;
+                for (var i = 0; i < 16; i++)
+                {
+                    if (scanned[(4 * i) + part] != 0)
+                    {
+                        count++;
+                    }
+                }
+
+                var block = (block8 * 4) + part;
+                totals[(MacroblockLayout.BlockY[block] * 4) + MacroblockLayout.BlockX[block]] = (byte)count;
+            }
+        }
+
+        syntax.CodedBlockPatternLuma = pattern;
+        syntax.Transform8x8 = pattern != 0;
     }
 
     private void EncodeChromaResidual(bool intra)
@@ -329,13 +401,14 @@ internal sealed partial class MacroblockEncoder
         }
     }
 
-    private void WriteMacroblock(BitWriter bits, MacroblockSyntax syntax, int mvdX, int mvdY)
+    private void WriteMacroblock(BitWriter bits, MacroblockSyntax syntax)
     {
         var inter = _reference is not null;
         switch (syntax.Kind)
         {
             case MacroblockKind.IntraNxN:
                 bits.WriteUe(inter ? 5u : 0u);
+
                 for (var block = 0; block < 16; block++)
                 {
                     bits.WriteFlag(syntax.PreviousIntraModeFlags[block]);
@@ -355,8 +428,8 @@ internal sealed partial class MacroblockEncoder
                 break;
             default:
                 bits.WriteUe(0);
-                bits.WriteSe(mvdX);
-                bits.WriteSe(mvdY);
+                bits.WriteSe(syntax.Partitions[0].MvdL0X);
+                bits.WriteSe(syntax.Partitions[0].MvdL0Y);
                 bits.WriteUe((uint)InterCodeNumbers[syntax.CodedBlockPatternLuma | (syntax.CodedBlockPatternChroma << 4)]);
                 break;
         }

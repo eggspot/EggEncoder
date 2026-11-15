@@ -5,7 +5,7 @@ namespace EggEncoder.Codecs.H264;
 [SkipLocalsInit]
 internal static class MotionSearch
 {
-    private const int Margin = 28;
+    private const int Margin = 26;
     private const int MaximumSteps = 32;
 
     private static readonly (int X, int Y)[] Hexagon = [(-2, 0), (-1, -2), (1, -2), (2, 0), (1, 2), (-1, 2)];
@@ -103,7 +103,7 @@ internal static class MotionSearch
             }
         }
 
-        return (bestMvX, bestMvY, bestSubpel + encoder.Lambda);
+        return (bestMvX, bestMvY, search.SatdCost(bestMvX, bestMvY) + encoder.Lambda);
     }
 
     public static int MotionVectorBits(int dx, int dy) => ExpGolombWriter.SeLength(dx) + ExpGolombWriter.SeLength(dy);
@@ -128,6 +128,23 @@ internal static class MotionSearch
         return (vectors[macroblock * 32], vectors[(macroblock * 32) + 1]);
     }
 
+    private readonly struct Sample
+    {
+        private readonly byte[] _data;
+        private readonly int _index;
+
+        public Sample(byte[] data, int index, int stride)
+        {
+            _data = data;
+            _index = index;
+            Stride = stride;
+        }
+
+        public ReadOnlySpan<byte> Data => _data.AsSpan(_index);
+
+        public int Stride { get; }
+    }
+
     private readonly ref struct Context
     {
         private readonly H264Picture _reference;
@@ -142,6 +159,8 @@ internal static class MotionSearch
         private readonly int _lambda;
         private readonly int _predictedX;
         private readonly int _predictedY;
+        private readonly int _frameOrigin;
+        private readonly HalfPelPlanes _planes;
 
         public Context(MacroblockEncoder encoder, int predictedX, int predictedY, Span<byte> prediction)
         {
@@ -155,6 +174,8 @@ internal static class MotionSearch
             _baseX = encoder.MacroblockX * 16;
             _baseY = encoder.MacroblockY * 16;
             _origin = frame.OffsetY + (_baseY * _stride) + _baseX;
+            _frameOrigin = frame.OffsetY;
+            _planes = encoder.HalfPel;
             _lambda = encoder.Lambda;
             _predictedX = predictedX;
             _predictedY = predictedY;
@@ -179,6 +200,37 @@ internal static class MotionSearch
             + (_lambda * MotionVectorBits((x * 4) - _predictedX, (y * 4) - _predictedY));
 
         public int SubpelCost(int mvX, int mvY)
+        {
+            var x = _baseX + (mvX >> 2);
+            var y = _baseY + (mvY >> 2);
+            var bits = _lambda * MotionVectorBits(mvX - _predictedX, mvY - _predictedY);
+            var (first, second) = (mvX & 3, mvY & 3) switch
+            {
+                (0, 0) => (Full(x, y), Full(x, y)),
+                (2, 0) => (Plane(_planes.Horizontal, x, y), Plane(_planes.Horizontal, x, y)),
+                (0, 2) => (Plane(_planes.Vertical, x, y), Plane(_planes.Vertical, x, y)),
+                (2, 2) => (Plane(_planes.Center, x, y), Plane(_planes.Center, x, y)),
+                (1, 0) => (Full(x, y), Plane(_planes.Horizontal, x, y)),
+                (3, 0) => (Plane(_planes.Horizontal, x, y), Full(x + 1, y)),
+                (0, 1) => (Full(x, y), Plane(_planes.Vertical, x, y)),
+                (0, 3) => (Plane(_planes.Vertical, x, y), Full(x, y + 1)),
+                (2, 1) => (Plane(_planes.Horizontal, x, y), Plane(_planes.Center, x, y)),
+                (2, 3) => (Plane(_planes.Center, x, y), Plane(_planes.Horizontal, x, y + 1)),
+                (1, 2) => (Plane(_planes.Vertical, x, y), Plane(_planes.Center, x, y)),
+                (3, 2) => (Plane(_planes.Center, x, y), Plane(_planes.Vertical, x + 1, y)),
+                (1, 1) => (Plane(_planes.Horizontal, x, y), Plane(_planes.Vertical, x, y)),
+                (3, 1) => (Plane(_planes.Horizontal, x, y), Plane(_planes.Vertical, x + 1, y)),
+                (1, 3) => (Plane(_planes.Horizontal, x, y + 1), Plane(_planes.Vertical, x, y)),
+                _ => (Plane(_planes.Horizontal, x, y + 1), Plane(_planes.Vertical, x + 1, y))
+            };
+            return BlockCost.Sad16x16Average(_source, _sourceStride, first.Data, first.Stride, second.Data, second.Stride) + bits;
+        }
+
+        private Sample Full(int x, int y) => new(_buffer, _frameOrigin + (y * _stride) + x, _stride);
+
+        private Sample Plane(byte[] plane, int x, int y) => new(plane, _planes.Origin + (y * _planes.Stride) + x, _planes.Stride);
+
+        public int SatdCost(int mvX, int mvY)
         {
             InterPrediction.Luma(_reference, _baseX + (mvX >> 2), _baseY + (mvY >> 2), mvX & 3, mvY & 3, 16, 16, _prediction, 16);
             return BlockCost.Satd(_source, _sourceStride, _prediction, 16, 16, 16) + (_lambda * MotionVectorBits(mvX - _predictedX, mvY - _predictedY));

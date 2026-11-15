@@ -26,7 +26,13 @@ public sealed partial class H264Encoder : IDisposable
     private readonly H264RateControl _rateControl;
     private readonly int _keyframeInterval;
     private readonly VideoFrame _source;
+    private readonly CabacEncoder? _cabac;
+    private readonly CabacNeighbourState? _cabacState;
+    private readonly MacroblockSyntax[] _syntaxes;
+    private readonly bool[] _skipped;
+    private readonly int _parallelism;
     private H264Picture? _reference;
+    private HalfPelPlanes? _halfPel;
     private long _frameIndex;
     private int _frameNum;
     private int _idrPictureId;
@@ -67,6 +73,19 @@ public sealed partial class H264Encoder : IDisposable
         _dequantizer = new Dequantizer(_pps.ScalingListsFor(_sps));
         _rateControl = new H264RateControl(settings.ConstantRateFactor);
         _source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, range, matrix);
+        _syntaxes = new MacroblockSyntax[_sps.MacroblockCount];
+        for (var i = 0; i < _syntaxes.Length; i++)
+        {
+            _syntaxes[i] = new MacroblockSyntax();
+        }
+
+        _skipped = new bool[_sps.MacroblockCount];
+        _parallelism = settings.MaxDegreeOfParallelism > 0 ? settings.MaxDegreeOfParallelism : Environment.ProcessorCount;
+        if (_pps.EntropyCodingCabac)
+        {
+            _cabac = new CabacEncoder();
+            _cabacState = new CabacNeighbourState(_sps.MacroblockCount);
+        }
     }
 
     /// <summary>The <c>avcC</c> record (SPS and PPS) a container needs to play the output.</summary>
@@ -124,14 +143,12 @@ public sealed partial class H264Encoder : IDisposable
                 ReferenceCountL0 = 1
             };
             var references = keyframe ? Array.Empty<H264Picture>() : [_reference!];
-            var slice = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, []);
             var bits = new BitWriter();
             WriteSliceHeader(bits, header, keyframe);
-            new MacroblockEncoder(slice, picture, _source, keyframe ? null : _reference, qp, _dequantizer, _pps.ChromaQpIndexOffset).EncodeSlice(bits);
-            bits.WriteTrailingBits();
+            EncodeMacroblocks(picture, header, references, qp, keyframe, bits);
             NalUnitWriter.AppendLengthPrefixed(payload, (header.NalReferenceIdc << 5) | (keyframe ? 5 : 1), bits.ToArray());
-            DeblockingFilter.Apply(picture, [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)]);
             ExtendBorders(picture.Frame);
+            _halfPel = HalfPelPlanes.Build(picture, _parallelism, _halfPel);
         }
         catch
         {
@@ -170,6 +187,99 @@ public sealed partial class H264Encoder : IDisposable
         _reference?.Dispose();
         _reference = null;
         _source.Dispose();
+    }
+
+    private void EncodeMacroblocks(H264Picture picture, SliceHeader header, H264Picture[] references, int qp, bool keyframe, BitWriter bits)
+    {
+        var width = _sps.WidthInMacroblocks;
+        var rows = _sps.HeightInMacroblocks;
+        var workers = Math.Clamp(_parallelism, 1, rows);
+        var progress = new RowProgress(rows);
+        var nextRow = -1;
+        var encoders = new MacroblockEncoder[workers + 1];
+        var slices = new SliceDecoder[workers + 1];
+        for (var i = 0; i <= workers; i++)
+        {
+            slices[i] = new SliceDecoder(picture, _sps, _pps, header, 0, new H264BitReader([0x80]), _dequantizer, references, [], null, _cabacState);
+            encoders[i] = new MacroblockEncoder(slices[i], picture, _source, keyframe ? null : _reference, keyframe ? null : _halfPel, qp, _dequantizer, _pps.ChromaQpIndexOffset, _pps.Transform8x8Mode);
+        }
+
+        SliceFilterParameters[] filters = [new SliceFilterParameters(0, 0, 0, _pps.ChromaQpIndexOffset, _pps.SecondChromaQpIndexOffset)];
+
+        Task Run(Action stage) => Task.Factory.StartNew(
+            () =>
+            {
+                try
+                {
+                    stage();
+                }
+                catch
+                {
+                    progress.Cancel();
+                    throw;
+                }
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        void Analyse(int worker)
+        {
+            int row;
+            while ((row = Interlocked.Increment(ref nextRow)) < rows)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    if (row > 0)
+                    {
+                        progress.WaitFor(row - 1, Math.Min(x + 2, width));
+                    }
+
+                    var address = (row * width) + x;
+                    slices[worker].UseSyntax(_syntaxes[address]);
+                    _skipped[address] = encoders[worker].Analyse(address);
+                    progress.Report(row, x + 1);
+                }
+            }
+        }
+
+        void Write() => MacroblockEncoder.WriteSlice(bits, _cabac, header.Type, qp, encoders[workers], _syntaxes, _skipped, address => progress.WaitFor(address / width, (address % width) + 1));
+
+        void Deblock()
+        {
+            for (var row = 0; row < rows; row++)
+            {
+                progress.WaitFor(Math.Min(row + 1, rows - 1), width);
+                DeblockingFilter.ApplyRows(picture, filters, row, row + 1);
+            }
+        }
+
+        if (workers == 1)
+        {
+            Analyse(0);
+            Write();
+            Deblock();
+            return;
+        }
+
+        var tasks = new Task[workers + 2];
+        for (var i = 0; i < workers; i++)
+        {
+            var worker = i;
+            tasks[i] = Run(() => Analyse(worker));
+        }
+
+        tasks[workers] = Run(Write);
+        tasks[workers + 1] = Run(Deblock);
+        try
+        {
+            Task.WaitAll(tasks);
+        }
+        catch (AggregateException e)
+        {
+            var cause = e.InnerExceptions.FirstOrDefault(inner => inner is not OperationCanceledException) ?? e.InnerExceptions[0];
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cause).Throw();
+        }
     }
 
     private void CopySource(VideoFrame frame)

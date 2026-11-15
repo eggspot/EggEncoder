@@ -128,7 +128,7 @@ public sealed partial class H264Encoder
         var bits = new BitWriter();
         bits.WriteUe(0);
         bits.WriteUe(0);
-        bits.WriteFlag(false);
+        bits.WriteFlag(settings.Profile != H264Profile.Baseline);
         bits.WriteFlag(false);
         bits.WriteUe(0);
         bits.WriteUe(0);
@@ -143,7 +143,7 @@ public sealed partial class H264Encoder
         bits.WriteFlag(false);
         if (settings.Profile == H264Profile.High)
         {
-            bits.WriteFlag(false);
+            bits.WriteFlag(true);
             bits.WriteFlag(false);
             bits.WriteSe(0);
         }
@@ -176,6 +176,11 @@ public sealed partial class H264Encoder
         else
         {
             bits.WriteFlag(false);
+        }
+
+        if (_pps.EntropyCodingCabac && !keyframe)
+        {
+            bits.WriteUe(0);
         }
 
         bits.WriteSe(header.QpDelta);

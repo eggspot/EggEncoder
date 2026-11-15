@@ -680,6 +680,52 @@ try
         return Task.CompletedTask;
     });
 
+    await RunCheck("H.264 encode: High profile CABAC with 8x8 transform on two wavefront threads", () =>
+    {
+        using var encoder = new EggEncoder.Codecs.H264.H264Encoder(new EggEncoder.Codecs.H264.H264EncoderSettings
+        {
+            Width = 64,
+            Height = 64,
+            FrameRate = new EggEncoder.Video.VideoFrameRate(25),
+            Profile = EggEncoder.Codecs.H264.H264Profile.High,
+            MaxDegreeOfParallelism = 2
+        });
+        var avcC = encoder.DecoderConfiguration.ToArray();
+        using var decoder = new EggEncoder.Codecs.H264.H264Decoder(avcC);
+        var decoded = 0;
+        for (var index = 0; index < 3; index++)
+        {
+            using var frame = EggEncoder.Video.VideoFrame.Create(64, 64);
+            for (var y = 0; y < 64; y++)
+            {
+                var row = frame.GetRow(EggEncoder.Video.VideoPlane.Y, y);
+                for (var x = 0; x < 64; x++)
+                {
+                    row[x] = (byte)((x * 3) + (y * 2) + (index * 5));
+                }
+            }
+
+            frame.Fill(new EggEncoder.Video.YuvColor(0, 120, 140));
+            encoder.Encode(frame, encoded => decoder.Decode(encoded.Payload.Span, TimeSpan.Zero, output =>
+            {
+                decoded++;
+                output.Dispose();
+            }));
+        }
+
+        decoder.Flush(output =>
+        {
+            decoded++;
+            output.Dispose();
+        });
+        if (decoded != 3 || avcC[1] != 100)
+        {
+            throw new InvalidOperationException("H.264 High profile encode check produced unexpected results");
+        }
+
+        return Task.CompletedTask;
+    });
+
     Console.WriteLine("All AOT smoke checks passed.");
     return 0;
 }

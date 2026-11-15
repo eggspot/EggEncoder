@@ -327,10 +327,7 @@ internal sealed partial class SliceDecoder
         int first;
         if (offset == MbTypeIOffset)
         {
-            var a = NeighbourMacroblock(-1, 0);
-            var b = NeighbourMacroblock(0, -1);
-            var increment = (a >= 0 && _picture.Kinds[a] != MacroblockKind.IntraNxN ? 1 : 0) + (b >= 0 && _picture.Kinds[b] != MacroblockKind.IntraNxN ? 1 : 0);
-            first = cabac.DecodeDecision(offset + increment);
+            first = cabac.DecodeDecision(offset + IntraMacroblockTypeIncrement());
         }
         else
         {
@@ -492,12 +489,13 @@ internal sealed partial class SliceDecoder
         _cabacState!.Record(_macroblock, _codedBlockFlags, syntax.CodedBlockPatternLuma | (syntax.CodedBlockPatternChroma << 4), intra ? syntax.IntraChromaPredictionMode : 0);
     }
 
-    private int DecodeTransformSize8x8(CabacDecoder cabac)
+    private int DecodeTransformSize8x8(CabacDecoder cabac) => cabac.DecodeDecision(TransformSize8x8Offset + TransformSize8x8Increment());
+
+    private int TransformSize8x8Increment()
     {
         var a = NeighbourMacroblock(-1, 0);
         var b = NeighbourMacroblock(0, -1);
-        var increment = (a >= 0 && _picture.Transform8x8[a] ? 1 : 0) + (b >= 0 && _picture.Transform8x8[b] ? 1 : 0);
-        return cabac.DecodeDecision(TransformSize8x8Offset + increment);
+        return (a >= 0 && _picture.Transform8x8[a] ? 1 : 0) + (b >= 0 && _picture.Transform8x8[b] ? 1 : 0);
     }
 
     private int DecodeSubMacroblockTypeP(CabacDecoder cabac)
@@ -581,6 +579,11 @@ internal sealed partial class SliceDecoder
             partition.MvdL1Y = mvdY;
         }
 
+        StoreAbsoluteMvd(partition, list, mvdX, mvdY);
+    }
+
+    private void StoreAbsoluteMvd(in InterPartition partition, int list, int mvdX, int mvdY)
+    {
         var absX = (byte)Math.Min(Math.Abs(mvdX), 255);
         var absY = (byte)Math.Min(Math.Abs(mvdY), 255);
         var stored = _cabacState!.AbsoluteMvd[list];
@@ -635,9 +638,11 @@ internal sealed partial class SliceDecoder
         return cabac.DecodeBypass() == 1 ? -value : value;
     }
 
+    private int IntraChromaModeIncrement() => ChromaModeCondition(NeighbourMacroblock(-1, 0)) + ChromaModeCondition(NeighbourMacroblock(0, -1));
+
     private int DecodeIntraChromaMode(CabacDecoder cabac)
     {
-        var increment = ChromaModeCondition(NeighbourMacroblock(-1, 0)) + ChromaModeCondition(NeighbourMacroblock(0, -1));
+        var increment = IntraChromaModeIncrement();
         if (cabac.DecodeDecision(IntraChromaModeOffset + increment) == 0)
         {
             return 0;
@@ -656,45 +661,66 @@ internal sealed partial class SliceDecoder
 
     private void DecodeCodedBlockPattern(CabacDecoder cabac)
     {
-        var state = _cabacState!;
-        var left = NeighbourMacroblock(-1, 0);
-        var top = NeighbourMacroblock(0, -1);
         var luma = 0;
         for (var b8 = 0; b8 < 4; b8++)
         {
-            int conditionA;
-            if ((b8 & 1) == 1)
-            {
-                conditionA = ((luma >> (b8 - 1)) & 1) == 0 ? 1 : 0;
-            }
-            else
-            {
-                conditionA = left >= 0 && ((state.CodedBlockPatterns[left] >> (b8 + 1)) & 1) == 0 ? 1 : 0;
-            }
-
-            int conditionB;
-            if (b8 >= 2)
-            {
-                conditionB = ((luma >> (b8 - 2)) & 1) == 0 ? 1 : 0;
-            }
-            else
-            {
-                conditionB = top >= 0 && ((state.CodedBlockPatterns[top] >> (b8 + 2)) & 1) == 0 ? 1 : 0;
-            }
-
-            luma |= cabac.DecodeDecision(CodedBlockPatternLumaOffset + conditionA + (2 * conditionB)) << b8;
+            luma |= cabac.DecodeDecision(CodedBlockPatternLumaOffset + CodedBlockPatternLumaIncrement(b8, luma)) << b8;
         }
 
-        var chromaA = left >= 0 ? state.CodedBlockPatterns[left] >> 4 : 0;
-        var chromaB = top >= 0 ? state.CodedBlockPatterns[top] >> 4 : 0;
+        var (first, second) = CodedBlockPatternChromaIncrements();
         var chroma = 0;
-        if (cabac.DecodeDecision(CodedBlockPatternChromaOffset + (chromaA != 0 ? 1 : 0) + (chromaB != 0 ? 2 : 0)) == 1)
+        if (cabac.DecodeDecision(CodedBlockPatternChromaOffset + first) == 1)
         {
-            chroma = 1 + cabac.DecodeDecision(CodedBlockPatternChromaOffset + 4 + (chromaA == 2 ? 1 : 0) + (chromaB == 2 ? 2 : 0));
+            chroma = 1 + cabac.DecodeDecision(CodedBlockPatternChromaOffset + 4 + second);
         }
 
         _syntax.CodedBlockPatternLuma = luma;
         _syntax.CodedBlockPatternChroma = chroma;
+    }
+
+    private int IntraMacroblockTypeIncrement()
+    {
+        var a = NeighbourMacroblock(-1, 0);
+        var b = NeighbourMacroblock(0, -1);
+        return (a >= 0 && _picture.Kinds[a] != MacroblockKind.IntraNxN ? 1 : 0) + (b >= 0 && _picture.Kinds[b] != MacroblockKind.IntraNxN ? 1 : 0);
+    }
+
+    private int CodedBlockPatternLumaIncrement(int b8, int lumaSoFar)
+    {
+        var state = _cabacState!;
+        int conditionA;
+        if ((b8 & 1) == 1)
+        {
+            conditionA = ((lumaSoFar >> (b8 - 1)) & 1) == 0 ? 1 : 0;
+        }
+        else
+        {
+            var left = NeighbourMacroblock(-1, 0);
+            conditionA = left >= 0 && ((state.CodedBlockPatterns[left] >> (b8 + 1)) & 1) == 0 ? 1 : 0;
+        }
+
+        int conditionB;
+        if (b8 >= 2)
+        {
+            conditionB = ((lumaSoFar >> (b8 - 2)) & 1) == 0 ? 1 : 0;
+        }
+        else
+        {
+            var top = NeighbourMacroblock(0, -1);
+            conditionB = top >= 0 && ((state.CodedBlockPatterns[top] >> (b8 + 2)) & 1) == 0 ? 1 : 0;
+        }
+
+        return conditionA + (2 * conditionB);
+    }
+
+    private (int First, int Second) CodedBlockPatternChromaIncrements()
+    {
+        var state = _cabacState!;
+        var left = NeighbourMacroblock(-1, 0);
+        var top = NeighbourMacroblock(0, -1);
+        var chromaA = left >= 0 ? state.CodedBlockPatterns[left] >> 4 : 0;
+        var chromaB = top >= 0 ? state.CodedBlockPatterns[top] >> 4 : 0;
+        return ((chromaA != 0 ? 1 : 0) + (chromaB != 0 ? 2 : 0), (chromaA == 2 ? 1 : 0) + (chromaB == 2 ? 2 : 0));
     }
 
     private int DecodeQpDelta(CabacDecoder cabac)
