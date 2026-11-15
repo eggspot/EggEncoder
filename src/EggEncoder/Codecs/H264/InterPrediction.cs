@@ -99,42 +99,51 @@ internal static class InterPrediction
             return;
         }
 
-        Span<int> intermediate = stackalloc int[16 * 21];
+        Span<short> intermediate = stackalloc short[(16 * 21) + 8];
         for (var j = -2; j < height + 3; j++)
         {
             var row = origin + (j * stride);
-            for (var i = 0; i < width; i++)
+            for (var i = 0; i < width; i += lanes)
             {
-                intermediate[((j + 2) * width) + i] = Tap6(source, row + i, 1);
+                StoreWords(intermediate, ((j + 2) * width) + i, Tap6Vector(source, row + i, 1, lanes), lanes);
             }
         }
 
+        var twenty = Vector128.Create(20);
+        var five = Vector128.Create(5);
+        var centerRound = Vector128.Create(512);
+        var halfRound = Vector128.Create((short)16);
+        var zero = Vector128<int>.Zero;
+        var maximum = Vector128.Create(255);
         for (var j = 0; j < height; j++)
         {
             var row = origin + (j * stride);
-            for (var i = 0; i < width; i++)
+            for (var i = 0; i < width; i += lanes)
             {
                 var index = ((j + 2) * width) + i;
-                var j1 = intermediate[index - (2 * width)] - (5 * intermediate[index - width]) + (20 * intermediate[index])
-                    + (20 * intermediate[index + width]) - (5 * intermediate[index + (2 * width)]) + intermediate[index + (3 * width)];
-                var center = IntraPrediction.Clip((j1 + 512) >> 10);
-                int value;
-                if (xFrac == 2 && yFrac == 2)
+                var t0 = LoadWords(intermediate, index - (2 * width));
+                var t1 = LoadWords(intermediate, index - width);
+                var t2 = LoadWords(intermediate, index);
+                var t3 = LoadWords(intermediate, index + width);
+                var t4 = LoadWords(intermediate, index + (2 * width));
+                var t5 = LoadWords(intermediate, index + (3 * width));
+                var low = Tap6Wide(Vector128.WidenLower(t0), Vector128.WidenLower(t1), Vector128.WidenLower(t2), Vector128.WidenLower(t3), Vector128.WidenLower(t4), Vector128.WidenLower(t5), five, twenty);
+                var high = Tap6Wide(Vector128.WidenUpper(t0), Vector128.WidenUpper(t1), Vector128.WidenUpper(t2), Vector128.WidenUpper(t3), Vector128.WidenUpper(t4), Vector128.WidenUpper(t5), five, twenty);
+                low = Vector128.Min(Vector128.Max(Vector128.ShiftRightArithmetic(low + centerRound, 10), zero), maximum);
+                high = Vector128.Min(Vector128.Max(Vector128.ShiftRightArithmetic(high + centerRound, 10), zero), maximum);
+                var center = Vector128.Narrow(low, high);
+                if (xFrac == 2 && yFrac != 2)
                 {
-                    value = center;
+                    var b = LoadWords(intermediate, index + ((yFrac >> 1) * width));
+                    b = Vector128.Min(Vector128.Max(Vector128.ShiftRightArithmetic(b + halfRound, 5), Vector128<short>.Zero), Vector128.Create((short)255));
+                    center = RoundedAverage(center, b);
                 }
-                else if (xFrac == 2)
+                else if (yFrac == 2 && xFrac != 2)
                 {
-                    var b = IntraPrediction.Clip((intermediate[index + ((yFrac >> 1) * width)] + 16) >> 5);
-                    value = (b + center + 1) >> 1;
-                }
-                else
-                {
-                    var h = HalfVertical(source, row + i + (xFrac >> 1), stride);
-                    value = (h + center + 1) >> 1;
+                    center = RoundedAverage(center, HalfVector(source, row + i + (xFrac >> 1), stride, lanes));
                 }
 
-                output[(j * outputStride) + i] = (byte)value;
+                Store(output, (j * outputStride) + i, center, lanes);
             }
         }
     }
@@ -345,11 +354,36 @@ internal static class InterPrediction
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<short> HalfVector(ReadOnlySpan<byte> source, int index, int step, int lanes)
-    {
-        var sum = Load(source, index - (2 * step), lanes) + Load(source, index + (3 * step), lanes)
+    private static Vector128<short> Tap6Vector(ReadOnlySpan<byte> source, int index, int step, int lanes) =>
+        Load(source, index - (2 * step), lanes) + Load(source, index + (3 * step), lanes)
             - (Vector128.Create((short)5) * (Load(source, index - step, lanes) + Load(source, index + (2 * step), lanes)))
             + (Vector128.Create((short)20) * (Load(source, index, lanes) + Load(source, index + step, lanes)));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Tap6Wide(Vector128<int> t0, Vector128<int> t1, Vector128<int> t2, Vector128<int> t3, Vector128<int> t4, Vector128<int> t5, Vector128<int> five, Vector128<int> twenty) =>
+        t0 + t5 - (five * (t1 + t4)) + (twenty * (t2 + t3));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<short> LoadWords(ReadOnlySpan<short> source, int index) =>
+        Vector128.Create(source.Slice(index, Vector128<short>.Count));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void StoreWords(Span<short> output, int index, Vector128<short> values, int lanes)
+    {
+        if (lanes == 8)
+        {
+            values.CopyTo(output[index..]);
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(System.Runtime.InteropServices.MemoryMarshal.AsBytes(output[index..]), values.AsUInt64().ToScalar());
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<short> HalfVector(ReadOnlySpan<byte> source, int index, int step, int lanes)
+    {
+        var sum = Tap6Vector(source, index, step, lanes);
         var shifted = Vector128.ShiftRightArithmetic(sum + Vector128.Create((short)16), 5);
         return Vector128.Min(Vector128.Max(shifted, Vector128<short>.Zero), Vector128.Create((short)255));
     }
@@ -387,14 +421,4 @@ internal static class InterPrediction
             }
         }
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int Tap6(ReadOnlySpan<byte> source, int index, int step) =>
-        source[index - (2 * step)] - (5 * source[index - step]) + (20 * source[index]) + (20 * source[index + step]) - (5 * source[index + (2 * step)]) + source[index + (3 * step)];
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HalfHorizontal(ReadOnlySpan<byte> source, int index) => IntraPrediction.Clip((Tap6(source, index, 1) + 16) >> 5);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int HalfVertical(ReadOnlySpan<byte> source, int index, int stride) => IntraPrediction.Clip((Tap6(source, index, stride) + 16) >> 5);
 }

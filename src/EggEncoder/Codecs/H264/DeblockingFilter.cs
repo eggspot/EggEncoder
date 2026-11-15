@@ -7,8 +7,10 @@ namespace EggEncoder.Codecs.H264;
 internal readonly record struct SliceFilterParameters(int DisableIdc, int OffsetA, int OffsetB, int ChromaQpOffsetCb, int ChromaQpOffsetCr);
 
 [SkipLocalsInit]
-internal static class DeblockingFilter
+internal static partial class DeblockingFilter
 {
+    private const int UniformMotion = 1 << 16;
+
     private static readonly byte[] Alpha =
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13,
@@ -44,12 +46,12 @@ internal static class DeblockingFilter
     {
         var width = picture.WidthInMacroblocks;
         var count = width * picture.HeightInMacroblocks;
-        var masks = ArrayPool<ushort>.Shared.Rent(count);
+        var masks = ArrayPool<int>.Shared.Rent(count);
         try
         {
             for (var macroblock = Math.Max(0, firstRow - 1) * width; macroblock < endRow * width; macroblock++)
             {
-                masks[macroblock] = CoefficientMask(picture, macroblock);
+                masks[macroblock] = CoefficientMask(picture, macroblock) | (HasUniformMotion(picture, macroblock) ? UniformMotion : 0);
             }
 
             Span<byte> strengths = stackalloc byte[4];
@@ -84,7 +86,7 @@ internal static class DeblockingFilter
                 var intra = picture.IsIntra(macroblock);
                 var transform8x8 = picture.Transform8x8[macroblock];
                 var mask = masks[macroblock];
-                var skipInternal = !intra && mask == 0 && picture.Kinds[macroblock] is MacroblockKind.PSkip or MacroblockKind.P16x16 or MacroblockKind.B16x16;
+                var skipInternal = mask == UniformMotion;
                 for (var vertical = 1; vertical >= 0; vertical--)
                 {
                     var neighbour = vertical == 1 ? left : top;
@@ -116,11 +118,45 @@ internal static class DeblockingFilter
         }
         finally
         {
-            ArrayPool<ushort>.Shared.Return(masks);
+            ArrayPool<int>.Shared.Return(masks);
         }
     }
 
-    private static ushort CoefficientMask(H264Picture picture, int macroblock)
+    private static bool HasUniformMotion(H264Picture picture, int macroblock)
+    {
+        switch (picture.Kinds[macroblock])
+        {
+            case MacroblockKind.PSkip or MacroblockKind.P16x16 or MacroblockKind.B16x16:
+                return true;
+            case MacroblockKind.IntraNxN or MacroblockKind.Intra16x16 or MacroblockKind.IntraPcm or MacroblockKind.NotDecoded:
+                return false;
+        }
+
+        for (var list = 0; list < 2; list++)
+        {
+            var references = picture.ReferenceIndexes[list].AsSpan(macroblock * 4, 4);
+            if (references.IndexOfAnyExcept(references[0]) >= 0)
+            {
+                return false;
+            }
+
+            var pictureIds = picture.ReferencePictureIds[list].AsSpan(macroblock * 4, 4);
+            if (references[0] >= 0 && pictureIds.IndexOfAnyExcept(pictureIds[0]) >= 0)
+            {
+                return false;
+            }
+
+            var vectors = MemoryMarshal.Cast<short, int>(picture.MotionVectors[list].AsSpan(macroblock * 32, 32));
+            if (references[0] >= 0 && vectors.IndexOfAnyExcept(vectors[0]) >= 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static int CoefficientMask(H264Picture picture, int macroblock)
     {
         var totals = picture.TotalCoefficientsLuma.AsSpan(macroblock * 16, 16);
         var mask = 0;
@@ -148,13 +184,28 @@ internal static class DeblockingFilter
             mask = expanded;
         }
 
-        return (ushort)mask;
+        return mask;
     }
 
     private static bool EdgeStrengths(H264Picture picture, int q, int qMask, int p, int pMask, bool vertical, int edge, Span<byte> strengths)
     {
         var any = false;
         var pEdge = edge == 0 ? 3 : edge - 1;
+        if ((qMask & UniformMotion) != 0 && (edge != 0 || (pMask & UniformMotion) != 0))
+        {
+            var motion = edge == 0 && !SameMotion(picture, q, 0, p, 0) && MotionDiffers(picture, q, 0, p, 0) ? (byte)1 : (byte)0;
+            for (var k = 0; k < 4; k++)
+            {
+                var qBlock = vertical ? (k * 4) + edge : (edge * 4) + k;
+                var pBlock = vertical ? (k * 4) + pEdge : (pEdge * 4) + k;
+                var strength = ((qMask >> qBlock) & 1) != 0 || ((pMask >> pBlock) & 1) != 0 ? (byte)2 : motion;
+                strengths[k] = strength;
+                any |= strength != 0;
+            }
+
+            return any;
+        }
+
         for (var k = 0; k < 4; k++)
         {
             var qBlock = vertical ? (k * 4) + edge : (edge * 4) + k;
@@ -280,6 +331,12 @@ internal static class DeblockingFilter
         var step = vertical ? 1 : stride;
         var along = vertical ? stride : 1;
         var start = origin + (vertical ? edge * 4 : edge * 4 * stride);
+        if (CanFilterVectors)
+        {
+            FilterLumaVectors(buffer, start, stride, vertical, strengths, alpha, beta, indexA);
+            return;
+        }
+
         for (var i = 0; i < 16; i++)
         {
             var bS = strengths[i >> 2];
@@ -317,6 +374,12 @@ internal static class DeblockingFilter
 
             var origin = (plane == 0 ? frame.OffsetU : frame.OffsetV) + ((q / width) * 8 * stride) + ((q % width) * 8);
             var start = origin + (vertical ? edge * 4 : edge * 4 * stride);
+            if (CanFilterVectors)
+            {
+                FilterChromaVectors(buffer, start, stride, vertical, strengths, alpha, beta, indexA);
+                continue;
+            }
+
             for (var i = 0; i < 8; i++)
             {
                 var bS = strengths[i >> 1];
