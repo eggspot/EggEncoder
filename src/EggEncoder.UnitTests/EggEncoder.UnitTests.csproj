@@ -92,6 +92,8 @@
     <None Include="Containers\Mp4\h264_aac_rotated.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\hevc.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\vp9_aac.mp4" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Matroska\*.mkv" CopyToOutputDirectory="Always" />
+    <None Include="Containers\Matroska\*.webm" CopyToOutputDirectory="Always" />
     <None Include="Containers\Mp4\writer_remux.mp4" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\h264_aac.flv" CopyToOutputDirectory="Always" />
     <None Include="Containers\Flv\hevc.flv" CopyToOutputDirectory="Always" />

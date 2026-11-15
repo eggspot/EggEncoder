@@ -722,7 +722,7 @@ Rules for every Phase 5 item, on top of the ones above:
 
 ### Phase 3 — Additional containers (do after at least one native codec exists, so there's a real payload worth muxing)
 
-- [ ] **9. Matroska/WebM demux (pure C#)**
+- [x] **9. Matroska/WebM demux (pure C#)**
   - **Feasibility**: pure C#, EBML parsing (a binary tree format, broadly analogous in spirit to
     the MP4 box structure already handled). Matroska is now an IETF standard (RFC 9559),
     explicitly royalty-free and patent-free as a container. WebM is a defined Matroska subset.
@@ -730,7 +730,9 @@ Rules for every Phase 5 item, on top of the ones above:
     container) — hence placed after Phase 1, not before.
   - **Depends on**: ideally 3 or 6 (a codec worth muxing into WebM), though the demuxer itself has
     no hard technical dependency.
-  - Status: not started.
+  - Status: done. `Containers/Matroska/MatroskaFileSource` reads Matroska and WebM into the packet model:
+    H.264, H.265, AV1, VP9, AAC, MP3 and Opus tracks (others skipped and counted), lacing, unknown-size clusters,
+    non-seekable streams, video DTS rebuilt from a reorder window, Opus codec delay applied as ffprobe does.
 
 - [ ] **10. Matroska/WebM mux (pure C#)**
   - **Depends on**: 9.

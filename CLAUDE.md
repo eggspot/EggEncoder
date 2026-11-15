@@ -389,6 +389,25 @@ input's longest track; later inputs' AAC priming dropped) and `Mp4Splitter.Split
 per-part timestamps from 0) sit on top. `writer_remux.mp4` is a checked-in writer output that a test
 must reproduce byte for byte; ffprobe/framemd5 were checked against it when it was made.
 
+### Matroska/WebM (`src/EggEncoder/Containers/Matroska/`)
+
+`docs/video-support-backlog.md` item 9. `MatroskaFileSource` reads a Matroska or WebM file (RFC 9559) into a
+`MediaTrackSet` plus `MediaPacket`s, like `Mp4FileSource`: `DocType`, `Duration`, `SkippedTrackCount`, sync and
+async `ReadPackets` (once). The internal `EbmlReader` reads bounds-checked EBML headers (size limits checked before
+allocating), works on non-seekable streams and supports clusters of unknown size (a cluster ends at the next
+top-level id, pushed back). Tracks: H.264/H.265 (length prefixes widened to 4 bytes via
+`Mp4FileSource.WidenNalLengths`), AV1, VP9, AAC (legacy `A_AAC/...` ids get an AudioSpecificConfig built from the
+track's rate and channels), MP3, Opus; anything else, and tracks with `ContentEncodings`, are skipped. Track id =
+Matroska track number, timescale 1e9/TimestampScale (1000 by default). Matroska stores presentation times only:
+`MatroskaTrack` rebuilds video DTS from a 16-packet reorder window (the k-th smallest PTS, shifted by the first
+window's largest DTS - PTS, so B-frame streams start negative, as ffprobe shows), so a video packet comes out up to 16
+packets late; audio packets carry DTS = PTS and the track's CodecDelay (Opus pre-skip) is subtracted, matching
+ffprobe. `MatroskaLacing` splits Xiph, EBML and fixed lacing; laced frames step by DefaultDuration. Keyframes come
+from the SimpleBlock flag or a BlockGroup without ReferenceBlock; audio packets are always keyframes. Fixtures
+(ffmpeg-made, ffprobe ground truth in `MatroskaFileSourceTest`): `h264_aac.mkv` (a stream copy of
+`h264_aac_rotated.mp4`, payloads compared with `Mp4FileSource`) and `vp9_opus.webm`; `TestUtilities/Ebml` builds
+synthetic files (unknown sizes, every lacing, skipped tracks).
+
 ### Streaming (`src/EggEncoder/Streaming/`)
 
 A push-style, incremental live-streaming/HLS packaging effort layered on top of the codec/container
