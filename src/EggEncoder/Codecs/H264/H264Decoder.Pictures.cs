@@ -7,6 +7,8 @@ public sealed partial class H264Decoder
     private readonly List<SliceFilterParameters> _sliceFilters = new();
     private readonly Dictionary<int, (PictureParameterSet Pps, SequenceParameterSet Sps, Dequantizer Dequantizer)> _dequantizers = new();
     private readonly DecodedPictureBuffer _buffer = new();
+    private readonly CabacDecoder _cabac = new();
+    private CabacNeighbourState? _cabacState;
     private H264Picture? _current;
     private SliceHeader? _currentFirstSlice;
 
@@ -29,7 +31,12 @@ public sealed partial class H264Decoder
             ? _buffer.ReferenceListP(_current!, header, sps)
             : _buffer.ReferenceListB(_current!, header, sps, 0);
         var referencesL1 = header.Type == SliceType.B ? _buffer.ReferenceListB(_current!, header, sps, 1) : [];
-        new SliceDecoder(_current!, sps, pps, header, sliceNumber, reader, dequantizer, referencesL0, referencesL1).Decode();
+        if (pps.EntropyCodingCabac && _cabacState?.MacroblockCount != sps.MacroblockCount)
+        {
+            _cabacState = new CabacNeighbourState(sps.MacroblockCount);
+        }
+
+        new SliceDecoder(_current!, sps, pps, header, sliceNumber, reader, dequantizer, referencesL0, referencesL1, _cabac, _cabacState).Decode();
     }
 
     private void StartPicture(SliceHeader header, SequenceParameterSet sps, TimeSpan timestamp)

@@ -104,11 +104,15 @@ namespace EggEncoder.UnitTests.Codecs.H264
             return Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant();
         }
 
-        public static byte[] Nal(int header, Action<BitWriter> body)
+        public static byte[] Nal(int header, Action<BitWriter> body, bool appendStopBit = true)
         {
             var writer = new BitWriter();
             body(writer);
-            writer.WriteBits(1, 1);
+            if (appendStopBit)
+            {
+                writer.WriteBits(1, 1);
+            }
+
             writer.ByteAlign();
             var rbsp = writer.ToArray();
             var output = new List<byte> { 0, 0, 0, 1, (byte)header };

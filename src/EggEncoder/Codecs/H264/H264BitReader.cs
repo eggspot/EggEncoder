@@ -27,6 +27,10 @@ internal sealed class H264BitReader
 
     public bool IsByteAligned => (_position & 7) == 0;
 
+    public byte[] Buffer => _data;
+
+    public int ByteLength => (int)(_bitLength >> 3);
+
     public static H264BitReader FromNalPayload(ReadOnlySpan<byte> payload) => new(RemoveEmulationPrevention(payload));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -153,8 +153,13 @@ decoding order (`_motionAssigned`), and `InterPrediction` interpolates straight 
 picture (a clamped copy only for blocks touching its edge). `DecodedPictureBuffer` owns reference
 marking (sliding window, MMCO), POC (types 0/1/2), list initialisation/modification and bumping;
 pictures it drops come back through `TakeReleased` and are disposed after output is copied.
-CABAC (26) and B/High (27) extend `SliceDecoder`. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
-64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit.
+Item 26 adds CABAC: `CabacDecoder` (engine + context init from
+`CabacTables`, generated from the Recommendation's Tables 9-12..9-33/9-44/9-45) and
+`SliceDecoder.Cabac`, which parses into the same `MacroblockSyntax` (`StartIntraMacroblock`/
+`StartInterMacroblockP`/`AddSubPartitions` are shared with CAVLC); `CabacNeighbourState` (decoder-owned,
+per macroblock) keeps what context selection reads from neighbours. B/High (27) extends `SliceDecoder`. Fixtures: `UnitTests/Codecs/H264/*.h264` (x264-made,
+64x48, framemd5 literals in the tests); `H264TestStreams` builds I_PCM streams bit by bit and
+`CabacTestEncoder` (the standard's encoding process, test-only) writes CABAC bins.
 
 ### Media packet model (`src/EggEncoder/Media/`)
 
