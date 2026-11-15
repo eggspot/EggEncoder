@@ -1,0 +1,165 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+
+namespace EggEncoder.Codecs.H264;
+
+internal sealed class CabacDecoder
+{
+    private const int MaximumOverreadBytes = 8;
+
+    private readonly byte[] _states = new byte[CabacTables.ContextCount];
+    private byte[] _data = [];
+    private int _length;
+    private int _next;
+    private ulong _cache;
+    private int _cacheBits;
+    private uint _range;
+    private uint _offset;
+
+    public long BitPosition => ((long)_next * 8) - _cacheBits;
+
+    public void InitializeContexts(SliceType type, int cabacInitIdc, int sliceQp)
+    {
+        var column = type == SliceType.I ? 0 : cabacInitIdc + 1;
+        var qp = Math.Clamp(sliceQp, 0, 51);
+        var table = CabacTables.ContextInit;
+        for (var context = 0; context < CabacTables.ContextCount; context++)
+        {
+            int m = table[(context * 8) + (column * 2)];
+            int n = table[(context * 8) + (column * 2) + 1];
+            var state = Math.Clamp(((m * qp) >> 4) + n, 1, 126);
+            _states[context] = state <= 63 ? (byte)((63 - state) << 1) : (byte)(((state - 64) << 1) | 1);
+        }
+    }
+
+    public void Start(byte[] data, int length, long bitPosition)
+    {
+        if ((bitPosition & 7) != 0)
+        {
+            throw new InvalidOperationException("CABAC starts on a byte boundary");
+        }
+
+        _data = data;
+        _length = length;
+        _next = (int)(bitPosition >> 3);
+        _cache = 0;
+        _cacheBits = 0;
+        _range = 510;
+        _offset = ReadBits(9);
+        if (_offset >= 510)
+        {
+            throw new InvalidDataException("H.264: the CABAC data of a slice starts with an invalid offset");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int DecodeDecision(int context)
+    {
+        var state = _states[context];
+        uint lps = CabacTables.RangeLps[((state >> 1) << 2) + (int)((_range >> 6) & 3)];
+        _range -= lps;
+        int bin;
+        if (_offset < _range)
+        {
+            bin = state & 1;
+            _states[context] = CabacTables.NextStateMps[state];
+            if (_range >= 256)
+            {
+                return bin;
+            }
+        }
+        else
+        {
+            _offset -= _range;
+            _range = lps;
+            bin = (state & 1) ^ 1;
+            _states[context] = CabacTables.NextStateLps[state];
+        }
+
+        var shift = BitOperations.LeadingZeroCount(_range) - 23;
+        _range <<= shift;
+        _offset = (_offset << shift) | ReadBits(shift);
+        return bin;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int DecodeBypass()
+    {
+        _offset = (_offset << 1) | ReadBits(1);
+        if (_offset >= _range)
+        {
+            _offset -= _range;
+            return 1;
+        }
+
+        return 0;
+    }
+
+    public int DecodeTerminate()
+    {
+        _range -= 2;
+        if (_offset >= _range)
+        {
+            return 1;
+        }
+
+        if (_range < 256)
+        {
+            _range <<= 1;
+            _offset = (_offset << 1) | ReadBits(1);
+        }
+
+        return 0;
+    }
+
+    public int DecodeExpGolombBypass(int k)
+    {
+        var value = 0;
+        while (DecodeBypass() == 1)
+        {
+            value += 1 << k;
+            k++;
+            if (k > 24)
+            {
+                throw new InvalidDataException("H.264: a CABAC Exp-Golomb code is too long");
+            }
+        }
+
+        while (k-- > 0)
+        {
+            value += DecodeBypass() << k;
+        }
+
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private uint ReadBits(int count)
+    {
+        if (_cacheBits < count)
+        {
+            Refill();
+        }
+
+        var value = (uint)(_cache >> (64 - count));
+        _cache <<= count;
+        _cacheBits -= count;
+        return value;
+    }
+
+    private void Refill()
+    {
+        if (_next > _length + MaximumOverreadBytes)
+        {
+            throw new InvalidDataException("H.264: the CABAC data of a slice ends too early");
+        }
+
+        while (_cacheBits <= 56)
+        {
+            ulong value = _next < _length ? _data[_next] : (byte)0;
+            _cache |= value << (56 - _cacheBits);
+            _cacheBits += 8;
+            _next++;
+        }
+    }
+}

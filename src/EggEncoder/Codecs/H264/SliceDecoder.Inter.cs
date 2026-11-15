@@ -2,13 +2,13 @@ namespace EggEncoder.Codecs.H264;
 
 internal sealed partial class SliceDecoder
 {
-    private void ParseInterMacroblockP(int mbType)
+    private void StartInterMacroblockP(int mbType)
     {
         var syntax = _syntax;
         syntax.ClearResidual();
         syntax.Transform8x8 = false;
+        syntax.QpDelta = 0;
         syntax.PartitionCount = 0;
-        var referenceCount = _header.ReferenceCountL0;
         switch (mbType)
         {
             case 0:
@@ -31,11 +31,20 @@ internal sealed partial class SliceDecoder
             default:
                 syntax.Kind = MacroblockKind.P8x8;
                 syntax.Shape = InterShape.Partition8x8;
-                ParseSubMacroblocksP(mbType == 4, referenceCount);
                 break;
         }
+    }
 
-        if (syntax.Shape != InterShape.Partition8x8)
+    private void ParseInterMacroblockP(int mbType)
+    {
+        var syntax = _syntax;
+        var referenceCount = _header.ReferenceCountL0;
+        StartInterMacroblockP(mbType);
+        if (syntax.Shape == InterShape.Partition8x8)
+        {
+            ParseSubMacroblocksP(mbType == 4, referenceCount);
+        }
+        else
         {
             var parts = syntax.PartitionCount;
             for (var i = 0; i < parts; i++)
@@ -54,12 +63,11 @@ internal sealed partial class SliceDecoder
         var pattern = MacroblockLayout.InterCodedBlockPattern[_reader.ReadUe(47, "coded_block_pattern")];
         syntax.CodedBlockPatternLuma = pattern & 15;
         syntax.CodedBlockPatternChroma = pattern >> 4;
-        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && _reader.ReadFlag())
+        if (syntax.CodedBlockPatternLuma > 0 && _pps.Transform8x8Mode && UsesOnly8x8Partitions() && _reader.ReadFlag())
         {
             throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
         }
 
-        syntax.QpDelta = 0;
         if (syntax.CodedBlockPatternLuma > 0 || syntax.CodedBlockPatternChroma > 0)
         {
             syntax.QpDelta = _reader.ReadSe(-26, 25, "mb_qp_delta");
@@ -83,30 +91,8 @@ internal sealed partial class SliceDecoder
 
         for (var i = 0; i < 4; i++)
         {
-            var x = (i & 1) * 2;
-            var y = (i >> 1) * 2;
             var first = syntax.PartitionCount;
-            switch (syntax.SubMacroblockTypes[i])
-            {
-                case 0:
-                    AddPartition(x, y, 2, 2, i);
-                    break;
-                case 1:
-                    AddPartition(x, y, 2, 1, i);
-                    AddPartition(x, y + 1, 2, 1, i);
-                    break;
-                case 2:
-                    AddPartition(x, y, 1, 2, i);
-                    AddPartition(x + 1, y, 1, 2, i);
-                    break;
-                default:
-                    AddPartition(x, y, 1, 1, i);
-                    AddPartition(x + 1, y, 1, 1, i);
-                    AddPartition(x, y + 1, 1, 1, i);
-                    AddPartition(x + 1, y + 1, 1, 1, i);
-                    break;
-            }
-
+            AddSubPartitions(i);
             for (var p = first; p < syntax.PartitionCount; p++)
             {
                 syntax.Partitions[p].ReferenceL0 = references[i];
@@ -114,6 +100,32 @@ internal sealed partial class SliceDecoder
                 syntax.Partitions[p].MvdL0X = _reader.ReadSe(-8192, 8191, "mvd_l0");
                 syntax.Partitions[p].MvdL0Y = _reader.ReadSe(-8192, 8191, "mvd_l0");
             }
+        }
+    }
+
+    private void AddSubPartitions(int index)
+    {
+        var x = (index & 1) * 2;
+        var y = (index >> 1) * 2;
+        switch (_syntax.SubMacroblockTypes[index])
+        {
+            case 0:
+                AddPartition(x, y, 2, 2, index);
+                break;
+            case 1:
+                AddPartition(x, y, 2, 1, index);
+                AddPartition(x, y + 1, 2, 1, index);
+                break;
+            case 2:
+                AddPartition(x, y, 1, 2, index);
+                AddPartition(x + 1, y, 1, 2, index);
+                break;
+            default:
+                AddPartition(x, y, 1, 1, index);
+                AddPartition(x + 1, y, 1, 1, index);
+                AddPartition(x, y + 1, 1, 1, index);
+                AddPartition(x + 1, y + 1, 1, 1, index);
+                break;
         }
     }
 

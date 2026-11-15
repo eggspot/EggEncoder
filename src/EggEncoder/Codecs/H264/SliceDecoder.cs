@@ -18,13 +18,17 @@ internal sealed partial class SliceDecoder
     private readonly H264Picture[] _referencesL0;
     private readonly H264Picture[] _referencesL1;
     private readonly bool[] _motionAssigned = new bool[16];
+    private readonly CabacDecoder? _cabac;
+    private readonly CabacNeighbourState? _cabacState;
     private int _qp;
     private int _macroblock;
     private int _mbX;
     private int _mbY;
 
-    public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer, H264Picture[] referencesL0, H264Picture[] referencesL1)
+    public SliceDecoder(H264Picture picture, SequenceParameterSet sps, PictureParameterSet pps, SliceHeader header, int sliceNumber, H264BitReader reader, Dequantizer dequantizer, H264Picture[] referencesL0, H264Picture[] referencesL1, CabacDecoder? cabac = null, CabacNeighbourState? cabacState = null)
     {
+        _cabac = cabac;
+        _cabacState = cabacState;
         _referencesL0 = referencesL0;
         _referencesL1 = referencesL1;
         _picture = picture;
@@ -42,7 +46,8 @@ internal sealed partial class SliceDecoder
     {
         if (_pps.EntropyCodingCabac)
         {
-            throw new NotSupportedException("H.264: CABAC entropy coding is not supported yet");
+            DecodeCabac();
+            return;
         }
 
         _macroblock = _header.FirstMacroblock;
@@ -119,22 +124,43 @@ internal sealed partial class SliceDecoder
         Array.Clear(_motionAssigned);
     }
 
-    private void ParseIntraMacroblock(int mbType)
+    private void StartIntraMacroblock(int mbType)
     {
         var syntax = _syntax;
         syntax.ClearResidual();
         syntax.Transform8x8 = false;
+        syntax.QpDelta = 0;
+        syntax.PartitionCount = 0;
         if (mbType == 25)
         {
             syntax.Kind = MacroblockKind.IntraPcm;
+        }
+        else if (mbType == 0)
+        {
+            syntax.Kind = MacroblockKind.IntraNxN;
+        }
+        else
+        {
+            syntax.Kind = MacroblockKind.Intra16x16;
+            syntax.Intra16x16PredictionMode = (mbType - 1) % 4;
+            syntax.CodedBlockPatternChroma = (mbType - 1) / 4 % 3;
+            syntax.CodedBlockPatternLuma = mbType >= 13 ? 15 : 0;
+        }
+    }
+
+    private void ParseIntraMacroblock(int mbType)
+    {
+        var syntax = _syntax;
+        StartIntraMacroblock(mbType);
+        if (syntax.Kind == MacroblockKind.IntraPcm)
+        {
             _reader.ByteAlign();
             _reader.ReadAlignedBytes(384).CopyTo(syntax.PcmSamples);
             return;
         }
 
-        if (mbType == 0)
+        if (syntax.Kind == MacroblockKind.IntraNxN)
         {
-            syntax.Kind = MacroblockKind.IntraNxN;
             if (_pps.Transform8x8Mode && _reader.ReadFlag())
             {
                 throw new NotSupportedException("H.264: the 8x8 transform (High profile) is not supported yet");
@@ -156,14 +182,9 @@ internal sealed partial class SliceDecoder
         }
         else
         {
-            syntax.Kind = MacroblockKind.Intra16x16;
-            syntax.Intra16x16PredictionMode = (mbType - 1) % 4;
-            syntax.CodedBlockPatternChroma = (mbType - 1) / 4 % 3;
-            syntax.CodedBlockPatternLuma = mbType >= 13 ? 15 : 0;
             syntax.IntraChromaPredictionMode = (int)_reader.ReadUe(3, "intra_chroma_pred_mode");
         }
 
-        syntax.QpDelta = 0;
         if (syntax.CodedBlockPatternLuma > 0 || syntax.CodedBlockPatternChroma > 0 || syntax.Kind == MacroblockKind.Intra16x16)
         {
             syntax.QpDelta = _reader.ReadSe(-26, 25, "mb_qp_delta");

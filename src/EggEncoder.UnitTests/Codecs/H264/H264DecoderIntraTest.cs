@@ -139,15 +139,6 @@ namespace EggEncoder.UnitTests.Codecs.H264
         }
 
         [Fact]
-        public void Cabac_Should_Throw_NotSupported_For_Now()
-        {
-            var stream = Sps(1, 1).Concat(Pps(cabac: true)).Concat(PcmPicture(1, 1, 0, _ => true, (_, _) => 0)).ToArray();
-            using var decoder = new H264Decoder();
-
-            decoder.Invoking(d => d.Decode(stream, TimeSpan.Zero, _ => { })).Should().Throw<NotSupportedException>();
-        }
-
-        [Fact]
         public void Damaged_Streams_Should_Only_Throw_InvalidData_Or_NotSupported()
         {
             var original = Fixture("intra_slices.h264");

@@ -418,9 +418,26 @@ Rules for every Phase 5 item, on top of the ones above:
     `EGGENCODER_H264_CONFORMANCE` (a local directory of conformance streams with `.yuv`
     references) runs the JVT vectors when set. A 1080p Baseline P stream (60 frames, made
     locally) decodes byte-identical to ffmpeg at about 45 fps on one core of an i7-8850H.
-- [ ] **26. H.264 decode III** — CABAC. Fixtures: Main profile with `bframes=0`.
+- [x] **26. H.264 decode III** — CABAC. Fixtures: Main profile with `bframes=0`.
   - **Depends on**: 25.
-  - Status: not started.
+  - Status: done. `CabacDecoder` is the arithmetic decoding engine of the standard (9-bit
+    offset, renormalisation by leading-zero count from a 64-bit bit cache, bypass and terminate),
+    with contexts 0-459 initialised from Tables 9-12 to 9-33 by slice QP and `cabac_init_idc`
+    (`CabacTables`, generated from the Recommendation's text). `SliceDecoder.Cabac` parses I and P
+    macroblocks into the same `MacroblockSyntax` the CAVLC path fills, so reconstruction is shared:
+    mb_skip_flag, mb_type and sub_mb_type binarizations, ref_idx, mvd (UEG3), mb_qp_delta,
+    intra modes, intra_chroma_pred_mode, coded_block_pattern, coded_block_flag and the residual
+    (significance map, coeff_abs_level_minus1 with UEG0, sign), end_of_slice_flag and I_PCM with the
+    engine restarted after the samples. Neighbour data for context selection (coded block flags,
+    coded block pattern, chroma mode, absolute mvd) lives in `CabacNeighbourState`. Bit-exact with
+    ffmpeg on eight x264 Main streams (intra with two slices, intra at QP 4 with escape-coded levels,
+    P with every partition, four references with three slices and `cabac_init_idc` 1, weighted
+    prediction with `cabac_init_idc` 2 and a chroma QP offset, QP 45, a still scene of skips, a
+    cropped picture). A test-side encoder written from the encoding process of the standard checks
+    the engine on 20,000 random bins and builds a CABAC slice of I_PCM macroblocks. A 1080p Main P
+    stream (60 frames, three references, made locally) decodes byte-identical to ffmpeg at about
+    28 fps on one core of an i7-8850H (ffmpeg with one thread: about 150 fps); a performance pass
+    follows item 27.
 - [ ] **27. H.264 decode IV (High profile)** — B slices with spatial and temporal direct modes,
   weighted bi-prediction, 8x8 transform and intra 8x8, scaling matrices, output reordering.
   Synthetic fixtures only; real camera and AI-model clips through the local-path test.
