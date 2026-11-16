@@ -1,3 +1,6 @@
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.InteropServices;
 namespace EggEncoder.Codecs.H264;
@@ -220,6 +223,12 @@ internal static class InverseTransform
 {
     public static void Add4x4(Span<int> d, byte[] plane, int offset, int stride)
     {
+        if (Sse2.IsSupported || AdvSimd.Arm64.IsSupported)
+        {
+            Add4x4Vectors(d, plane, offset, stride);
+            return;
+        }
+
         for (var row = 0; row < 4; row++)
         {
             var r = row * 4;
@@ -314,6 +323,71 @@ internal static class InverseTransform
         v[6] = b2 - b5;
         v[7] = b0 - b7;
     }
+
+    private static void Add4x4Vectors(Span<int> d, byte[] plane, int offset, int stride)
+    {
+        ref var start = ref MemoryMarshal.GetReference(d[..16]);
+        var (c0, c1, c2, c3) = Transpose4x4(
+            Vector128.LoadUnsafe(ref start),
+            Vector128.LoadUnsafe(ref start, 4),
+            Vector128.LoadUnsafe(ref start, 8),
+            Vector128.LoadUnsafe(ref start, 12));
+        var e0 = c0 + c2;
+        var e1 = c0 - c2;
+        var e2 = Vector128.ShiftRightArithmetic(c1, 1) - c3;
+        var e3 = c1 + Vector128.ShiftRightArithmetic(c3, 1);
+        var (r0, r1, r2, r3) = Transpose4x4(e0 + e3, e1 + e2, e1 - e2, e0 - e3);
+        var g0 = r0 + r2;
+        var g1 = r0 - r2;
+        var g2 = Vector128.ShiftRightArithmetic(r1, 1) - r3;
+        var g3 = r1 + Vector128.ShiftRightArithmetic(r3, 1);
+        var rows = plane.AsSpan(offset, (3 * stride) + 4);
+        AddResidualRow(rows, 0, g0 + g3);
+        AddResidualRow(rows, stride, g1 + g2);
+        AddResidualRow(rows, 2 * stride, g1 - g2);
+        AddResidualRow(rows, 3 * stride, g0 - g3);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddResidualRow(Span<byte> rows, int index, Vector128<int> residual)
+    {
+        ref var target = ref Unsafe.Add(ref MemoryMarshal.GetReference(rows), index);
+        var prediction = Vector128.WidenLower(Vector128.WidenLower(Vector128.CreateScalar(Unsafe.ReadUnaligned<uint>(ref target)).AsByte())).AsInt32();
+        var sum = prediction + Vector128.ShiftRightArithmetic(residual + Vector128.Create(32), 6);
+        var clamped = Vector128.Min(Vector128.Max(sum, Vector128<int>.Zero), Vector128.Create(255)).AsUInt32();
+        var words = Vector128.Narrow(clamped, clamped);
+        Unsafe.WriteUnaligned(ref target, Vector128.Narrow(words, words).AsUInt32().ToScalar());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (Vector128<int>, Vector128<int>, Vector128<int>, Vector128<int>) Transpose4x4(Vector128<int> r0, Vector128<int> r1, Vector128<int> r2, Vector128<int> r3)
+    {
+        var a = ZipLow(r0, r1);
+        var b = ZipLow(r2, r3);
+        var c = ZipHigh(r0, r1);
+        var e = ZipHigh(r2, r3);
+        return (
+            ZipLow(a.AsUInt64(), b.AsUInt64()).AsInt32(),
+            ZipHigh(a.AsUInt64(), b.AsUInt64()).AsInt32(),
+            ZipLow(c.AsUInt64(), e.AsUInt64()).AsInt32(),
+            ZipHigh(c.AsUInt64(), e.AsUInt64()).AsInt32());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> ZipLow(Vector128<int> left, Vector128<int> right) =>
+        Sse2.IsSupported ? Sse2.UnpackLow(left, right) : AdvSimd.Arm64.ZipLow(left, right);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> ZipHigh(Vector128<int> left, Vector128<int> right) =>
+        Sse2.IsSupported ? Sse2.UnpackHigh(left, right) : AdvSimd.Arm64.ZipHigh(left, right);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ulong> ZipLow(Vector128<ulong> left, Vector128<ulong> right) =>
+        Sse2.IsSupported ? Sse2.UnpackLow(left, right) : AdvSimd.Arm64.ZipLow(left, right);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ulong> ZipHigh(Vector128<ulong> left, Vector128<ulong> right) =>
+        Sse2.IsSupported ? Sse2.UnpackHigh(left, right) : AdvSimd.Arm64.ZipHigh(left, right);
 
     private static void Put(byte[] plane, int index, int residual) =>
         plane[index] = IntraPrediction.Clip(plane[index] + ((residual + 32) >> 6));
