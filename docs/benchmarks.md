@@ -92,6 +92,21 @@ right = 0.85 x left plus its own noise and tone):
 Uncorrelated stereo stays at 17.63 dB (LAME 17.90); mid/side is never chosen there. Speed is unchanged by this step
 (780 ms at 192 kb/s and 888 ms at 320 kb/s by default).
 
+Then speed again (correlated file, 60 s): the CBR gain search starts from the previous frame's gain (frames planned in
+fixed runs of 8, so bytes don't depend on threads), leftover spending re-costs the split it already has instead of
+searching every split again (0.04 dB lower at 192 kb/s), and `|x|^0.75` comes from two vector square roots.
+
+| | 192 kb/s | 320 kb/s |
+|---|---|---|
+| Default (up to 4 threads), before | 780 ms | 888-1,092 ms |
+| Default, now | 601 ms | 726 ms |
+| One thread, before | 1,625-1,706 ms | 1,877-2,246 ms |
+| One thread, now | 1,005-1,214 ms | 959-1,589 ms |
+| ffmpeg + LAME (one thread) | about 600 ms | about 700 ms |
+
+On one thread LAME is still about twice as fast; this encoder now also searches every Huffman region split and
+shares bits across a frame, and scores higher SNR than LAME on these files.
+
 Every row writes the same bytes. What changed: the polyphase filter keeps its 512-sample history in a buffer it shifts
 once every 112 calls instead of every call, and runs its window and cosine matrix with one vector lane per output
 (each lane keeps the scalar summation order, with separate multiply and add, so results are identical); the
