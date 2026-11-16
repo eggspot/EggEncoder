@@ -10,6 +10,12 @@ internal static class ForwardTransform
 {
     public static void Core4x4(ReadOnlySpan<int> residual, Span<int> coefficients)
     {
+        if (IntegerTransposes.IsSupported)
+        {
+            Core4x4Vectors(residual, coefficients);
+            return;
+        }
+
         Span<int> rows = stackalloc int[16];
         for (var i = 0; i < 4; i++)
         {
@@ -46,6 +52,12 @@ internal static class ForwardTransform
 
     public static void Core8x8(ReadOnlySpan<int> residual, Span<int> coefficients)
     {
+        if (IntegerTransposes.IsSupported)
+        {
+            Core8x8Vectors(residual, coefficients);
+            return;
+        }
+
         Span<int> rows = stackalloc int[64];
         for (var i = 0; i < 8; i++)
         {
@@ -67,6 +79,87 @@ internal static class ForwardTransform
                 coefficients[(i * 8) + j] = output[i];
             }
         }
+    }
+
+    private static void Core4x4Vectors(ReadOnlySpan<int> residual, Span<int> coefficients)
+    {
+        ref var source = ref MemoryMarshal.GetReference(residual[..16]);
+        var (c0, c1, c2, c3) = IntegerTransposes.Transpose4x4(
+            Vector128.LoadUnsafe(ref source),
+            Vector128.LoadUnsafe(ref source, 4),
+            Vector128.LoadUnsafe(ref source, 8),
+            Vector128.LoadUnsafe(ref source, 12));
+        var (t0, t1, t2, t3) = Butterfly4(c0, c1, c2, c3);
+        var (r0, r1, r2, r3) = IntegerTransposes.Transpose4x4(t0, t1, t2, t3);
+        var (o0, o1, o2, o3) = Butterfly4(r0, r1, r2, r3);
+        ref var target = ref MemoryMarshal.GetReference(coefficients[..16]);
+        o0.StoreUnsafe(ref target);
+        o1.StoreUnsafe(ref target, 4);
+        o2.StoreUnsafe(ref target, 8);
+        o3.StoreUnsafe(ref target, 12);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (Vector128<int>, Vector128<int>, Vector128<int>, Vector128<int>) Butterfly4(Vector128<int> x0, Vector128<int> x1, Vector128<int> x2, Vector128<int> x3)
+    {
+        var s03 = x0 + x3;
+        var d03 = x0 - x3;
+        var s12 = x1 + x2;
+        var d12 = x1 - x2;
+        return (s03 + s12, Vector128.ShiftLeft(d03, 1) + d12, s03 - s12, d03 - Vector128.ShiftLeft(d12, 1));
+    }
+
+    private static void Core8x8Vectors(ReadOnlySpan<int> residual, Span<int> coefficients)
+    {
+        ref var source = ref MemoryMarshal.GetReference(residual[..64]);
+        Span<Vector128<int>> low = stackalloc Vector128<int>[8];
+        Span<Vector128<int>> high = stackalloc Vector128<int>[8];
+        for (var row = 0; row < 8; row++)
+        {
+            low[row] = Vector128.LoadUnsafe(ref source, (nuint)(row * 8));
+            high[row] = Vector128.LoadUnsafe(ref source, (nuint)((row * 8) + 4));
+        }
+
+        IntegerTransposes.Transpose8x8(low, high);
+        Butterfly8Lanes(low);
+        Butterfly8Lanes(high);
+        IntegerTransposes.Transpose8x8(low, high);
+        Butterfly8Lanes(low);
+        Butterfly8Lanes(high);
+        ref var target = ref MemoryMarshal.GetReference(coefficients[..64]);
+        for (var row = 0; row < 8; row++)
+        {
+            low[row].StoreUnsafe(ref target, (nuint)(row * 8));
+            high[row].StoreUnsafe(ref target, (nuint)((row * 8) + 4));
+        }
+    }
+
+    private static void Butterfly8Lanes(Span<Vector128<int>> x)
+    {
+        var a0 = x[0] + x[7];
+        var a1 = x[1] + x[6];
+        var a2 = x[2] + x[5];
+        var a3 = x[3] + x[4];
+        var a4 = x[0] - x[7];
+        var a5 = x[1] - x[6];
+        var a6 = x[2] - x[5];
+        var a7 = x[3] - x[4];
+        var b0 = a0 + a3;
+        var b1 = a1 + a2;
+        var b2 = a0 - a3;
+        var b3 = a1 - a2;
+        var b4 = a5 + a6 + (Vector128.ShiftRightArithmetic(a4, 1) + a4);
+        var b5 = a4 - a7 - (Vector128.ShiftRightArithmetic(a6, 1) + a6);
+        var b6 = a4 + a7 - (Vector128.ShiftRightArithmetic(a5, 1) + a5);
+        var b7 = a5 - a6 + (Vector128.ShiftRightArithmetic(a7, 1) + a7);
+        x[0] = b0 + b1;
+        x[4] = b0 - b1;
+        x[2] = b2 + Vector128.ShiftRightArithmetic(b3, 1);
+        x[6] = Vector128.ShiftRightArithmetic(b2, 1) - b3;
+        x[1] = b4 + Vector128.ShiftRightArithmetic(b7, 2);
+        x[7] = Vector128.ShiftRightArithmetic(b4, 2) - b7;
+        x[3] = b5 + Vector128.ShiftRightArithmetic(b6, 2);
+        x[5] = b6 - Vector128.ShiftRightArithmetic(b5, 2);
     }
 
     private static void Butterfly8(ReadOnlySpan<int> x, int inputStep, Span<int> y, int outputStep)
