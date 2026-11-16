@@ -758,7 +758,6 @@ internal sealed partial class SliceDecoder
         var syntax = _syntax;
         var lumaTotals = _picture.TotalCoefficientsLuma.AsSpan(_macroblock * 16, 16);
         var chromaTotals = _picture.TotalCoefficientsChroma.AsSpan(_macroblock * 8, 8);
-        Span<short> scanned = stackalloc short[16];
         var intra = syntax.Kind is MacroblockKind.IntraNxN or MacroblockKind.Intra16x16;
         if (syntax.Kind == MacroblockKind.Intra16x16)
         {
@@ -767,10 +766,8 @@ internal sealed partial class SliceDecoder
             if (cabac.DecodeDecision(CodedBlockFlagOffset + CodedBlockFlagOffsets[0] + increment) == 1)
             {
                 _codedBlockFlags |= CabacNeighbourState.LumaDcFlag;
-                scanned.Clear();
-                ReadCoefficients(cabac, 0, 16, scanned);
+                ReadCoefficients(cabac, 0, 16, syntax.LumaDc, ScanOrder);
                 syntax.LumaDcCoded = true;
-                scanned.CopyTo(syntax.LumaDc);
             }
         }
 
@@ -798,15 +795,9 @@ internal sealed partial class SliceDecoder
             }
 
             _codedBlockFlags |= 1 << ((by * 4) + bx);
-            scanned.Clear();
-            var total = ReadCoefficients(cabac, category, coefficientCount, scanned);
+            var total = ReadCoefficients(cabac, category, coefficientCount, syntax.LumaCoefficients.AsSpan(block * 16, 16), ac ? ZigZagAfterDc : MacroblockLayout.ZigZag4x4);
             lumaTotals[(by * 4) + bx] = (byte)total;
             syntax.LumaBlockCoded[block] = true;
-            var coefficients = syntax.LumaCoefficients.AsSpan(block * 16, 16);
-            for (var i = 0; i < coefficientCount; i++)
-            {
-                coefficients[MacroblockLayout.ZigZag4x4[i + (ac ? 1 : 0)]] = scanned[i];
-            }
         }
 
         if (syntax.CodedBlockPatternChroma == 0)
@@ -825,10 +816,8 @@ internal sealed partial class SliceDecoder
             }
 
             _codedBlockFlags |= flag;
-            scanned.Clear();
-            ReadCoefficients(cabac, 3, 4, scanned);
+            ReadCoefficients(cabac, 3, 4, syntax.ChromaDc.AsSpan(plane * 4, 4), ScanOrder);
             syntax.ChromaDcCoded[plane] = true;
-            scanned[..4].CopyTo(syntax.ChromaDc.AsSpan(plane * 4, 4));
         }
 
         if (syntax.CodedBlockPatternChroma < 2)
@@ -849,15 +838,9 @@ internal sealed partial class SliceDecoder
                 }
 
                 _codedBlockFlags |= CabacNeighbourState.ChromaAcFlag(plane, cx, cy);
-                scanned.Clear();
-                var total = ReadCoefficients(cabac, 4, 15, scanned);
+                var total = ReadCoefficients(cabac, 4, 15, syntax.ChromaAc.AsSpan(((plane * 4) + block) * 16, 16), ZigZagAfterDc);
                 chromaTotals[(plane * 4) + block] = (byte)total;
                 syntax.ChromaAcBlockCoded[(plane * 4) + block] = true;
-                var coefficients = syntax.ChromaAc.AsSpan(((plane * 4) + block) * 16, 16);
-                for (var i = 0; i < 15; i++)
-                {
-                    coefficients[MacroblockLayout.ZigZag4x4[i + 1]] = scanned[i];
-                }
             }
         }
     }
@@ -911,7 +894,7 @@ internal sealed partial class SliceDecoder
             positions[found++] = 63;
         }
 
-        ReadLevels(cabac, CoefficientAbsLevel8x8Offset, 4, positions[..found], scanned);
+        ReadLevels(cabac, CoefficientAbsLevel8x8Offset, 4, positions[..found], scanned, ScanOrder8x8);
         return found;
     }
 
@@ -949,7 +932,13 @@ internal sealed partial class SliceDecoder
         return (flags & CabacNeighbourState.ChromaAcFlag(plane, nx, ny)) != 0 ? 1 : 0;
     }
 
-    private static int ReadCoefficients(CabacDecoder cabac, int category, int count, Span<short> scanned)
+    private static readonly byte[] ScanOrder = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+    private static readonly byte[] ZigZagAfterDc = MacroblockLayout.ZigZag4x4[1..];
+
+    private static readonly byte[] ScanOrder8x8 = Enumerable.Range(0, 64).Select(i => (byte)i).ToArray();
+
+    private static int ReadCoefficients(CabacDecoder cabac, int category, int count, Span<short> output, ReadOnlySpan<byte> rasterPositions)
     {
         var significantBase = SignificantCoefficientOffset + SignificantOffsets[category];
         var lastBase = LastSignificantCoefficientOffset + SignificantOffsets[category];
@@ -978,11 +967,11 @@ internal sealed partial class SliceDecoder
             positions[found++] = count - 1;
         }
 
-        ReadLevels(cabac, levelBase, category == 3 ? 3 : 4, positions[..found], scanned);
+        ReadLevels(cabac, levelBase, category == 3 ? 3 : 4, positions[..found], output, rasterPositions);
         return found;
     }
 
-    private static void ReadLevels(CabacDecoder cabac, int levelBase, int maximumGreater, ReadOnlySpan<int> positions, Span<short> scanned)
+    private static void ReadLevels(CabacDecoder cabac, int levelBase, int maximumGreater, ReadOnlySpan<int> positions, Span<short> output, ReadOnlySpan<byte> rasterPositions)
     {
         var greaterThanOne = 0;
         var equalToOne = 0;
@@ -1026,7 +1015,7 @@ internal sealed partial class SliceDecoder
                 greaterThanOne++;
             }
 
-            scanned[positions[j]] = (short)(negative ? -level : level);
+            output[rasterPositions[positions[j]]] = (short)(negative ? -level : level);
         }
     }
 }
