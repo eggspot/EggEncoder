@@ -308,11 +308,12 @@ correctly; `Mp3EncoderSnrTest`'s new `Encode_Should_PreserveTheExactTailOfRealAu
 checks this directly (the bug doesn't reliably show up in a whole-signal SNR or duration check
 alone).
 
-One real, deliberately accepted limitation: this encoder's own "EggEncdr" version string (not
-"LAME"/"Lavf"/"Lavc") means FFmpeg's own demuxer -- whose delay/padding parsing gates specifically
-on those three exact strings -- won't itself auto-trim a file this encoder writes, since writing
-one of those three strings would falsely claim to be that tool. This project's own `Mp3Probe`
-reads the fields regardless of version string for exactly that reason. Also not computed: the
+The Info tag's version string is `LavfEgg` (owner's decision, 2026-11-16, replacing the earlier `EggEncdr`). FFmpeg's
+demuxer reads the delay/padding fields only when the string starts with "LAME", "Lavf" or "Lavc", so with `EggEncdr`
+ffmpeg-based players (ffmpeg/ffprobe, Chrome and Edge, VLC, mpv) kept the 1,057-sample start delay and the end
+padding. `Lavf` is what FFmpeg's own muxer writes into every MP3 Info tag, including encodes LAME didn't produce, and
+players treat it as a non-LAME file (no LAME-version workarounds); `Egg` names this library. Speed, size and audio
+are unchanged. This project's own `Mp3Probe` reads the fields regardless of the string. Also not computed: the
 LAME tag's own Music/Info Tag CRC-16 fields (written as `0x0000`, honestly documented rather than
 guessed) -- confirming libmp3lame's own exact checksum convention would have needed reading LAME's
 own source, outside this change's sign-off (FFmpeg's own source only), and FFmpeg's own decode-side
