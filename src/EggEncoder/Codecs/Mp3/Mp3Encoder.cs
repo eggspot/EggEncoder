@@ -63,7 +63,7 @@ namespace EggEncoder.Codecs.Mp3
         /// <summary>The variable-bit-rate quality <see cref="EncodeVbr"/> and <see cref="OpenVbrSession"/> use by default.</summary>
         public const int DefaultVbrQuality = 4;
 
-        private static readonly int[] VbrTargetGains = [138, 142, 146, 150, 154, 158, 162, 166, 170, 174];
+        private static readonly int[] VbrTargetGains = [171, 172, 175, 176, 179, 180, 181, 182, 183, 184];
 
         /// <summary>
         /// Encodes a WAV file to a variable-bit-rate MP3: each frame uses the lowest MPEG-1 Layer III bitrate (32 to
