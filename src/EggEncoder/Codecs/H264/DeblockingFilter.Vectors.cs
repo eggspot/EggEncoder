@@ -36,21 +36,23 @@ internal static partial class DeblockingFilter
 
     private static void FilterChromaVectors(byte[] buffer, int start, int stride, bool vertical, ReadOnlySpan<byte> strengths, int alpha, int beta, int indexA)
     {
-        Span<short> strengthLanes = stackalloc short[8];
-        Span<short> tc0Lanes = stackalloc short[8];
-        for (var i = 0; i < 8; i++)
-        {
-            int strength = strengths[i >> 1];
-            strengthLanes[i] = (short)strength;
-            tc0Lanes[i] = strength is > 0 and < 4 ? (short)Tc0[strength - 1][indexA] : (short)0;
-        }
-
+        var s0 = (short)strengths[0];
+        var s1 = (short)strengths[1];
+        var s2 = (short)strengths[2];
+        var s3 = (short)strengths[3];
+        var t0 = ChromaTc0(s0, indexA);
+        var t1 = ChromaTc0(s1, indexA);
+        var t2 = ChromaTc0(s2, indexA);
+        var t3 = ChromaTc0(s3, indexA);
         var taps = LoadTaps(buffer, start, stride, vertical);
-        if (FilterChroma(ref taps, Vector128.Create<short>(strengthLanes), Vector128.Create<short>(tc0Lanes), alpha, beta))
+        if (FilterChroma(ref taps, Vector128.Create(s0, s0, s1, s1, s2, s2, s3, s3), Vector128.Create(t0, t0, t1, t1, t2, t2, t3, t3), alpha, beta))
         {
             StoreTaps(buffer, start, stride, vertical, taps, wide: false);
         }
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static short ChromaTc0(short strength, int indexA) => strength is > 0 and < 4 ? (short)Tc0[strength - 1][indexA] : (short)0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool FilterLuma(ref EdgeTaps taps, Vector128<short> bS, Vector128<short> tc0, int alpha, int beta)
