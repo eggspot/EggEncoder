@@ -430,6 +430,21 @@ commitments.
     investigate before joint stereo, not after. Lower priority than Phase 3 (MP3 encode) — this
     remains a real-world-interop polish item on an already-correct (per this project's own
     decoder) encoder, not a blocking defect, and is still open.
+  - **2026-11-15 findings** (official WavPack 5.9.0 Windows binaries and ffmpeg, against a matrix of
+    silence/noise/music-like/ramp content × mono/stereo × 16/24-bit, three seconds each):
+    - ffmpeg's decoder refused every file ("No block with decorrelation weights", then "... samples"):
+      a block with decorrelation terms must also carry `WP_ID_DECORR_WEIGHTS` and `WP_ID_DECORR_SAMPLES`.
+      The encoder now writes both, all zero, which is the cold start the decoder assumed anyway. With them
+      ffmpeg decodes all 16 cases bit for bit (gated test `WavPackEncoderInteropTest`).
+    - The reference `wvunpack` 5.9.0 still rejects 14 of 16 ("not compatible with this version of WavPack"
+      for noise and some others, "missing data or crc errors" for the rest; stereo silence passes). Removing
+      the decorrelation terms entirely doesn't fix it, and the block CRCs match the reference formula, so
+      the remaining difference is in the entropy bitstream or entropy metadata. A reference-encoded mono
+      silence block codes 22,050 zero samples in 4 bytes, where ours spends 2 bits per sample, so the
+      encoder's zero-run/holding-zero handling is the leading suspect.
+    - Closing this needs either more black-box experiments or reading the reference source (BSD-licensed).
+      This codec was built clean-room from general familiarity plus an arm's-length study of ffmpeg's
+      decoder (THIRD-PARTY-NOTICES), so reading the reference implementation is an owner decision.
 
 ### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
 
