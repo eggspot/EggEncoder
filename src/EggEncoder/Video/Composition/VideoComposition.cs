@@ -63,6 +63,13 @@ public sealed record VideoComposition
     /// <summary>Threads for decoding, filtering and encoding: one per processor when 0 or less.</summary>
     public int MaxDegreeOfParallelism { get; init; }
 
+    /// <summary>
+    /// The H.264 encoder: this library's own on the CPU by default (output identical on every machine),
+    /// <see cref="H264EncoderBackend.Nvenc"/> on an NVIDIA GPU, or <see cref="H264EncoderBackend.Auto"/> for the GPU when
+    /// <see cref="Codecs.H264.Nvenc.NvencH264Encoder.IsSupported"/>.
+    /// </summary>
+    public H264EncoderBackend VideoEncoder { get; init; } = H264EncoderBackend.Software;
+
     /// <summary>Where on the output timeline the thumbnail is taken: the first frame at or after it, or the last frame.</summary>
     public TimeSpan ThumbnailAt { get; init; }
 
@@ -156,6 +163,16 @@ public sealed record VideoComposition
         if (ThumbnailAt < TimeSpan.Zero)
         {
             throw new ArgumentException("The thumbnail position can't be negative", nameof(ThumbnailAt));
+        }
+
+        if (!Enum.IsDefined(VideoEncoder))
+        {
+            throw new ArgumentException("Unknown video encoder", nameof(VideoEncoder));
+        }
+
+        if (VideoEncoder == H264EncoderBackend.Nvenc && (Width % 2 != 0 || Height % 2 != 0))
+        {
+            throw new ArgumentException("NVENC needs an even canvas width and height", nameof(VideoEncoder));
         }
 
         if (ThumbnailQuantizerScale is < 1 or > 31)

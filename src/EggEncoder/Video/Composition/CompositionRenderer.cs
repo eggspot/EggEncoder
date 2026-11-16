@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EggEncoder.Codecs.H264;
+using EggEncoder.Codecs.H264.Nvenc;
 using EggEncoder.Codecs.Jpeg;
 using EggEncoder.Codecs.Mov;
 using EggEncoder.Containers.Mp4;
@@ -48,7 +49,7 @@ internal sealed class CompositionRenderer
             MaxDegreeOfParallelism = _parallelism,
             MaxDelayedFrames = EncoderDelayedFrames
         };
-        using var encoder = new H264Encoder(settings);
+        using var encoder = CreateEncoder(settings);
         var videoTrack = new MediaTrackInfo(0, MediaKind.Video, MediaCodec.H264, VideoTimescale, encoder.DecoderConfiguration.ToArray(), 0, width: _composition.Width, height: _composition.Height);
         var tracks = new List<MediaTrackInfo> { videoTrack };
         if (audio is not null)
@@ -103,7 +104,14 @@ internal sealed class CompositionRenderer
         aac.Complete();
     }
 
-    private byte[] WriteVideo(Mp4Writer writer, H264Encoder encoder, CompositionTimeline timeline, IProgress<double>? progress, CancellationToken cancellationToken)
+    private IH264Encoder CreateEncoder(H264EncoderSettings settings) => _composition.VideoEncoder switch
+    {
+        H264EncoderBackend.Nvenc => new NvencH264Encoder(settings),
+        H264EncoderBackend.Auto when settings.Width % 2 == 0 && settings.Height % 2 == 0 && NvencH264Encoder.IsSupported => new NvencH264Encoder(settings),
+        _ => new H264Encoder(settings)
+    };
+
+    private byte[] WriteVideo(Mp4Writer writer, IH264Encoder encoder, CompositionTimeline timeline, IProgress<double>? progress, CancellationToken cancellationToken)
     {
         using var frames = new BlockingCollection<VideoFrame>(FrameQueueCapacity);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
