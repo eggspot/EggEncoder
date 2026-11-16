@@ -275,6 +275,12 @@ internal static class InverseTransform
 
     public static void Add8x8(Span<int> d, byte[] plane, int offset, int stride)
     {
+        if (Sse2.IsSupported || AdvSimd.Arm64.IsSupported)
+        {
+            Add8x8Vectors(d, plane, offset, stride);
+            return;
+        }
+
         for (var row = 0; row < 8; row++)
         {
             Transform8(d.Slice(row * 8, 8), 1);
@@ -314,6 +320,83 @@ internal static class InverseTransform
         var b7 = a7 - (a1 >> 2);
         var b3 = a3 + (a5 >> 2);
         var b5 = (a3 >> 2) - a5;
+        v[0] = b0 + b7;
+        v[1] = b2 + b5;
+        v[2] = b4 + b3;
+        v[3] = b6 + b1;
+        v[4] = b6 - b1;
+        v[5] = b4 - b3;
+        v[6] = b2 - b5;
+        v[7] = b0 - b7;
+    }
+
+    private static void Add8x8Vectors(Span<int> d, byte[] plane, int offset, int stride)
+    {
+        ref var start = ref MemoryMarshal.GetReference(d[..64]);
+        Span<Vector128<int>> low = stackalloc Vector128<int>[8];
+        Span<Vector128<int>> high = stackalloc Vector128<int>[8];
+        for (var row = 0; row < 8; row++)
+        {
+            low[row] = Vector128.LoadUnsafe(ref start, (nuint)(row * 8));
+            high[row] = Vector128.LoadUnsafe(ref start, (nuint)((row * 8) + 4));
+        }
+
+        Transpose8x8(low, high);
+        Transform8Lanes(low);
+        Transform8Lanes(high);
+        Transpose8x8(low, high);
+        Transform8Lanes(low);
+        Transform8Lanes(high);
+        var rows = plane.AsSpan(offset, (7 * stride) + 8);
+        for (var row = 0; row < 8; row++)
+        {
+            AddResidualRow(rows, row * stride, low[row]);
+            AddResidualRow(rows, (row * stride) + 4, high[row]);
+        }
+    }
+
+    private static void Transpose8x8(Span<Vector128<int>> low, Span<Vector128<int>> high)
+    {
+        var (a0, a1, a2, a3) = Transpose4x4(low[0], low[1], low[2], low[3]);
+        var (b0, b1, b2, b3) = Transpose4x4(low[4], low[5], low[6], low[7]);
+        var (c0, c1, c2, c3) = Transpose4x4(high[0], high[1], high[2], high[3]);
+        var (e0, e1, e2, e3) = Transpose4x4(high[4], high[5], high[6], high[7]);
+        low[0] = a0;
+        low[1] = a1;
+        low[2] = a2;
+        low[3] = a3;
+        high[0] = b0;
+        high[1] = b1;
+        high[2] = b2;
+        high[3] = b3;
+        low[4] = c0;
+        low[5] = c1;
+        low[6] = c2;
+        low[7] = c3;
+        high[4] = e0;
+        high[5] = e1;
+        high[6] = e2;
+        high[7] = e3;
+    }
+
+    private static void Transform8Lanes(Span<Vector128<int>> v)
+    {
+        var a0 = v[0] + v[4];
+        var a4 = v[0] - v[4];
+        var a2 = Vector128.ShiftRightArithmetic(v[2], 1) - v[6];
+        var a6 = v[2] + Vector128.ShiftRightArithmetic(v[6], 1);
+        var b0 = a0 + a6;
+        var b2 = a4 + a2;
+        var b4 = a4 - a2;
+        var b6 = a0 - a6;
+        var a1 = -v[3] + v[5] - v[7] - Vector128.ShiftRightArithmetic(v[7], 1);
+        var a3 = v[1] + v[7] - v[3] - Vector128.ShiftRightArithmetic(v[3], 1);
+        var a5 = -v[1] + v[7] + v[5] + Vector128.ShiftRightArithmetic(v[5], 1);
+        var a7 = v[3] + v[5] + v[1] + Vector128.ShiftRightArithmetic(v[1], 1);
+        var b1 = a1 + Vector128.ShiftRightArithmetic(a7, 2);
+        var b7 = a7 - Vector128.ShiftRightArithmetic(a1, 2);
+        var b3 = a3 + Vector128.ShiftRightArithmetic(a5, 2);
+        var b5 = Vector128.ShiftRightArithmetic(a3, 2) - a5;
         v[0] = b0 + b7;
         v[1] = b2 + b5;
         v[2] = b4 + b3;
