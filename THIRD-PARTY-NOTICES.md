@@ -133,6 +133,31 @@ are general, published encoder techniques. No source of x264, openh264, the JM r
 ffmpeg was read or copied; x264 and ffmpeg were used only as black boxes, to compare sizes and to
 decode the output.
 
+## NVIDIA Video Codec SDK header `nvEncodeAPI.h` (struct layouts and constants only)
+
+`Codecs/H264/Nvenc/NvencApi.cs` holds struct sizes, field offsets, struct version numbers, GUIDs and
+enum values for NVENC API 12.0, taken from `nvEncodeAPI.h` as distributed in FFmpeg's
+`nv-codec-headers` (tag `n12.0.16.1`). The offsets were printed by compiling that header (`offsetof`,
+`sizeof`), not copied as source. Nothing NVIDIA ships is bundled: `NvencH264Encoder` loads the
+NVENC and CUDA driver libraries already installed with the NVIDIA driver. The header's licence:
+
+> Copyright (c) 2010-2022 NVIDIA Corporation
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+> associated documentation files (the "Software"), to deal in the Software without restriction,
+> including without limitation the rights to use, copy, modify, merge, publish, distribute,
+> sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+> NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+> OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## MP3 (MPEG-1 Layer III) encode — clean-room acknowledgment (no encoder source copied)
 
 The managed MP3 **encoder** (`Codecs/Mp3/Mp3*.cs`, replacing the former `libmp3lame.dll` P/Invoke
