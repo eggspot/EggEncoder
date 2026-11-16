@@ -335,18 +335,10 @@ internal sealed partial class SliceDecoder
     {
         _spatialDirectReady = true;
         Span<int> references = stackalloc int[2];
-        for (var list = 0; list < 2; list++)
-        {
-            var a = NeighbourMotion(-1, 0, list);
-            var b = NeighbourMotion(0, -1, list);
-            var c = NeighbourMotion(4, -1, list);
-            if (!c.Available)
-            {
-                c = NeighbourMotion(-1, -1, list);
-            }
-
-            references[list] = MinPositive(a.Reference, MinPositive(b.Reference, c.Reference));
-        }
+        var neighboursL0 = SpatialNeighbours(0);
+        var neighboursL1 = SpatialNeighbours(1);
+        references[0] = MinPositive(neighboursL0.A.Reference, MinPositive(neighboursL0.B.Reference, neighboursL0.C.Reference));
+        references[1] = MinPositive(neighboursL1.A.Reference, MinPositive(neighboursL1.B.Reference, neighboursL1.C.Reference));
 
         _spatialDirectZero = references[0] < 0 && references[1] < 0;
         if (_spatialDirectZero)
@@ -363,16 +355,40 @@ internal sealed partial class SliceDecoder
             return;
         }
 
-        var whole = new InterPartition { X = 0, Y = 0, Width = 4, Height = 4, ReferenceL0 = references[0], ReferenceL1 = references[1] };
         if (references[0] >= 0)
         {
-            (_spatialMvL0X, _spatialMvL0Y) = PredictMotion(ref whole, 0);
+            (_spatialMvL0X, _spatialMvL0Y) = SpatialPrediction(neighboursL0, references[0]);
         }
 
         if (references[1] >= 0)
         {
-            (_spatialMvL1X, _spatialMvL1Y) = PredictMotion(ref whole, 1);
+            (_spatialMvL1X, _spatialMvL1Y) = SpatialPrediction(neighboursL1, references[1]);
         }
+    }
+
+    private ((bool Available, int Reference, int X, int Y) A, (bool Available, int Reference, int X, int Y) B, (bool Available, int Reference, int X, int Y) C) SpatialNeighbours(int list)
+    {
+        var a = NeighbourMotion(-1, 0, list);
+        var b = NeighbourMotion(0, -1, list);
+        var c = NeighbourMotion(4, -1, list);
+        if (!c.Available)
+        {
+            c = NeighbourMotion(-1, -1, list);
+        }
+
+        return (a, b, c);
+    }
+
+    private static (int X, int Y) SpatialPrediction(((bool Available, int Reference, int X, int Y) A, (bool Available, int Reference, int X, int Y) B, (bool Available, int Reference, int X, int Y) C) neighbours, int reference)
+    {
+        var (a, b, c) = neighbours;
+        if (!b.Available && !c.Available && a.Available)
+        {
+            b = a;
+            c = a;
+        }
+
+        return MedianPrediction(a, b, c, reference);
     }
 
     private H264Picture ColocatedPicture =>

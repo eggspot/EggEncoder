@@ -168,9 +168,11 @@ time), then the job decodes on a LongRunning task, up to `maxDegreeOfParallelism
 since later marking (MMCO, MMCO5's POC reset) runs before earlier jobs finish. `H264Picture.Progress`
 counts final luma lines (16r+13 after deblocking row r, the next row's edge still changes the rest);
 inter prediction waits on it for the lines its vector reaches (6-tap and chroma margins included) and
-direct modes for the co-located row. Inside a job `DeblockingFilter` runs on a second thread a row
-behind decoding: row r is filtered once row r+1 is decoded (intra prediction reads unfiltered
-samples); slices out of raster order, or a single-core machine, deblock the whole picture at the end.
+direct modes for the co-located row. Row r is deblocked once row r+1 is decoded (intra prediction
+reads unfiltered samples): with one picture at a time, `DeblockingFilter` runs on a second thread a row
+behind decoding; when several pictures decode at once, the job deblocks in its own thread as each row
+starts (`SliceDecoder.RowStarted`), so it doesn't add a thread per picture; slices out of raster
+order, or a single-core machine, deblock the whole picture at the end.
 Output waits in a FIFO until its picture is decoded, so frames come out a few calls later; a job's
 error surfaces when it is retired (oldest first), and then every job is cancelled, the DPB cleared and
 decoding resumes at the next IDR. Pictures carry a hold count changed only on the calling thread
