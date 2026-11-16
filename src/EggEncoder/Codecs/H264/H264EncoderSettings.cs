@@ -36,6 +36,10 @@ public sealed record H264EncoderSettings
     /// <summary>Frames between keyframes (IDR pictures); 0 for two seconds' worth. The first frame is always a keyframe.</summary>
     public int KeyframeInterval { get; init; }
 
+    internal int EffectiveKeyframeInterval => KeyframeInterval > 0 ? KeyframeInterval : DefaultKeyframeInterval(FrameRate);
+
+    internal static int DefaultKeyframeInterval(VideoFrameRate frameRate) => Math.Max(1, (int)Math.Round(2 * frameRate.FramesPerSecond));
+
     /// <summary>The profile to write; High by default.</summary>
     public H264Profile Profile { get; init; } = H264Profile.High;
 

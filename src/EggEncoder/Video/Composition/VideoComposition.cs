@@ -63,6 +63,17 @@ public sealed record VideoComposition
     /// <summary>Threads for decoding, filtering and encoding: one per processor when 0 or less.</summary>
     public int MaxDegreeOfParallelism { get; init; }
 
+    /// <summary>
+    /// Splits the video into stretches of about this length, rounded up to whole keyframe intervals (two seconds), each
+    /// decoded and encoded on its own so several render at once on a machine with many cores; one stretch when null.
+    /// A stretch starts on a keyframe the encoder writes anyway, except after a scene with overlays, which is never
+    /// split. The output depends on this value, not on the machine or <see cref="MaxDegreeOfParallelism"/>. Six seconds
+    /// by default.
+    /// </summary>
+    public TimeSpan? ParallelSegmentDuration { get; init; } = TimeSpan.FromSeconds(6);
+
+    internal int ConcurrentSegments { get; init; }
+
     /// <summary>Where on the output timeline the thumbnail is taken: the first frame at or after it, or the last frame.</summary>
     public TimeSpan ThumbnailAt { get; init; }
 
@@ -156,6 +167,11 @@ public sealed record VideoComposition
         if (ThumbnailAt < TimeSpan.Zero)
         {
             throw new ArgumentException("The thumbnail position can't be negative", nameof(ThumbnailAt));
+        }
+
+        if (ParallelSegmentDuration is { } segment && segment <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("The parallel segment duration must be positive", nameof(ParallelSegmentDuration));
         }
 
         if (ThumbnailQuantizerScale is < 1 or > 31)

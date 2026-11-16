@@ -71,7 +71,7 @@ public sealed partial class H264Encoder : IDisposable
         }
 
         _settings = settings;
-        _keyframeInterval = settings.KeyframeInterval > 0 ? settings.KeyframeInterval : Math.Max(1, (int)Math.Round(2 * settings.FrameRate.FramesPerSecond));
+        _keyframeInterval = settings.EffectiveKeyframeInterval;
         var range = settings.ColorRange ?? VideoColorRange.Limited;
         var matrix = settings.ColorMatrix ?? (settings.Height < 720 ? VideoColorMatrix.Bt601 : VideoColorMatrix.Bt709);
         var spsRbsp = WriteSequenceParameterSet(settings, range, matrix);

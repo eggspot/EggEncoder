@@ -9,7 +9,7 @@ namespace EggEncoder.UnitTests.TestUtilities;
 
 public static class SyntheticClip
 {
-    public static void Write(string path, int width, int height, int frameCount, int framesPerSecond, YuvColor color, double toneHz = 0, double toneAmplitude = 0.3)
+    public static void Write(string path, int width, int height, int frameCount, int framesPerSecond, YuvColor color, double toneHz = 0, double toneAmplitude = 0.3, int keyframeInterval = 0)
     {
         using var file = File.Create(path);
         using var encoder = new H264Encoder(new H264EncoderSettings
@@ -19,6 +19,7 @@ public static class SyntheticClip
             FrameRate = new VideoFrameRate(framesPerSecond),
             Profile = H264Profile.Main,
             ConstantRateFactor = 18,
+            KeyframeInterval = keyframeInterval,
             ColorRange = VideoColorRange.Limited,
             ColorMatrix = VideoColorMatrix.Bt709
         });

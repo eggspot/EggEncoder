@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using EggEncoder.Codecs.H264;
 using EggEncoder.Codecs.Jpeg;
 using EggEncoder.Codecs.Mov;
@@ -18,6 +19,7 @@ internal sealed class CompositionRenderer
     private const int VideoTimescale = 90000;
     private const int FrameQueueCapacity = 4;
     private const int EncoderDelayedFrames = H264EncoderSettings.MaxDelayedFramesLimit;
+    private const int ThreadsPerConcurrentSegment = 4;
 
     private readonly VideoComposition _composition;
     private readonly VideoFramePool _pool = new();
@@ -36,6 +38,8 @@ internal sealed class CompositionRenderer
         var audio = CompositionAudio.Build(_composition, timeline, AudioChannels, AudioSampleRate);
         cancellationToken.ThrowIfCancellationRequested();
         var loudness = audio is null ? null : LoudnessMeter.MeasureIntegratedLoudness(audio);
+        var segments = CompositionSegments.Plan(_composition, timeline);
+        var concurrent = ConcurrentSegmentCount(segments.Count);
         var settings = new H264EncoderSettings
         {
             Width = _composition.Width,
@@ -45,8 +49,8 @@ internal sealed class CompositionRenderer
             Profile = _composition.Profile,
             ColorRange = VideoColorRange.Limited,
             ColorMatrix = VideoColorMatrix.Bt709,
-            MaxDegreeOfParallelism = _parallelism,
-            MaxDelayedFrames = EncoderDelayedFrames
+            MaxDegreeOfParallelism = Math.Max(1, _parallelism / concurrent),
+            MaxDelayedFrames = Math.Max(1, EncoderDelayedFrames / concurrent)
         };
         using var encoder = new H264Encoder(settings);
         var videoTrack = new MediaTrackInfo(0, MediaKind.Video, MediaCodec.H264, VideoTimescale, encoder.DecoderConfiguration.ToArray(), 0, width: _composition.Width, height: _composition.Height);
@@ -64,7 +68,7 @@ internal sealed class CompositionRenderer
             WriteAudio(writer, audio, cancellationToken);
         }
 
-        var thumbnail = WriteVideo(writer, encoder, timeline, progress, cancellationToken);
+        var thumbnail = WriteVideo(writer, encoder, settings, timeline, segments, concurrent, progress, cancellationToken);
         writer.Complete();
         progress?.Report(1);
         return new CompositionResult(
@@ -103,7 +107,132 @@ internal sealed class CompositionRenderer
         aac.Complete();
     }
 
-    private byte[] WriteVideo(Mp4Writer writer, H264Encoder encoder, CompositionTimeline timeline, IProgress<double>? progress, CancellationToken cancellationToken)
+    private int ConcurrentSegmentCount(int segmentCount)
+    {
+        var wanted = _composition.ConcurrentSegments > 0 ? _composition.ConcurrentSegments : _parallelism / ThreadsPerConcurrentSegment;
+        return Math.Clamp(wanted, 1, segmentCount);
+    }
+
+    private long ThumbnailFrameIndex(CompositionTimeline timeline)
+    {
+        for (long index = 0; index < timeline.TotalFrames; index++)
+        {
+            if (_composition.FrameRate.TimestampOf(index) >= _composition.ThumbnailAt)
+            {
+                return index;
+            }
+        }
+
+        return timeline.TotalFrames - 1;
+    }
+
+    private byte[] WriteVideo(Mp4Writer writer, H264Encoder firstEncoder, H264EncoderSettings settings, CompositionTimeline timeline, IReadOnlyList<CompositionSegment> segments, int concurrent, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        var thumbnailIndex = ThumbnailFrameIndex(timeline);
+        var frameParallelism = Math.Max(1, _parallelism / concurrent);
+        var configuration = firstEncoder.DecoderConfiguration.ToArray();
+        var outputs = new BlockingCollection<MediaPacket>[segments.Count];
+        for (var i = 0; i < outputs.Length; i++)
+        {
+            outputs[i] = new BlockingCollection<MediaPacket>();
+        }
+
+        byte[]? thumbnail = null;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var next = -1;
+        var workers = new Task[concurrent];
+        for (var w = 0; w < workers.Length; w++)
+        {
+            workers[w] = Task.Run(() =>
+            {
+                int index;
+                while ((index = Interlocked.Increment(ref next)) < segments.Count)
+                {
+                    var output = outputs[index];
+                    var encoder = index == 0 ? firstEncoder : new H264Encoder(settings);
+                    try
+                    {
+                        if (!encoder.DecoderConfiguration.ToArray().AsSpan().SequenceEqual(configuration))
+                        {
+                            throw new InvalidOperationException("Every segment's encoder must write the same parameter sets");
+                        }
+
+                        var segmentThumbnail = EncodeSegment(segments[index], encoder, timeline, thumbnailIndex, frameParallelism, output.Add, stop.Token);
+                        if (segmentThumbnail is not null)
+                        {
+                            thumbnail = segmentThumbnail;
+                        }
+                    }
+                    catch
+                    {
+                        stop.Cancel();
+                        throw;
+                    }
+                    finally
+                    {
+                        output.CompleteAdding();
+                        if (index != 0)
+                        {
+                            encoder.Dispose();
+                        }
+                    }
+                }
+            }, CancellationToken.None);
+        }
+
+        try
+        {
+            long written = 0;
+            foreach (var output in outputs)
+            {
+                foreach (var packet in output.GetConsumingEnumerable(stop.Token))
+                {
+                    writer.Write(packet);
+                    written++;
+                    progress?.Report(Math.Min(0.999, written / (double)timeline.TotalFrames));
+                }
+            }
+
+            Task.WaitAll(workers);
+            return thumbnail ?? throw new InvalidOperationException("No segment produced the thumbnail frame");
+        }
+        catch (Exception error)
+        {
+            stop.Cancel();
+            try
+            {
+                Task.WaitAll(workers);
+            }
+            catch (AggregateException)
+            {
+            }
+
+            var failure = workers
+                .Where(worker => worker.IsFaulted)
+                .SelectMany(worker => worker.Exception!.InnerExceptions)
+                .FirstOrDefault(inner => inner is not OperationCanceledException);
+            if (failure is not null && error is OperationCanceledException or AggregateException)
+            {
+                ExceptionDispatchInfo.Throw(failure);
+            }
+
+            if (error is AggregateException)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            throw;
+        }
+        finally
+        {
+            foreach (var output in outputs)
+            {
+                output.Dispose();
+            }
+        }
+    }
+
+    private byte[]? EncodeSegment(CompositionSegment segment, H264Encoder encoder, CompositionTimeline timeline, long thumbnailIndex, int frameParallelism, Action<MediaPacket> output, CancellationToken cancellationToken)
     {
         using var frames = new BlockingCollection<VideoFrame>(FrameQueueCapacity);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -111,7 +240,7 @@ internal sealed class CompositionRenderer
         {
             try
             {
-                new CompositionFrameSource(_composition, timeline, _pool, _parallelism).Produce(frame =>
+                new CompositionFrameSource(_composition, timeline, _pool, frameParallelism).Produce(segment, frame =>
                 {
                     try
                     {
@@ -131,13 +260,12 @@ internal sealed class CompositionRenderer
         }, CancellationToken.None);
 
         byte[]? thumbnail = null;
-        VideoFrame? lastFrame = null;
-        long index = 0;
+        var index = segment.FirstFrame;
         var presentationTimes = new Queue<long>();
         void WritePacket(H264EncodedFrame encoded)
         {
             var pts = presentationTimes.Dequeue();
-            writer.Write(new MediaPacket(0, pts, pts, encoded.IsKeyframe, 0, encoded.Payload));
+            output(new MediaPacket(0, pts, pts, encoded.IsKeyframe, 0, encoded.Payload.ToArray()));
         }
 
         try
@@ -146,28 +274,19 @@ internal sealed class CompositionRenderer
             {
                 using (frame)
                 {
-                    var timestamp = _composition.FrameRate.TimestampOf(index);
-                    if (thumbnail is null && timestamp >= _composition.ThumbnailAt)
+                    if (index == thumbnailIndex)
                     {
                         thumbnail = JpegEncoder.Encode(frame, _composition.ThumbnailQuantizerScale);
                     }
 
-                    presentationTimes.Enqueue(MediaTimestamp.Rescale(timestamp.Ticks, (int)TimeSpan.TicksPerSecond, VideoTimescale));
+                    presentationTimes.Enqueue(MediaTimestamp.Rescale(_composition.FrameRate.TimestampOf(index).Ticks, (int)TimeSpan.TicksPerSecond, VideoTimescale));
                     encoder.Encode(frame, WritePacket);
-                    if (thumbnail is null)
-                    {
-                        lastFrame?.Dispose();
-                        lastFrame = frame.Clone();
-                    }
-
                     index++;
-                    progress?.Report(Math.Min(0.999, index / (double)timeline.TotalFrames));
                 }
             }
 
             producer.GetAwaiter().GetResult();
             encoder.Flush(WritePacket);
-            thumbnail ??= JpegEncoder.Encode(lastFrame!, _composition.ThumbnailQuantizerScale);
             return thumbnail;
         }
         catch
@@ -187,10 +306,6 @@ internal sealed class CompositionRenderer
             }
 
             throw;
-        }
-        finally
-        {
-            lastFrame?.Dispose();
         }
     }
 }
@@ -317,7 +432,7 @@ internal sealed class CompositionFrameSource
         _parallelism = parallelism;
     }
 
-    public void Produce(Action<VideoFrame> emit, CancellationToken cancellationToken)
+    public void Produce(CompositionSegment segment, Action<VideoFrame> emit, CancellationToken cancellationToken)
     {
         var renderer = _composition.Font is null ? null : new TextRenderer(_composition.Font);
         var subtitles = _composition.Subtitles.Count > 0 ? new SubtitleBurnInTransform(renderer!, _composition.Subtitles, _composition.SubtitleStyle) : null;
@@ -335,16 +450,26 @@ internal sealed class CompositionFrameSource
 
         foreach (var plan in _timeline.Scenes)
         {
-            ProduceScene(plan, Finish, cancellationToken);
+            var first = Math.Max(plan.FirstFrame, segment.FirstFrame);
+            var end = Math.Min(plan.EndFrame, segment.EndFrame);
+            if (first < end)
+            {
+                ProduceScene(plan, first, end, Finish, cancellationToken);
+            }
         }
 
         if (_composition.EndCard is { } card)
         {
-            ProduceEndCard(card, renderer!, Finish, cancellationToken);
+            var first = Math.Max(_timeline.SceneFrames, segment.FirstFrame);
+            var end = Math.Min(_timeline.TotalFrames, segment.EndFrame);
+            if (first < end)
+            {
+                ProduceEndCard(card, renderer!, first, end, Finish, cancellationToken);
+            }
         }
     }
 
-    private void ProduceScene(CompositionTimeline.ScenePlan plan, Action<VideoFrame> emit, CancellationToken cancellationToken)
+    private void ProduceScene(CompositionTimeline.ScenePlan plan, long firstFrame, long endFrame, Action<VideoFrame> emit, CancellationToken cancellationToken)
     {
         var scene = plan.Scene;
         var rate = _composition.FrameRate;
@@ -354,14 +479,14 @@ internal sealed class CompositionFrameSource
         var overlays = new VideoFrameTransformPipeline([.. scene.Overlays]);
         using var reader = Mp4VideoReader.Open(scene.Source, _pool);
         var halfFrame = rate.FrameDuration / 2;
-        var next = plan.FirstFrame;
+        var next = firstFrame;
         VideoFrame? current = null;
         (VideoFrame Frame, TimeSpan SourceTime)? pending = null;
         try
         {
-            using var decoded = reader.ReadFrames(scene.Start).GetEnumerator();
+            using var decoded = reader.ReadFrames(scene.Start + rate.TimestampOf(firstFrame - plan.FirstFrame), dropBefore: scene.Start).GetEnumerator();
             pending = Next(decoded, prepare);
-            while (next < plan.EndFrame)
+            while (next < endFrame)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var clipTime = scene.Start + rate.TimestampOf(next - plan.FirstFrame);
@@ -406,7 +531,7 @@ internal sealed class CompositionFrameSource
         return (fitted!, time);
     }
 
-    private void ProduceEndCard(CompositionEndCard card, TextRenderer renderer, Action<VideoFrame> emit, CancellationToken cancellationToken)
+    private void ProduceEndCard(CompositionEndCard card, TextRenderer renderer, long firstFrame, long endFrame, Action<VideoFrame> emit, CancellationToken cancellationToken)
     {
         var rate = _composition.FrameRate;
         using var background = _pool.Rent(_composition.Width, _composition.Height, VideoColorRange.Limited, VideoColorMatrix.Bt709);
@@ -416,7 +541,7 @@ internal sealed class CompositionFrameSource
         text.Apply(background.Clone(), frame => drawn = frame);
         using (drawn)
         {
-            for (var index = _timeline.SceneFrames; index < _timeline.TotalFrames; index++)
+            for (var index = firstFrame; index < endFrame; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var output = drawn!.Clone();

@@ -99,7 +99,17 @@ Backlog item 31. `VideoComposition` (public record; `CompositionScene`, `Composi
 `LoudnessNormalizer`), the AAC packets, then video: `CompositionFrameSource` on a producer task
 (decode via `Mp4VideoReader`, `ColorConvertTransform` to BT.709 limited, `FitTransform`, overlays,
 nearest-time frame picking, `SubtitleBurnInTransform`, end card) feeding a bounded queue to the
-`H264Encoder` and `Mp4Writer`. Overlays must not change the frame count. `Media/MediaFormatSniffer`
+`H264Encoder` and `Mp4Writer`. Overlays must not change the frame count. Parallel segments
+(`ParallelSegmentDuration`, 6 s by default, null = one segment): `CompositionSegments.Plan` cuts the output frames
+into stretches rounded up to whole default keyframe intervals (`H264EncoderSettings.DefaultKeyframeInterval`, 2 s), so
+a stretch starts on an IDR the encoder writes anyway; a scene with overlays is never split (overlay instances aren't
+thread-safe), which moves the cut to that scene's end; a tail under two frames joins the last stretch. Each stretch runs
+its own frame source (`Produce(segment)`: a scene entered mid-way decodes from the keyframe at or before the stretch's
+clip time with `Mp4VideoReader.ReadFrames(startAt, dropBefore: scene.Start)`, so every frame pick equals the sequential
+one) and its own `H264Encoder`; up to `MaxDegreeOfParallelism / 4` run at once (internal `ConcurrentSegments` overrides),
+threads and delayed frames split between them. Packets are written in order from per-stretch queues (later stretches
+buffer encoded bytes only); the thumbnail is the frame index at `ThumbnailAt`. Output bytes depend on the plan, not on
+the machine; a failure in one stretch cancels the others. `Media/MediaFormatSniffer`
 maps leading bytes to the extension the library dispatches on; `PcmAudio.Decode` sniffs names without
 one. Tests build clips with `TestUtilities/SyntheticClip`.
 

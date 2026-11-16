@@ -80,6 +80,12 @@ namespace EggEncoder.Containers.Mp4
             return ReadFramesCore(startAt, startAt);
         }
 
+        internal IEnumerable<VideoFrame> ReadFrames(TimeSpan startAt, TimeSpan dropBefore)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return ReadFramesCore(startAt, dropBefore);
+        }
+
         /// <summary>
         /// Returns the first frame shown at or after <paramref name="position"/>, or the last frame
         /// when the position is past the end.
