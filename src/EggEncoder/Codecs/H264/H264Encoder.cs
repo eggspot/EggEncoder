@@ -252,6 +252,8 @@ public sealed partial class H264Encoder : IDisposable
         _reference = null;
     }
 
+    private bool WritesEachRow => _framesAtOnce > 1 && _workersPerFrame == 1;
+
     private PendingFrame RentPendingFrame()
     {
         if (_spareFrames.TryPop(out var spare))
@@ -260,7 +262,8 @@ public sealed partial class H264Encoder : IDisposable
         }
 
         var source = _pool.Rent(_sps.WidthInMacroblocks * 16, _sps.HeightInMacroblocks * 16, _range, _matrix);
-        return new PendingFrame(_sps.MacroblockCount, _pps.EntropyCodingCabac, source);
+        var syntaxCount = WritesEachRow ? _sps.WidthInMacroblocks : _sps.MacroblockCount;
+        return new PendingFrame(_sps.MacroblockCount, syntaxCount, _pps.EntropyCodingCabac, source);
     }
 
     private void HandOutFinishedFrames(Action<H264EncodedFrame> output)
@@ -375,7 +378,7 @@ public sealed partial class H264Encoder : IDisposable
                 }
 
                 var address = (row * width) + x;
-                slices[worker].UseSyntax(syntaxes[address]);
+                slices[worker].UseSyntax(syntaxes[address % syntaxes.Length]);
                 skipped[address] = encoders[worker].Analyse(address);
                 progress.Report(row, x + 1);
             }
@@ -412,7 +415,7 @@ public sealed partial class H264Encoder : IDisposable
         if (workers == 1)
         {
             var sliceWriter = new MacroblockEncoder.SliceWriter(bits, cabac, header.Type, qp, encoders[workers], syntaxes, skipped);
-            var writeEachRow = _framesAtOnce > 1;
+            var writeEachRow = WritesEachRow;
             for (var row = 0; row < rows; row++)
             {
                 AnalyseRow(0, row);
@@ -610,11 +613,11 @@ internal sealed class ReferencePublisher
 
 internal sealed class PendingFrame
 {
-    public PendingFrame(int macroblockCount, bool cabac, VideoFrame source)
+    public PendingFrame(int macroblockCount, int syntaxCount, bool cabac, VideoFrame source)
     {
         Source = source;
-        Syntaxes = new MacroblockSyntax[macroblockCount];
-        for (var i = 0; i < macroblockCount; i++)
+        Syntaxes = new MacroblockSyntax[syntaxCount];
+        for (var i = 0; i < syntaxCount; i++)
         {
             Syntaxes[i] = new MacroblockSyntax();
         }
