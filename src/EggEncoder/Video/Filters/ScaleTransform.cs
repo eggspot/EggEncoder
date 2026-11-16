@@ -72,6 +72,11 @@ public sealed class ScaleTransform : IVideoFrameTransform
             throw new ArgumentException($"The source rectangle {source} is not inside the {frame.Width}x{frame.Height} frame");
         }
 
+        if (source == new VideoRectangle(0, 0, _width, _height) && frame.Width == _width && frame.Height == _height)
+        {
+            return frame;
+        }
+
         if (_luma is null || _preparedFor != (frame.Width, frame.Height))
         {
             (_luma, _chroma) = PlaneScaler.Create(_kernel, frame.Width, frame.Height, source, _width, _height);
