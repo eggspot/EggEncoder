@@ -68,6 +68,18 @@ and `-q:a 4`): 0.75 s wall, of which 0.15 s is ffmpeg starting and reading the f
 | One thread, now | 770-830 ms | 600-680 ms |
 | Default (up to 4 threads), now | 306 ms | 308 ms |
 | ffmpeg + LAME | about 600 ms | about 600 ms |
+| Default, with three-region Huffman coding and count1 (v4.112+) | 626-692 ms (320 kb/s: 790-925 ms) | 334-400 ms |
+| One thread, same | 1,270-1,540 ms (320 kb/s: 1.7-1.9 s) | |
+
+The three-region Huffman coding and count1 region (below) trade speed for quality per bit; making that coding fast
+again is the next MP3 encoder item. Quality on the same file, decoded by ffmpeg, signal-to-noise against the source
+(`ffmpeg + LAME` uses `-b:a`/`-q:a`):
+
+| | One table per granule (v4.111.3) | Three regions + count1 | LAME |
+|---|---|---|---|
+| CBR 192 kb/s | 14.25 dB | 19.37 dB | 17.53 dB |
+| CBR 320 kb/s | 24.86 dB | 27.67 dB | 29.36 dB |
+| VBR best quality | 0.62 MB, 10.3 dB | 2.39 MB, 27.6 dB | 1.14 MB, 25.2 dB (`-V 0`) |
 
 Every row writes the same bytes. What changed: the polyphase filter keeps its 512-sample history in a buffer it shifts
 once every 112 calls instead of every call, and runs its window and cosine matrix with one vector lane per output

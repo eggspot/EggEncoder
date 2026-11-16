@@ -576,11 +576,16 @@ commitments.
     ways down to 64 values, then the 32x64 cosine matrix, divided by 32.
   - Quantisation inverts the decoder's power law `xr = sign(is) * |is|^(4/3) * 2^((global_gain - 210) / 4)`
     (the formula was confirmed from published technical sources, since the extracted standard text showed it
-    only as an image). No per-band scalefactors (scalefac_compress 0) and no count1 region: every nonzero
-    coefficient is coded as big-value pairs with one Huffman table for the granule, table 15 when every
-    magnitude fits in 0-15, otherwise the smallest escape table (24-31) whose linbits covers the largest
-    magnitude, so a quiet granule never pays table 31's escape bits.
-  - `FindPlan` binary-searches global_gain 0-255 for the finest step that fits the bit budget. A gain whose
+    only as an image). No per-band scalefactors (scalefac_compress 0). After the last nonzero value, trailing
+    quadruples whose values are all within +/-1 go into the count1 region (table A or B, whichever costs less: a
+    4-bit pattern then a sign per nonzero); the big-values area before it is split into three regions at long
+    scalefactor band starts (region0_count 0-15, region1_count 0-7), each with the cheapest of the two or three
+    tables whose range covers its largest value (table 0 for an all-zero region; 1-13/15 by width; one of 16-23 and
+    one of 24-31 by linbits above 15). Bit costs come from per-table arrays of code length plus sign bits.
+  - `FindPlan` searches global_gain 0-255 for the finest step that fits the bit budget (a binary search for a
+    frame's first granule and channel, outward from that gain for the other three), costing each probe with a
+    split into thirds of the bands; at the gain it finds it searches every region split with per-table prefix
+    sums, then tries finer gains while they still fit (re-costing the same split first). A gain whose
     largest magnitude no table can hold counts as "doesn't fit", so the search keeps raising the gain; if
     nothing fits (a budget of zero) the coarsest gain is used, since the frame size is a hard ceiling.
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
@@ -592,12 +597,13 @@ commitments.
     after item 6 ships with real numbers in hand, rather than committing to a size now.
   - Status: VBR done, psychoacoustic tuning not started. `Mp3Encoder.EncodeVbr`/`OpenVbrSession` take a
     quality from 0 (best) to 9 (smallest), like LAME's `-V` scale, default 4. Each frame is planned at every
-    MPEG-1 Layer III bitrate from 32 to 320 kb/s and written at the lowest one whose quantiser plan reaches
-    the quality's global-gain target (`VbrTargetGains`, calibrated on music-like test signals: quality 0 is
-    about 320 kb/s, 4 about 200 kb/s, 9 about 36 kb/s; silence stays at 32 kb/s). The first frame is a
-    Xing header (flags frames, bytes and a 100-entry seek table) with the LAME-tag gapless values, so
-    decoders and ffprobe report the right duration. Bit-reservoir borrowing and psychoacoustic masking are
-    still out of scope.
+    MPEG-1 Layer III bitrate from 32 to 320 kb/s and written at the lowest one where every granule's global gain
+    is at or below its target, `R(quality) + 2 * log2(max(energy, 2^-20))`: scaling a signal by `a` keeps the
+    same quantised values when the gain rises by `4 * log2(a)`, so the target holds SNR roughly constant whatever
+    the level (R = 172, 174, 176, 178, 180, 183, 186, 189, 192, 195). Noise-like content at quality 0 runs near
+    320 kb/s (about 27.6 dB on the benchmark file); tones need far fewer bits for the same quality. Silence stays
+    at 32 kb/s. The first frame is a Xing header (flags frames, bytes and a 100-entry seek table) with the
+    LAME-tag gapless values. Bit-reservoir borrowing and psychoacoustic masking are still out of scope.
 
 ### Phase 4 — Cleanup (do last, only once items 1–7 are all merged)
 
