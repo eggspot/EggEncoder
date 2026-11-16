@@ -336,7 +336,7 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        private const string InfoTagVersionString = "EggEncdr\0";
+        private const string InfoTagVersionString = "LavfEgg\0\0";
 
         internal byte[] BuildInfoTagFrame(int frameCount, int byteCount, int startPadSamples, int endPadSamples, byte[]? seekTable = null)
         {

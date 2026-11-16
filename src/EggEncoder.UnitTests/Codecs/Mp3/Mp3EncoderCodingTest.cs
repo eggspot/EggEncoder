@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using EggEncoder.Codecs.Mp3;
 using EggEncoder.UnitTests.TestUtilities;
 using FluentAssertions;
@@ -127,6 +128,47 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             }
 
             return samples;
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Ffmpeg_Should_Trim_The_Encoder_Delay_And_Padding(bool variableBitRate)
+        {
+            if (Environment.GetEnvironmentVariable("EGGENCODER_FFMPEG_ORACLE") != "1")
+            {
+                return;
+            }
+
+            var samples = Stereo(seconds: 2, correlation: 0.5);
+            var path = Encode(samples, encoder => variableBitRate
+                ? Mp3Encoder.OpenVbrSession(encoder, Channels, SampleRate, bitsPerSample: 16, quality: 2)
+                : Mp3Encoder.OpenSession(encoder, Channels, SampleRate, bitsPerSample: 16, bitRateKbps: 192));
+            try
+            {
+                using var process = Process.Start(new ProcessStartInfo("ffmpeg", ["-v", "error", "-i", path, "-f", "s16le", "-ac", "2", "-"]) { RedirectStandardOutput = true, RedirectStandardError = true })!;
+                using var pcm = new MemoryStream();
+                process.StandardOutput.BaseStream.CopyTo(pcm);
+                process.WaitForExit();
+                process.ExitCode.Should().Be(0, process.StandardError.ReadToEnd());
+                var bytes = pcm.ToArray();
+
+                (bytes.Length / 2).Should().Be(samples.Length);
+                double signal = 0;
+                double noise = 0;
+                for (var i = SampleRate / 10 * Channels; i < samples.Length - (SampleRate / 10 * Channels); i++)
+                {
+                    var actual = BitConverter.ToInt16(bytes, i * 2);
+                    signal += (double)samples[i] * samples[i];
+                    noise += (double)(actual - samples[i]) * (actual - samples[i]);
+                }
+
+                (10 * Math.Log10(signal / Math.Max(noise, 1))).Should().BeGreaterThan(15);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
         }
 
         private static string Encode(int[] samples, Func<string, Mp3EncoderSession> open)
