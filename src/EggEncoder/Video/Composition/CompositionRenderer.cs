@@ -17,7 +17,7 @@ internal sealed class CompositionRenderer
     private const int AudioChannels = 2;
     private const int VideoTimescale = 90000;
     private const int FrameQueueCapacity = 4;
-    private const int EncoderDelayedFrames = 2;
+    private const int EncoderDelayedFrames = H264EncoderSettings.MaxDelayedFramesLimit;
 
     private readonly VideoComposition _composition;
     private readonly VideoFramePool _pool = new();
