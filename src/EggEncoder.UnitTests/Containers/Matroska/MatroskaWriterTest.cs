@@ -116,7 +116,7 @@ namespace EggEncoder.UnitTests.Containers.Matroska
 
         private static byte[] Write(MediaTrackSet tracks, IEnumerable<MediaPacket> packets, MatroskaDocType docType, bool seekable)
         {
-            var destination = seekable ? new MemoryStream() : new WriteOnlyStream();
+            Stream destination = seekable ? new MemoryStream() : new WriteOnlyStream();
             using (var writer = new MatroskaWriter(destination, docType, leaveOpen: true))
             {
                 writer.Open(tracks);

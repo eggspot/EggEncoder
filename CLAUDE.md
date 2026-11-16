@@ -444,6 +444,16 @@ from the SimpleBlock flag or a BlockGroup without ReferenceBlock; audio packets 
 `h264_aac_rotated.mp4`, payloads compared with `Mp4FileSource`) and `vp9_opus.webm`; `TestUtilities/Ebml` builds
 synthetic files (unknown sizes, every lacing, skipped tracks).
 
+Item 10: `MatroskaWriter : IMediaPacketSink` (sync core + async wrappers, `MatroskaDocType.Matroska`/`WebM`) writes the
+same codecs forward as packets arrive (WebM: VP9, AV1, Opus only), with the internal `EbmlWriter`. SimpleBlocks in
+millisecond clusters, a new cluster at each keyframe of the first video track, after 5 s or 5 MiB, or when a block's
+relative time wouldn't fit 16 bits; avcC/hvcC written with 4-byte NAL lengths to match the packets; Opus pre-skip
+written as CodecDelay (plus 80 ms SeekPreRoll) and added to block times, so `MatroskaFileSource` gives the same
+packets back. A seekable destination gets cues for the first video track's keyframes and its segment size and
+duration patched in by `Complete`; otherwise the segment keeps an unknown size, as in a live recording. A DTS that
+doesn't increase per track, an unknown track or another ConfigVersion is refused. Tests rewrite both fixtures and
+remux `h264_aac_rotated.mp4`; an `EGGENCODER_FFMPEG_ORACLE=1`-gated test runs `ffprobe` on the output.
+
 ### AVI (`src/EggEncoder/Containers/Avi/`)
 
 `docs/video-support-backlog.md` item 11. `AviFileSource` reads RIFF AVI (OpenDML `AVIX` lists too) into the packet
