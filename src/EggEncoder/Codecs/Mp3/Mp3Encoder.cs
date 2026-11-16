@@ -1,6 +1,5 @@
 using EggEncoder.Codecs;
 using EggEncoder.Codecs.Wav;
-using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.Mp3
 {
@@ -140,7 +139,13 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _channels;
         private readonly int _bitsPerSampleShift;
         private readonly Mp3FrameEncoder _frameEncoder;
-        private readonly List<int> _pendingInterleaved = [];
+        private const int FramesPerBatch = 32;
+
+        private readonly List<Mp3FrameEncoder.AnalyzedFrame> _analyzed = [];
+        private Task<byte[][]>? _encoding;
+        private int _maxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 4);
+        private int[] _pending = new int[FrameSamples * 4];
+        private int _pendingCount;
         private readonly long _infoTagFrameOffset;
         private readonly bool _variableBitRate;
         private readonly List<long> _frameOffsets = [];
@@ -164,6 +169,12 @@ namespace EggEncoder.Codecs.Mp3
             _totalByteCount = placeholderInfoTagFrame.Length;
         }
 
+        internal int MaxDegreeOfParallelism
+        {
+            get => _maxDegreeOfParallelism;
+            set => _maxDegreeOfParallelism = Math.Max(1, value);
+        }
+
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
         {
             if (frameCount <= 0)
@@ -172,16 +183,15 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var sampleCount = frameCount * _channels;
+            EnsurePendingCapacity(_pendingCount + sampleCount);
             for (var i = 0; i < sampleCount; i++)
             {
                 var sample = buffer[i];
-                _pendingInterleaved.Add(_bitsPerSampleShift >= 0 ? sample >> _bitsPerSampleShift : sample << -_bitsPerSampleShift);
+                _pending[_pendingCount + i] = _bitsPerSampleShift >= 0 ? sample >> _bitsPerSampleShift : sample << -_bitsPerSampleShift;
             }
 
-            while (_pendingInterleaved.Count >= FrameSamples * _channels)
-            {
-                EncodeFrame();
-            }
+            _pendingCount += sampleCount;
+            EncodeWholeFrames();
         }
 
         public void Finish()
@@ -193,24 +203,13 @@ namespace EggEncoder.Codecs.Mp3
 
             _finished = true;
 
-            var remainingFrames = _pendingInterleaved.Count / _channels;
+            var remainingFrames = _pendingCount / _channels;
             var naturalPaddingFrames = remainingFrames > 0 ? FrameSamples - remainingFrames : 0;
-            if (naturalPaddingFrames > 0)
-            {
-                for (var i = 0; i < naturalPaddingFrames * _channels; i++)
-                {
-                    _pendingInterleaved.Add(0);
-                }
-
-                EncodeFrame();
-            }
-
-            for (var i = 0; i < FrameSamples * _channels; i++)
-            {
-                _pendingInterleaved.Add(0);
-            }
-
-            EncodeFrame();
+            AppendSilence(naturalPaddingFrames * _channels);
+            AppendSilence(FrameSamples * _channels);
+            EncodeWholeFrames();
+            EncodeAnalyzedFrames();
+            WriteEncodedFrames();
 
             const int flushFrameSamples = FrameSamples;
             var startPad = Mp3Encoder.EncoderDelaySamples;
@@ -246,14 +245,80 @@ namespace EggEncoder.Codecs.Mp3
             return table;
         }
 
-        private void EncodeFrame()
+        private void EnsurePendingCapacity(int count)
         {
-            _frameOffsets.Add(_totalByteCount);
-            var frameBytes = _frameEncoder.EncodeFrame(CollectionsMarshal.AsSpan(_pendingInterleaved)[..(FrameSamples * _channels)]);
-            _destStream.Write(frameBytes);
-            _pendingInterleaved.RemoveRange(0, FrameSamples * _channels);
-            _audioFrameCount++;
-            _totalByteCount += frameBytes.Length;
+            if (count > _pending.Length)
+            {
+                Array.Resize(ref _pending, Math.Max(count, _pending.Length * 2));
+            }
+        }
+
+        private void AppendSilence(int samples)
+        {
+            EnsurePendingCapacity(_pendingCount + samples);
+            Array.Clear(_pending, _pendingCount, samples);
+            _pendingCount += samples;
+        }
+
+        private void EncodeWholeFrames()
+        {
+            var frameLength = FrameSamples * _channels;
+            var offset = 0;
+            while (_pendingCount - offset >= frameLength)
+            {
+                var frames = Math.Min(FramesPerBatch - _analyzed.Count, (_pendingCount - offset) / frameLength);
+                _analyzed.AddRange(_frameEncoder.AnalyzeFrames(_pending, offset, frames, _maxDegreeOfParallelism));
+                offset += frames * frameLength;
+                if (_analyzed.Count == FramesPerBatch)
+                {
+                    EncodeAnalyzedFrames();
+                }
+            }
+
+            _pendingCount -= offset;
+            Array.Copy(_pending, offset, _pending, 0, _pendingCount);
+        }
+
+        private void EncodeAnalyzedFrames()
+        {
+            WriteEncodedFrames();
+            if (_analyzed.Count == 0)
+            {
+                return;
+            }
+
+            var frames = _analyzed.ToArray();
+            _analyzed.Clear();
+            if (_maxDegreeOfParallelism == 1)
+            {
+                _encoding = Task.FromResult(Array.ConvertAll(frames, _frameEncoder.Encode));
+                return;
+            }
+
+            _encoding = Task.Run(() =>
+            {
+                var encoded = new byte[frames.Length][];
+                Parallel.For(0, frames.Length, new ParallelOptions { MaxDegreeOfParallelism = _maxDegreeOfParallelism - 1 }, i => encoded[i] = _frameEncoder.Encode(frames[i]));
+                return encoded;
+            });
+        }
+
+        private void WriteEncodedFrames()
+        {
+            if (_encoding is null)
+            {
+                return;
+            }
+
+            var encoded = _encoding.GetAwaiter().GetResult();
+            _encoding = null;
+            foreach (var frameBytes in encoded)
+            {
+                _frameOffsets.Add(_totalByteCount);
+                _destStream.Write(frameBytes);
+                _audioFrameCount++;
+                _totalByteCount += frameBytes.Length;
+            }
         }
     }
 }

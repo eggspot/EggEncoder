@@ -2,35 +2,21 @@ using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.Mp3
 {
-    // Quantizes one granule/channel's 576 alias-reduced MDCT coefficients and Huffman-codes them,
-    // per the spec's own (decoder-side, inverted here for encoding) non-uniform power-law
-    // quantizer formula -- confirmed via independent published technical sources (not any
-    // encoder's source) since this project's own extraction of the ISO/IEC 11172-3 standard text
-    // rendered this one formula as an unreadable embedded equation image:
-    //   xr(i) = sign(is(i)) * |is(i)|^(4/3) * 2^((global_gain-210)/4)
-    // This baseline never uses per-band scalefactors (scalefac_compress=0, i.e. slen1=slen2=0,
-    // every scalefactor implicitly 0) or the count1 (quadruples) region -- every nonzero
-    // coefficient is coded in the big_values region as pairs, using a single Huffman table for the
-    // whole granule (table 15 if every quantized magnitude fits in 0-15 directly, otherwise the
-    // smallest escape-capable table (24-31) whose linbits covers the largest magnitude present).
-    // Simpler than per-region table selection or count1 exploitation, matching this project's own
-    // "correctness first, not yet compression-competitive" MVP precedent (see FlacEncoder's own
-    // items 2/3 history, and WavPackBlockEncoder's own single-decorrelation-term choice).
     internal static class Mp3Quantizer
     {
         private const int CoefficientCount = 576;
         private const double GainBase = 210.0;
+        private const int GainCount = 256;
 
-        // Escape-capable tables in ascending linbits order -- the smallest one whose maximum
-        // representable escaped value (15 + 2^linbits - 1) covers this granule's own largest
-        // quantized magnitude is chosen, so a quiet granule never pays for table 31's own
-        // (wasteful, for small values) 13 escape bits per large value.
         private static readonly int[] _escapeTableSelects = [24, 25, 26, 27, 28, 29, 30, 31];
 
         public readonly record struct Plan(int GlobalGain, int TableSelect, int BigValues, int BitCount, int[] Quantized);
 
-        public static Plan FindPlan(double[] xr, int maxBits)
+        public static Plan FindPlan(double[] xr, int maxBits) => FindPlan(xr, maxBits, null);
+
+        public static Plan FindPlan(double[] xr, int maxBits, PlanCache? cache)
         {
+            cache ??= new PlanCache();
             if (xr.Length != CoefficientCount)
             {
                 throw new ArgumentException($"Expected exactly {CoefficientCount} coefficients", nameof(xr));
@@ -43,7 +29,7 @@ namespace EggEncoder.Codecs.Mp3
             while (low <= high)
             {
                 var mid = (low + high) / 2;
-                var candidate = BuildPlan(xr, mid);
+                var candidate = cache.Get(xr, mid);
 
                 if (candidate is { } plan && plan.BitCount <= maxBits)
                 {
@@ -56,11 +42,7 @@ namespace EggEncoder.Codecs.Mp3
                 }
             }
 
-            // No global_gain in [0,255] fit the budget (an extreme edge case -- e.g. maxBits itself
-            // is 0) -- fall back to the largest gain (coarsest quantization, fewest bits) even if it
-            // still exceeds maxBits, since the caller's own byte budget is a hard ceiling this
-            // encoder cannot shrink further without dropping data outright.
-            return best ?? BuildPlan(xr, 255) ?? new Plan(255, 24, 0, 0, new int[CoefficientCount]);
+            return best ?? cache.Get(xr, 255) ?? new Plan(255, 24, 0, 0, new int[CoefficientCount]);
         }
 
         public static void Write(BitWriter writer, Plan plan)
@@ -81,17 +63,59 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        private static Plan? BuildPlan(double[] xr, int globalGain)
+        internal sealed class PlanCache
         {
-            var scale = Math.Pow(2.0, -(globalGain - GainBase) / 4.0);
+            private readonly Plan?[] _plans = new Plan?[GainCount];
+            private readonly bool[] _built = new bool[GainCount];
+            private readonly double[] _companded = new double[CoefficientCount];
+            private readonly double[] _largestFrom = new double[CoefficientCount];
+            private double[]? _coefficients;
+
+            public Plan? Get(double[] xr, int globalGain)
+            {
+                if (!ReferenceEquals(xr, _coefficients))
+                {
+                    Array.Clear(_built);
+                    _coefficients = xr;
+                    for (var i = 0; i < CoefficientCount; i++)
+                    {
+                        _companded[i] = Math.Pow(Math.Abs(xr[i]), 0.75);
+                    }
+
+                    var largest = 0.0;
+                    for (var i = CoefficientCount - 1; i >= 0; i--)
+                    {
+                        largest = Math.Max(largest, _companded[i]);
+                        _largestFrom[i] = largest;
+                    }
+                }
+
+                if (!_built[globalGain])
+                {
+                    _plans[globalGain] = BuildPlan(xr, _companded, _largestFrom, globalGain);
+                    _built[globalGain] = true;
+                }
+
+                return _plans[globalGain];
+            }
+        }
+
+        private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int globalGain)
+        {
+            var scale = Math.Pow(2.0, -(globalGain - GainBase) * 3.0 / 16.0);
             var quantized = new int[CoefficientCount];
             var maxMagnitude = 0;
             var lastNonZero = -1;
-
-            for (var i = 0; i < CoefficientCount; i++)
+            var end = CoefficientCount;
+            while (end > 0 && largestFrom[end - 1] * scale < 0.5)
             {
-                var magnitude = Math.Abs(xr[i]) * scale;
-                var value = magnitude > 0 ? (int)Math.Round(Math.Pow(magnitude, 0.75), MidpointRounding.AwayFromZero) : 0;
+                end--;
+            }
+
+            for (var i = 0; i < end; i++)
+            {
+                var magnitude = companded[i] * scale;
+                var value = magnitude >= 0.5 ? (int)Math.Round(magnitude, MidpointRounding.AwayFromZero) : 0;
                 quantized[i] = xr[i] < 0 ? -value : value;
 
                 if (value != 0)
@@ -110,10 +134,6 @@ namespace EggEncoder.Codecs.Mp3
             var tableSelect = SelectTable(maxMagnitude, out var width, out var linbits);
             if (tableSelect < 0)
             {
-                // Even the largest escape table (31, max representable 15+8191=8206) can't hold this
-                // magnitude -- global_gain needs to go up further; report back as "doesn't fit" so
-                // the binary search above keeps increasing it rather than ever writing a value this
-                // encoder cannot represent at all.
                 return null;
             }
 

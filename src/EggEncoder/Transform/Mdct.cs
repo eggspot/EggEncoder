@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Numerics;
 
 namespace EggEncoder.Transform
 {
@@ -71,6 +72,11 @@ namespace EggEncoder.Transform
             var coefficientCount = coefficients.Length;
             var sampleCount = samples.Length;
             var table = GetDirectTable(coefficientCount);
+            if (table is not null)
+            {
+                DirectForwardFromTable(samples, coefficients, table);
+                return;
+            }
 
             for (var k = 0; k < coefficientCount; k++)
             {
@@ -81,6 +87,31 @@ namespace EggEncoder.Transform
                 }
 
                 coefficients[k] = sum;
+            }
+        }
+
+        private static void DirectForwardFromTable(double[] samples, double[] coefficients, double[] table)
+        {
+            var coefficientCount = coefficients.Length;
+            Array.Clear(coefficients);
+            var vectorEnd = coefficientCount - (coefficientCount % Vector<double>.Count);
+            var output = coefficients.AsSpan();
+            for (var n = 0; n < samples.Length; n++)
+            {
+                var sample = samples[n];
+                var row = table.AsSpan(n * coefficientCount, coefficientCount);
+                var broadcast = new Vector<double>(sample);
+                var k = 0;
+                for (; k < vectorEnd; k += Vector<double>.Count)
+                {
+                    var sum = new Vector<double>(output[k..]) + (broadcast * new Vector<double>(row[k..]));
+                    sum.CopyTo(output[k..]);
+                }
+
+                for (; k < coefficientCount; k++)
+                {
+                    output[k] += sample * row[k];
+                }
             }
         }
 
