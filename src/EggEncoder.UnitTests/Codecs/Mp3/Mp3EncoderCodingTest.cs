@@ -48,6 +48,87 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             }
         }
 
+        [Fact]
+        public void Correlated_Stereo_Should_Use_Mid_Side_Frames_And_Gain_Snr()
+        {
+            var samples = Stereo(seconds: 3, correlation: 0.95);
+
+            var path = Encode(samples, encoder => Mp3Encoder.OpenSession(encoder, Channels, SampleRate, bitsPerSample: 16, bitRateKbps: 192));
+
+            try
+            {
+                MidSideFrames(File.ReadAllBytes(path)).Should().BeGreaterThan(100);
+                Snr(samples, path).Should().BeGreaterThan(29);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void Independent_Channels_Should_Not_Use_Mid_Side()
+        {
+            var samples = Stereo(seconds: 3, correlation: 0);
+
+            var path = Encode(samples, encoder => Mp3Encoder.OpenSession(encoder, Channels, SampleRate, bitsPerSample: 16, bitRateKbps: 192));
+
+            try
+            {
+                MidSideFrames(File.ReadAllBytes(path)).Should().Be(0);
+                Snr(samples, path).Should().BeGreaterThan(21.5);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        private static int MidSideFrames(byte[] bytes)
+        {
+            var count = 0;
+            var offset = 0;
+            while (offset + 4 <= bytes.Length)
+            {
+                if (bytes[offset] != 0xFF || (bytes[offset + 1] & 0xE0) != 0xE0)
+                {
+                    offset++;
+                    continue;
+                }
+
+                var bitrateIndex = bytes[offset + 2] >> 4;
+                var padding = (bytes[offset + 2] >> 1) & 1;
+                var mode = bytes[offset + 3] >> 6;
+                var extension = (bytes[offset + 3] >> 4) & 3;
+                if (mode == 1 && (extension & 2) != 0)
+                {
+                    count++;
+                }
+
+                int[] rates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+                offset += (144000 * rates[bitrateIndex] / SampleRate) + padding;
+            }
+
+            return count;
+        }
+
+        private static int[] Stereo(int seconds, double correlation)
+        {
+            var random = new Random(31);
+            var frames = seconds * SampleRate;
+            var samples = new int[frames * Channels];
+            for (var frame = 0; frame < frames; frame++)
+            {
+                var t = frame / (double)SampleRate;
+                var shared = (6000 * Math.Sin(2 * Math.PI * 330 * t)) + ((random.NextDouble() - 0.5) * 3000);
+                var own = (6000 * Math.Sin(2 * Math.PI * 523 * t)) + ((random.NextDouble() - 0.5) * 3000);
+                samples[frame * Channels] = (int)shared;
+                samples[(frame * Channels) + 1] = (int)((correlation * shared) + ((1 - correlation) * own));
+            }
+
+            return samples;
+        }
+
         private static string Encode(int[] samples, Func<string, Mp3EncoderSession> open)
         {
             var path = Path.Combine(Path.GetTempPath(), $"mp3_coding_{Guid.NewGuid():N}.mp3");

@@ -158,24 +158,26 @@ namespace EggEncoder.Codecs.Mp3
 
         internal byte[] Encode(AnalyzedFrame frame)
         {
+            var midSide = _channels == 2 && PrefersMidSide(frame.GranuleXr);
+            var granuleXr = midSide ? ToMidSide(frame.GranuleXr) : frame.GranuleXr;
             int frameLengthBytes;
             int bitrateIndex;
             Mp3Quantizer.Plan[] plans;
             if (_vbrQuality is { } quality)
             {
-                (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(frame.GranuleXr, quality);
+                (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(granuleXr, quality);
             }
             else
             {
                 frameLengthBytes = frame.FrameLengthBytes;
                 bitrateIndex = _bitrateIndex;
-                plans = PlanFrame(frame.GranuleXr, frameLengthBytes);
+                plans = PlanFrame(granuleXr, frameLengthBytes);
             }
 
             var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
 
             var writer = new BitWriter();
-            WriteHeader(writer, frame.Padding, bitrateIndex);
+            WriteHeader(writer, frame.Padding, bitrateIndex, midSide);
             WriteSideInfo(writer, plans);
 
             var usedBits = 0;
@@ -277,7 +279,7 @@ namespace EggEncoder.Codecs.Mp3
             return (baseLength, 0);
         }
 
-        internal void WriteHeader(BitWriter writer, int padding, int bitrateIndex)
+        internal void WriteHeader(BitWriter writer, int padding, int bitrateIndex, bool midSide = false)
         {
             writer.WriteBits(0x7FF, 11);
             writer.WriteBits(0b11, 2);
@@ -287,8 +289,8 @@ namespace EggEncoder.Codecs.Mp3
             writer.WriteBits((uint)_sampleRateIndex, 2);
             writer.WriteBits((uint)padding, 1);
             writer.WriteBits(0, 1);
-            writer.WriteBits(_channels == 1 ? 0b11u : 0b00u, 2);
-            writer.WriteBits(0, 2);
+            writer.WriteBits(_channels == 1 ? 0b11u : 0b01u, 2);
+            writer.WriteBits(midSide ? 0b10u : 0u, 2);
             writer.WriteBits(0, 1);
             writer.WriteBits(1, 1);
             writer.WriteBits(0, 2);
@@ -392,31 +394,25 @@ namespace EggEncoder.Codecs.Mp3
 
         private (int FrameLengthBytes, Mp3Quantizer.Plan[] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int quality)
         {
-            var targets = new double[GranuleCount * _channels];
-            for (var gr = 0; gr < GranuleCount; gr++)
+            var segments = Segments(granuleXr);
+            var caches = NewCaches(segments.Length);
+            var plans = new Mp3Quantizer.Plan[segments.Length];
+            var needed = 0;
+            for (var s = 0; s < segments.Length; s++)
             {
-                for (var ch = 0; ch < _channels; ch++)
+                var energy = 0.0;
+                foreach (var value in segments[s])
                 {
-                    var energy = 0.0;
-                    foreach (var value in granuleXr[gr][ch])
-                    {
-                        energy += value * value;
-                    }
-
-                    targets[(gr * _channels) + ch] = VbrRelativeGains[quality] + (2 * Math.Max(Math.Log2(energy), VbrEnergyFloorLog2));
+                    energy += value * value;
                 }
+
+                var target = VbrRelativeGains[quality] + (2 * Math.Max(Math.Log2(energy), VbrEnergyFloorLog2));
+                var gain = Math.Clamp((int)Math.Floor(target), 0, Mp3Quantizer.MaxGlobalGain);
+                plans[s] = CodablePlan(segments[s], caches[s], gain);
+                needed += plans[s].BitCount;
             }
 
             var lastIndex = Array.FindLastIndex(Mp3Probe.Mpeg1Layer3BitrateKbps, rate => rate > 0);
-            var caches = new Mp3Quantizer.PlanCache[GranuleCount * _channels];
-            for (var gr = 0; gr < GranuleCount; gr++)
-            {
-                for (var ch = 0; ch < _channels; ch++)
-                {
-                    caches[(gr * _channels) + ch] = new Mp3Quantizer.PlanCache();
-                }
-            }
-
             for (var index = 1; index <= lastIndex; index++)
             {
                 var kbps = Mp3Probe.Mpeg1Layer3BitrateKbps[index];
@@ -426,33 +422,165 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 var frameLengthBytes = (144000 * kbps) / _sampleRate;
-                var plans = PlanFrame(granuleXr, frameLengthBytes, caches);
-                var fits = true;
-                for (var segment = 0; segment < plans.Length; segment++)
+                var budget = MainDataBits(frameLengthBytes);
+                if (needed <= budget)
                 {
-                    fits &= plans[segment].GlobalGain <= targets[segment];
-                }
-
-                if (fits || index == lastIndex)
-                {
-                    return (frameLengthBytes, plans, index);
+                    return (frameLengthBytes, Spend(segments, caches, plans, budget), index);
                 }
             }
 
-            throw new InvalidOperationException("MP3 VBR: no bitrate was tried");
+            var largestFrame = (144000 * Mp3Probe.Mpeg1Layer3BitrateKbps[lastIndex]) / _sampleRate;
+            return (largestFrame, PlanFrame(granuleXr, largestFrame), lastIndex);
         }
 
-        private Mp3Quantizer.Plan[] PlanFrame(double[][][] granuleXr, int frameLengthBytes, Mp3Quantizer.PlanCache[]? caches = null)
+        private Mp3Quantizer.Plan[] PlanFrame(double[][][] granuleXr, int frameLengthBytes)
         {
-            var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
-            var bitsPerSegment = (mainDataBytes * 8) / (GranuleCount * _channels);
-            var plans = new Mp3Quantizer.Plan[GranuleCount * _channels];
+            var segments = Segments(granuleXr);
+            var caches = NewCaches(segments.Length);
+            var budget = MainDataBits(frameLengthBytes);
+            var low = 0;
+            var high = Mp3Quantizer.MaxGlobalGain;
+            Mp3Quantizer.Plan[]? best = null;
+            while (low <= high)
+            {
+                var gain = (low + high) / 2;
+                if (PlansAt(segments, caches, gain, budget) is { } fitting)
+                {
+                    best = fitting;
+                    high = gain - 1;
+                }
+                else
+                {
+                    low = gain + 1;
+                }
+            }
+
+            if (best is null)
+            {
+                best = new Mp3Quantizer.Plan[segments.Length];
+                for (var s = 0; s < segments.Length; s++)
+                {
+                    best[s] = CodablePlan(segments[s], caches[s], Mp3Quantizer.MaxGlobalGain);
+                }
+
+                return best;
+            }
+
+            return Spend(segments, caches, best, budget);
+        }
+
+        private int MainDataBits(int frameLengthBytes) => (frameLengthBytes - 4 - _sideInfoBytes) * 8;
+
+        private double[][] Segments(double[][][] granuleXr)
+        {
+            var segments = new double[GranuleCount * _channels][];
             for (var gr = 0; gr < GranuleCount; gr++)
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    int? hint = gr == 0 && ch == 0 ? null : plans[ch == 0 ? (gr - 1) * _channels : (gr * _channels) + ch - 1].GlobalGain;
-                    plans[(gr * _channels) + ch] = Mp3Quantizer.FindPlan(granuleXr[gr][ch], bitsPerSegment, _bandStarts, caches?[(gr * _channels) + ch], hint);
+                    segments[(gr * _channels) + ch] = granuleXr[gr][ch];
+                }
+            }
+
+            return segments;
+        }
+
+        private static Mp3Quantizer.PlanCache[] NewCaches(int count)
+        {
+            var caches = new Mp3Quantizer.PlanCache[count];
+            for (var s = 0; s < count; s++)
+            {
+                caches[s] = new Mp3Quantizer.PlanCache();
+            }
+
+            return caches;
+        }
+
+        private Mp3Quantizer.Plan[]? PlansAt(double[][] segments, Mp3Quantizer.PlanCache[] caches, int gain, int budget)
+        {
+            var plans = new Mp3Quantizer.Plan[segments.Length];
+            var total = 0;
+            for (var s = 0; s < segments.Length; s++)
+            {
+                var limit = Math.Min(budget - total, Mp3Quantizer.MaxSegmentBits);
+                if (caches[s].Get(segments[s], gain, limit, _bandStarts) is not { } plan || plan.BitCount > limit)
+                {
+                    return null;
+                }
+
+                plans[s] = plan;
+                total += plan.BitCount;
+            }
+
+            return plans;
+        }
+
+        private Mp3Quantizer.Plan CodablePlan(double[] segment, Mp3Quantizer.PlanCache cache, int gain)
+        {
+            for (; gain <= Mp3Quantizer.MaxGlobalGain; gain++)
+            {
+                if (cache.Get(segment, gain, int.MaxValue, _bandStarts) is { } plan)
+                {
+                    var best = Mp3Quantizer.WithBestDivision(plan, _bandStarts);
+                    if (best.BitCount <= Mp3Quantizer.MaxSegmentBits)
+                    {
+                        return best;
+                    }
+                }
+            }
+
+            return Mp3Quantizer.EmptyPlan(Mp3Quantizer.MaxGlobalGain);
+        }
+
+        private Mp3Quantizer.Plan[] Spend(double[][] segments, Mp3Quantizer.PlanCache[] caches, Mp3Quantizer.Plan[] plans, int budget)
+        {
+            var used = 0;
+            for (var s = 0; s < plans.Length; s++)
+            {
+                plans[s] = Mp3Quantizer.WithBestDivision(plans[s], _bandStarts);
+                used += plans[s].BitCount;
+            }
+
+            var done = new bool[plans.Length];
+            for (var s = 0; s < plans.Length; s++)
+            {
+                done[s] = Array.TrueForAll(segments[s], value => value == 0);
+            }
+
+            var progress = true;
+            while (progress)
+            {
+                progress = false;
+                for (var s = 0; s < plans.Length; s++)
+                {
+                    var current = plans[s];
+                    if (done[s])
+                    {
+                        continue;
+                    }
+
+                    if (current.GlobalGain == 0 || caches[s].Get(segments[s], current.GlobalGain - 1, int.MaxValue, _bandStarts) is not { } finer)
+                    {
+                        done[s] = true;
+                        continue;
+                    }
+
+                    var candidate = Mp3Quantizer.WithRegions(finer, current.Division.Region0Count, current.Division.Region1Count, _bandStarts);
+                    if (used + candidate.BitCount - current.BitCount > budget || candidate.BitCount > Mp3Quantizer.MaxSegmentBits)
+                    {
+                        candidate = Mp3Quantizer.WithBestDivision(finer, _bandStarts);
+                    }
+
+                    if (used + candidate.BitCount - current.BitCount <= budget && candidate.BitCount <= Mp3Quantizer.MaxSegmentBits)
+                    {
+                        used += candidate.BitCount - current.BitCount;
+                        plans[s] = candidate;
+                        progress = true;
+                    }
+                    else
+                    {
+                        done[s] = true;
+                    }
                 }
             }
 
@@ -468,6 +596,49 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             return window;
+        }
+
+        private const double MidSideSideToMidRatio = 0.5;
+
+        private static bool PrefersMidSide(double[][][] granuleXr)
+        {
+            var mid = 0.0;
+            var side = 0.0;
+            foreach (var granule in granuleXr)
+            {
+                var left = granule[0];
+                var right = granule[1];
+                for (var i = 0; i < left.Length; i++)
+                {
+                    var sum = left[i] + right[i];
+                    var difference = left[i] - right[i];
+                    mid += sum * sum;
+                    side += difference * difference;
+                }
+            }
+
+            return side <= mid * MidSideSideToMidRatio;
+        }
+
+        private static double[][][] ToMidSide(double[][][] granuleXr)
+        {
+            var result = new double[granuleXr.Length][][];
+            for (var gr = 0; gr < granuleXr.Length; gr++)
+            {
+                var left = granuleXr[gr][0];
+                var right = granuleXr[gr][1];
+                var mid = new double[left.Length];
+                var side = new double[left.Length];
+                for (var i = 0; i < left.Length; i++)
+                {
+                    mid[i] = (left[i] + right[i]) * Math.Sqrt(0.5);
+                    side[i] = (left[i] - right[i]) * Math.Sqrt(0.5);
+                }
+
+                result[gr] = [mid, side];
+            }
+
+            return result;
         }
 
         private sealed class GranuleScratch

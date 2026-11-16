@@ -582,10 +582,16 @@ commitments.
     scalefactor band starts (region0_count 0-15, region1_count 0-7), each with the cheapest of the two or three
     tables whose range covers its largest value (table 0 for an all-zero region; 1-13/15 by width; one of 16-23 and
     one of 24-31 by linbits above 15). Bit costs come from per-table arrays of code length plus sign bits.
-  - `FindPlan` searches global_gain 0-255 for the finest step that fits the bit budget (a binary search for a
-    frame's first granule and channel, outward from that gain for the other three), costing each probe with a
-    split into thirds of the bands; at the gain it finds it searches every region split with per-table prefix
-    sums, then tries finer gains while they still fit (re-costing the same split first). A gain whose
+  - A frame's bits are shared by its two granules and its channels. CBR binary-searches one common global_gain
+    0-255 at which all four granule-channels fit together (each probe costed with a split into thirds of the
+    bands), gives each its best region split (every split searched with per-table prefix sums), then steps single
+    granule-channels finer while leftover bits allow (re-costing the same split first; one that can't go finer is
+    done, and an all-zero one never starts). VBR plans each granule-channel once at its target gain and picks the
+    smallest bitrate that holds the sum, then spends the leftovers the same way.
+  - Joint stereo: mid/side (M = (L+R)/sqrt2, S = (L-R)/sqrt2, the decoder's inverse) for a frame whose side energy is
+    at most half its mid energy. Every stereo frame, the Info frame included, is marked joint stereo (mode 01, mode
+    extension 10 with mid/side, 00 without, which decodes as plain stereo): marking only the mid/side frames made
+    ffmpeg drop a frame when the first audio frame's mode differed from the Info frame's. A gain whose
     largest magnitude no table can hold counts as "doesn't fit", so the search keeps raising the gain; if
     nothing fits (a budget of zero) the coarsest gain is used, since the frame size is a hard ceiling.
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
