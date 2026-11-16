@@ -254,7 +254,7 @@ IYUV input (NV12 when that's all the GPU lists), takes the P1-P7 preset's config
 only: profile, GOP = IDR period = `EffectiveKeyframeInterval`, no B-frames, VBR with `targetQuality` = CRF and no
 bitrate cap (ffmpeg `-cq` with `-b:v 0`), no lookahead, SPS/PPS out of band (`disableSPSPPS`, read with
 `nvEncGetSequenceParams` into the avcC), CAVLC for Baseline, the 8x8 transform for High only, VUI range and
-matrix. Four input/bitstream buffer pairs, synchronous mode; output is converted to 4-byte length prefixes with any
+matrix. Four input/bitstream buffer pairs, synchronous mode, each frame's bitstream locked only once three newer frames are submitted (NVIDIA's sample pattern, so the GPU encodes while the CPU prepares the next frames); output is converted to 4-byte length prefixes with any
 SPS/PPS/AUD dropped. Even width and height only. `IsSupported` opens and closes one 256x256 session once.
 `VideoComposition.VideoEncoder` (`H264EncoderBackend.Software` default, `Nvenc`, `Auto`; Auto falls back for odd
 canvases or no GPU). Tests skip their GPU parts when `IsSupported` is false.

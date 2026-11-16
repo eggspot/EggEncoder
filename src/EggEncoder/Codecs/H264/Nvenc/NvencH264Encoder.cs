@@ -16,6 +16,7 @@ namespace EggEncoder.Codecs.H264.Nvenc;
 public sealed unsafe class NvencH264Encoder : IH264Encoder
 {
     private const int BufferCount = 4;
+    private const int OutputDelay = BufferCount - 1;
     private const int SequenceParameterBufferSize = 1024;
 
     private static readonly Lazy<bool> Supported = new(Probe);
@@ -76,7 +77,10 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
     /// <inheritdoc />
     public AvcDecoderConfigurationRecord DecoderConfiguration => _configuration;
 
-    /// <summary>Encodes one frame; its encoded frame reaches <paramref name="output"/> before this call returns.</summary>
+    /// <summary>
+    /// Encodes one frame. Encoded frames reach <paramref name="output"/> in input order, up to three frames later, so the
+    /// GPU encodes while the caller prepares the next frames; <see cref="Flush"/> hands out the rest.
+    /// </summary>
     /// <exception cref="ArgumentException">The frame's size isn't the configured size.</exception>
     /// <exception cref="ObjectDisposedException">The encoder was disposed.</exception>
     /// <exception cref="InvalidOperationException">The driver reported an error.</exception>
@@ -128,7 +132,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
             picture.Free();
         }
 
-        Drain(output);
+        Drain(output, OutputDelay);
     }
 
     /// <summary>Hands out every frame NVENC still holds; call once after the last <see cref="Encode"/>.</summary>
@@ -151,7 +155,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
             picture.Free();
         }
 
-        Drain(output);
+        Drain(output, 0);
     }
 
     /// <inheritdoc />
@@ -479,10 +483,11 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         }
     }
 
-    private void Drain(Action<H264EncodedFrame> output)
+    private void Drain(Action<H264EncodedFrame> output, int keep)
     {
-        while (_pending.TryDequeue(out var pending))
+        while (_pending.Count > keep)
         {
+            var pending = _pending.Dequeue();
             byte[] payload;
             bool keyframe;
             var lockParams = new NativeBlock(NvencApi.LockBitstream.Size);

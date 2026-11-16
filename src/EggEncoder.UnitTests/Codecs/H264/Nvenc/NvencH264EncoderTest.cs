@@ -69,6 +69,37 @@ namespace EggEncoder.UnitTests.Codecs.H264.Nvenc
         }
 
         [Fact]
+        public void Output_Should_Come_In_Order_At_Most_Three_Frames_Late()
+        {
+            if (!NvencH264Encoder.IsSupported)
+            {
+                return;
+            }
+
+            var frames = H264EncoderTest.SyntheticFrames(160, 96, 10);
+            var received = new List<TimeSpan>();
+            var lags = new List<int>();
+            try
+            {
+                using var encoder = new NvencH264Encoder(new H264EncoderSettings { Width = 160, Height = 96, FrameRate = new VideoFrameRate(24) });
+                for (var i = 0; i < frames.Count; i++)
+                {
+                    encoder.Encode(frames[i], f => received.Add(f.Timestamp));
+                    lags.Add(i + 1 - received.Count);
+                }
+
+                encoder.Flush(f => received.Add(f.Timestamp));
+            }
+            finally
+            {
+                frames.ForEach(f => f.Dispose());
+            }
+
+            received.Should().Equal(frames.Select(f => f.Timestamp));
+            lags.Should().OnlyContain(lag => lag >= 0 && lag <= 3);
+        }
+
+        [Fact]
         public void Lower_Quality_Should_Make_Smaller_Frames()
         {
             if (!NvencH264Encoder.IsSupported)
