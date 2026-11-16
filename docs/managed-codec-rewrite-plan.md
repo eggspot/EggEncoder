@@ -550,8 +550,8 @@ commitments.
     theoretical expected dB exactly. Scratch differential/self-decode test files (both predating
     this fix, per their own "deleted once the encoder is fixed" doc comments) have been removed.
 
-- **Encoder implementation notes** (moved from code comments in `Mp3Encoder.cs`/`Mp3FrameEncoder.cs`, which
-  keep no comments now):
+- **Encoder implementation notes** (moved from code comments in `Mp3Encoder.cs`, `Mp3FrameEncoder.cs`,
+  `Mp3Quantizer.cs` and `Mp3PolyphaseFilter.cs`, which keep no comments now):
   - Clean-room from ISO/IEC 11172-3; no LAME, GroovyCodecs or other encoder source was consulted.
   - Input PCM is scaled by 1/32768 before analysis (`PcmNormalizationScale`): decoders assume the hybrid
     filterbank reconstructs samples in -1..1, so unscaled 16-bit PCM decodes about 32768 times too loud
@@ -571,27 +571,18 @@ commitments.
     audio never becomes decodable (confirmed by decoding with and without it).
   - Tags are validated and built before the destination file is created, so an invalid tag id leaves no
     partial file.
-- **Encoder implementation notes** (moved from code comments in `Mp3Encoder.cs`/`Mp3FrameEncoder.cs`, which
-  keep no comments now):
-  - Clean-room from ISO/IEC 11172-3; no LAME, GroovyCodecs or other encoder source was consulted.
-  - Input PCM is scaled by 1/32768 before analysis (`PcmNormalizationScale`): decoders assume the hybrid
-    filterbank reconstructs samples in -1..1, so unscaled 16-bit PCM decodes about 32768 times too loud
-    and wraps. The analysis chain is linear, so scaling the coefficients equals scaling the input.
-  - Frame header fields, in order: sync `0x7FF` (11 bits), MPEG-1 (`11`), Layer III (`01`), no CRC (`1`),
-    bitrate index, sample-rate index, padding, private `0`, mode (`11` mono, `00` stereo), mode
-    extension `00`, copyright `0`, original `1`, emphasis `00`. Side information: main_data_begin 0 (no
-    reservoir), private bits, scfsi 0, then per granule and channel part2_3_length, big_values,
-    global_gain, scalefac_compress 0, window switching 0, three table selects, region counts, and
-    preflag/scalefac_scale/count1 table 0.
-  - The Info/Xing header frame is written first as a placeholder and patched by `Finish` once the frame
-    and byte counts and the gapless delay/padding are known (the same pattern as FLAC's STREAMINFO). Its
-    LAME-tag fields after the 9-byte version string sit at fixed offsets; ReplayGain, CRC and preset
-    fields are written as zero because nothing here computes them.
-  - `Finish` pads the last partial frame with silence and then always encodes one extra silent frame:
-    the one-granule MDCT history needs a frame of future input, and without it the last frame of real
-    audio never becomes decodable (confirmed by decoding with and without it).
-  - Tags are validated and built before the destination file is created, so an invalid tag id leaves no
-    partial file.
+  - The polyphase analysis filter is the forward direction of the prototype window a decoder's synthesis
+    uses (`Mp3Tables.WindowCoefficients`): window the 512 most recent samples (newest first), sum eight
+    ways down to 64 values, then the 32x64 cosine matrix, divided by 32.
+  - Quantisation inverts the decoder's power law `xr = sign(is) * |is|^(4/3) * 2^((global_gain - 210) / 4)`
+    (the formula was confirmed from published technical sources, since the extracted standard text showed it
+    only as an image). No per-band scalefactors (scalefac_compress 0) and no count1 region: every nonzero
+    coefficient is coded as big-value pairs with one Huffman table for the granule, table 15 when every
+    magnitude fits in 0-15, otherwise the smallest escape table (24-31) whose linbits covers the largest
+    magnitude, so a quiet granule never pays table 31's escape bits.
+  - `FindPlan` binary-searches global_gain 0-255 for the finest step that fits the bit budget. A gain whose
+    largest magnitude no table can hold counts as "doesn't fit", so the search keeps raising the gain; if
+    nothing fits (a budget of zero) the coarsest gain is used, since the frame size is a hard ceiling.
 - [ ] **7. MP3 encode, VBR/quality (managed, follow-up to item 6)**
   - **Scope**: variable bit rate modes and whatever psychoacoustic/bit-allocation improvements prove
     tractable without consulting LAME's source, raising the SNR floor from item 6.

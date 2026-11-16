@@ -1,12 +1,5 @@
 namespace EggEncoder.Codecs.Mp3
 {
-    // The 32-subband polyphase analysis filter shared by Layer I/II/III -- the forward direction of
-    // the same prototype window (Mp3Tables.WindowCoefficients) a decoder's own synthesis filter
-    // uses in reverse. Maintains a 512-sample sliding history of the most recent PCM input (newest
-    // sample at index 0) across calls, consuming 32 new samples and producing 32 new subband
-    // samples per call -- the standard cosine-modulated analysis matrixing (window multiply, an
-    // 8-way partial sum down to 64 values, then a 32x64 cosine matrix) rather than a duplicate,
-    // independently-derived transform.
     internal sealed class Mp3PolyphaseFilter
     {
         private const int HistoryLength = 512;
