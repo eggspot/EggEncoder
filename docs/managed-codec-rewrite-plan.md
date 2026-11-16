@@ -430,9 +430,6 @@ commitments.
     investigate before joint stereo, not after. Lower priority than Phase 3 (MP3 encode) — this
     remains a real-world-interop polish item on an already-correct (per this project's own
     decoder) encoder, not a blocking defect, and is still open.
-
-### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
-
   - **2026-11-15 findings** (official WavPack 5.9.0 Windows binaries and ffmpeg, against a matrix of
     silence/noise/music-like/ramp content × mono/stereo × 16/24-bit, three seconds each):
     - ffmpeg's decoder refused every file ("No block with decorrelation weights", then "... samples"):
@@ -448,6 +445,9 @@ commitments.
     - Closing this needs either more black-box experiments or reading the reference source (BSD-licensed).
       This codec was built clean-room from general familiarity plus an arm's-length study of ffmpeg's
       decoder (THIRD-PARTY-NOTICES), so reading the reference implementation is an owner decision.
+
+### Phase 3 — MP3 encode (clean-room, measurable-but-modest quality bar)
+
 - [x] **6. MP3 encode, clean-room baseline (CBR)** — replaces `Mp3Encoder`/`Mp3EncoderSession` and
   `Mp3Native.cs`.
   - **Scope**: ISO/IEC 11172-3 Layer III encoding, constant bit rate only, from the spec — no LAME
