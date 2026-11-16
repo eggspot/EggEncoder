@@ -76,10 +76,7 @@ namespace EggEncoder.Codecs.Mp3
                 {
                     Array.Clear(_built);
                     _coefficients = xr;
-                    for (var i = 0; i < CoefficientCount; i++)
-                    {
-                        _companded[i] = Math.Pow(Math.Abs(xr[i]), 0.75);
-                    }
+                    Compand(xr, _companded);
 
                     var largest = 0.0;
                     for (var i = CoefficientCount - 1; i >= 0; i--)
@@ -98,6 +95,25 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 return _plans[globalGain];
+            }
+        }
+
+        private static void Compand(double[] xr, double[] companded)
+        {
+            var i = 0;
+            if (Vector.IsHardwareAccelerated)
+            {
+                for (; i + Vector<double>.Count <= CoefficientCount; i += Vector<double>.Count)
+                {
+                    var magnitude = Vector.Abs(new Vector<double>(xr, i));
+                    Vector.SquareRoot(magnitude * Vector.SquareRoot(magnitude)).CopyTo(companded, i);
+                }
+            }
+
+            for (; i < CoefficientCount; i++)
+            {
+                var magnitude = Math.Abs(xr[i]);
+                companded[i] = Math.Sqrt(magnitude * Math.Sqrt(magnitude));
             }
         }
 
@@ -171,12 +187,8 @@ namespace EggEncoder.Codecs.Mp3
         internal static Plan WithBestDivision(Plan plan, int[] bandStarts)
         {
             var (division, bits) = BestDivision(plan.Quantized, plan.BigValues * 2, bandStarts);
-            if (bits >= plan.BitCount - Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits)
-            {
-                return plan;
-            }
-
-            return plan with { Division = division, BitCount = Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits + bits };
+            var count1Bits = Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits;
+            return bits >= plan.BitCount - count1Bits ? plan : plan with { Division = division, BitCount = count1Bits + bits };
         }
 
         internal static Plan WithRegions(Plan plan, int region0, int region1, int[] bandStarts)

@@ -139,6 +139,7 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _bitsPerSampleShift;
         private readonly Mp3FrameEncoder _frameEncoder;
         private const int FramesPerBatch = 32;
+        private const int FramesPerRun = 8;
 
         private readonly List<Mp3FrameEncoder.AnalyzedFrame> _analyzed = [];
         private Task<byte[][]>? _encoding;
@@ -288,16 +289,31 @@ namespace EggEncoder.Codecs.Mp3
 
             var frames = _analyzed.ToArray();
             _analyzed.Clear();
+            var encoded = new byte[frames.Length][];
+            var runs = (frames.Length + FramesPerRun - 1) / FramesPerRun;
+            void EncodeRun(int run)
+            {
+                var gainHint = Mp3FrameEncoder.NoGainHint;
+                for (var i = run * FramesPerRun; i < Math.Min(frames.Length, (run + 1) * FramesPerRun); i++)
+                {
+                    encoded[i] = _frameEncoder.Encode(frames[i], ref gainHint);
+                }
+            }
+
             if (_maxDegreeOfParallelism == 1)
             {
-                _encoding = Task.FromResult(Array.ConvertAll(frames, _frameEncoder.Encode));
+                for (var run = 0; run < runs; run++)
+                {
+                    EncodeRun(run);
+                }
+
+                _encoding = Task.FromResult(encoded);
                 return;
             }
 
             _encoding = Task.Run(() =>
             {
-                var encoded = new byte[frames.Length][];
-                Parallel.For(0, frames.Length, new ParallelOptions { MaxDegreeOfParallelism = _maxDegreeOfParallelism - 1 }, i => encoded[i] = _frameEncoder.Encode(frames[i]));
+                Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = _maxDegreeOfParallelism - 1 }, EncodeRun);
                 return encoded;
             });
         }

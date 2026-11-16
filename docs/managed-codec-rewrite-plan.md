@@ -582,11 +582,12 @@ commitments.
     scalefactor band starts (region0_count 0-15, region1_count 0-7), each with the cheapest of the two or three
     tables whose range covers its largest value (table 0 for an all-zero region; 1-13/15 by width; one of 16-23 and
     one of 24-31 by linbits above 15). Bit costs come from per-table arrays of code length plus sign bits.
-  - A frame's bits are shared by its two granules and its channels. CBR binary-searches one common global_gain
-    0-255 at which all four granule-channels fit together (each probe costed with a split into thirds of the
+  - A frame's bits are shared by its two granules and its channels. CBR searches one common global_gain 0-255 at
+    which all four granule-channels fit together (outward from the previous frame's gain, frames being planned in
+    fixed runs of 8 in order so the result doesn't depend on threads; a binary search for a run's first frame) (each probe costed with a split into thirds of the
     bands), gives each its best region split (every split searched with per-table prefix sums), then steps single
-    granule-channels finer while leftover bits allow (re-costing the same split first; one that can't go finer is
-    done, and an all-zero one never starts). VBR plans each granule-channel once at its target gain and picks the
+    granule-channels finer while leftover bits allow, re-costing the split it already has (one that can't go finer
+    is done, and an all-zero one never starts). `|x|^0.75` is computed as `sqrt(x * sqrt(x))` in vector lanes. VBR plans each granule-channel once at its target gain and picks the
     smallest bitrate that holds the sum, then spends the leftovers the same way.
   - Joint stereo: mid/side (M = (L+R)/sqrt2, S = (L-R)/sqrt2, the decoder's inverse) for a frame whose side energy is
     at most half its mid energy. Every stereo frame, the Info frame included, is marked joint stereo (mode 01, mode

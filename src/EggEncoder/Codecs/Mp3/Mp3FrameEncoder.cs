@@ -22,6 +22,7 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _bitrateIndex;
         private readonly int _sideInfoBytes;
         private readonly int[] _bandStarts;
+        private int _streamingGainHint = NoGainHint;
         private readonly double[] _sineWindow;
         private readonly Mp3PolyphaseFilter[] _filters;
         private static readonly double[] MdctTable = Mdct.DirectTable(CoefficientsPerSubband)!;
@@ -32,6 +33,7 @@ namespace EggEncoder.Codecs.Mp3
         private double _paddingAccumulator;
 
         internal const int VbrQualityCount = 10;
+        internal const int NoGainHint = -1;
 
         private const double VbrEnergyFloorLog2 = -20;
 
@@ -86,7 +88,7 @@ namespace EggEncoder.Codecs.Mp3
 
         internal readonly record struct AnalyzedFrame(double[][][] GranuleXr, int FrameLengthBytes, int Padding);
 
-        public byte[] EncodeFrame(ReadOnlySpan<int> interleavedSamples) => Encode(Analyze(interleavedSamples));
+        public byte[] EncodeFrame(ReadOnlySpan<int> interleavedSamples) => Encode(Analyze(interleavedSamples), ref _streamingGainHint);
 
         internal AnalyzedFrame Analyze(ReadOnlySpan<int> interleavedSamples)
         {
@@ -158,6 +160,12 @@ namespace EggEncoder.Codecs.Mp3
 
         internal byte[] Encode(AnalyzedFrame frame)
         {
+            var noHint = NoGainHint;
+            return Encode(frame, ref noHint);
+        }
+
+        internal byte[] Encode(AnalyzedFrame frame, ref int gainHint)
+        {
             var midSide = _channels == 2 && PrefersMidSide(frame.GranuleXr);
             var granuleXr = midSide ? ToMidSide(frame.GranuleXr) : frame.GranuleXr;
             int frameLengthBytes;
@@ -165,13 +173,13 @@ namespace EggEncoder.Codecs.Mp3
             Mp3Quantizer.Plan[] plans;
             if (_vbrQuality is { } quality)
             {
-                (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(granuleXr, quality);
+                (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(granuleXr, quality, ref gainHint);
             }
             else
             {
                 frameLengthBytes = frame.FrameLengthBytes;
                 bitrateIndex = _bitrateIndex;
-                plans = PlanFrame(granuleXr, frameLengthBytes);
+                plans = PlanFrame(granuleXr, frameLengthBytes, ref gainHint);
             }
 
             var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
@@ -392,7 +400,7 @@ namespace EggEncoder.Codecs.Mp3
             return writer.ToArray();
         }
 
-        private (int FrameLengthBytes, Mp3Quantizer.Plan[] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int quality)
+        private (int FrameLengthBytes, Mp3Quantizer.Plan[] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int quality, ref int gainHint)
         {
             var segments = Segments(granuleXr);
             var caches = NewCaches(segments.Length);
@@ -430,10 +438,10 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var largestFrame = (144000 * Mp3Probe.Mpeg1Layer3BitrateKbps[lastIndex]) / _sampleRate;
-            return (largestFrame, PlanFrame(granuleXr, largestFrame), lastIndex);
+            return (largestFrame, PlanFrame(granuleXr, largestFrame, ref gainHint), lastIndex);
         }
 
-        private Mp3Quantizer.Plan[] PlanFrame(double[][][] granuleXr, int frameLengthBytes)
+        private Mp3Quantizer.Plan[] PlanFrame(double[][][] granuleXr, int frameLengthBytes, ref int gainHint)
         {
             var segments = Segments(granuleXr);
             var caches = NewCaches(segments.Length);
@@ -441,6 +449,44 @@ namespace EggEncoder.Codecs.Mp3
             var low = 0;
             var high = Mp3Quantizer.MaxGlobalGain;
             Mp3Quantizer.Plan[]? best = null;
+            if (gainHint != NoGainHint)
+            {
+                var start = Math.Clamp(gainHint, 0, Mp3Quantizer.MaxGlobalGain);
+                if (PlansAt(segments, caches, start, budget) is { } fits)
+                {
+                    best = fits;
+                    high = start - 1;
+                    for (var step = 1; high >= 0; step *= 2)
+                    {
+                        var probe = Math.Max(0, start - step);
+                        if (PlansAt(segments, caches, probe, budget) is not { } finer)
+                        {
+                            low = probe + 1;
+                            break;
+                        }
+
+                        best = finer;
+                        high = probe - 1;
+                    }
+                }
+                else
+                {
+                    low = start + 1;
+                    for (var step = 1; low <= high; step *= 2)
+                    {
+                        var probe = Math.Min(Mp3Quantizer.MaxGlobalGain, start + step);
+                        if (PlansAt(segments, caches, probe, budget) is { } coarser)
+                        {
+                            best = coarser;
+                            high = probe - 1;
+                            break;
+                        }
+
+                        low = probe + 1;
+                    }
+                }
+            }
+
             while (low <= high)
             {
                 var gain = (low + high) / 2;
@@ -457,6 +503,7 @@ namespace EggEncoder.Codecs.Mp3
 
             if (best is null)
             {
+                gainHint = NoGainHint;
                 best = new Mp3Quantizer.Plan[segments.Length];
                 for (var s = 0; s < segments.Length; s++)
                 {
@@ -466,6 +513,7 @@ namespace EggEncoder.Codecs.Mp3
                 return best;
             }
 
+            gainHint = best[0].GlobalGain;
             return Spend(segments, caches, best, budget);
         }
 
@@ -566,10 +614,6 @@ namespace EggEncoder.Codecs.Mp3
                     }
 
                     var candidate = Mp3Quantizer.WithRegions(finer, current.Division.Region0Count, current.Division.Region1Count, _bandStarts);
-                    if (used + candidate.BitCount - current.BitCount > budget || candidate.BitCount > Mp3Quantizer.MaxSegmentBits)
-                    {
-                        candidate = Mp3Quantizer.WithBestDivision(finer, _bandStarts);
-                    }
 
                     if (used + candidate.BitCount - current.BitCount <= budget && candidate.BitCount <= Mp3Quantizer.MaxSegmentBits)
                     {
