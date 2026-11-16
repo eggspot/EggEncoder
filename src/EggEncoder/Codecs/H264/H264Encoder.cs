@@ -411,9 +411,16 @@ public sealed partial class H264Encoder : IDisposable
 
         if (workers == 1)
         {
+            var sliceWriter = new MacroblockEncoder.SliceWriter(bits, cabac, header.Type, qp, encoders[workers], syntaxes, skipped);
+            var writeEachRow = _framesAtOnce > 1;
             for (var row = 0; row < rows; row++)
             {
                 AnalyseRow(0, row);
+                if (writeEachRow)
+                {
+                    sliceWriter.WriteUpTo((row + 1) * width);
+                }
+
                 if (row > 0)
                 {
                     DeblockRow(row - 1);
@@ -422,7 +429,8 @@ public sealed partial class H264Encoder : IDisposable
 
             DeblockRow(rows - 1);
             publisher?.PublishComplete();
-            Write();
+            sliceWriter.WriteUpTo(rows * width);
+            sliceWriter.Finish();
             return;
         }
 

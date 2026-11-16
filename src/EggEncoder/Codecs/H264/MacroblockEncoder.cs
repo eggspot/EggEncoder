@@ -97,69 +97,104 @@ internal sealed partial class MacroblockEncoder
 
     public static void WriteSlice(BitWriter bits, CabacEncoder? cabac, SliceType type, int qp, MacroblockEncoder writer, MacroblockSyntax[] syntaxes, bool[] skipped, Action<int> waitForMacroblock)
     {
-        var slice = writer._slice;
-        var count = skipped.Length;
-        var skipRun = 0;
-        if (cabac is not null)
-        {
-            while (bits.BitPosition % 8 != 0)
-            {
-                bits.WriteBits(1, 1);
-            }
-
-            cabac.InitializeContexts(type, 0, qp);
-            cabac.Start(bits);
-            slice.StartCabacWriting();
-        }
-
-        for (var macroblock = 0; macroblock < count; macroblock++)
+        var sliceWriter = new SliceWriter(bits, cabac, type, qp, writer, syntaxes, skipped);
+        for (var macroblock = 0; macroblock < skipped.Length; macroblock++)
         {
             waitForMacroblock(macroblock);
-            slice.SetPosition(macroblock);
-            var syntax = syntaxes[macroblock];
-            slice.UseSyntax(syntax);
+            sliceWriter.WriteUpTo(macroblock + 1);
+        }
+
+        sliceWriter.Finish();
+    }
+
+    public sealed class SliceWriter
+    {
+        private readonly BitWriter _bits;
+        private readonly CabacEncoder? _cabac;
+        private readonly SliceType _type;
+        private readonly MacroblockEncoder _writer;
+        private readonly MacroblockSyntax[] _syntaxes;
+        private readonly bool[] _skipped;
+        private int _skipRun;
+        private int _next;
+
+        public SliceWriter(BitWriter bits, CabacEncoder? cabac, SliceType type, int qp, MacroblockEncoder writer, MacroblockSyntax[] syntaxes, bool[] skipped)
+        {
+            _bits = bits;
+            _cabac = cabac;
+            _type = type;
+            _writer = writer;
+            _syntaxes = syntaxes;
+            _skipped = skipped;
             if (cabac is not null)
             {
-                if (skipped[macroblock])
+                while (bits.BitPosition % 8 != 0)
                 {
-                    slice.WriteSkippedMacroblockCabac(cabac);
-                }
-                else
-                {
-                    slice.WriteMacroblockCabac(cabac);
+                    bits.WriteBits(1, 1);
                 }
 
-                cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
-                continue;
+                cabac.InitializeContexts(type, 0, qp);
+                cabac.Start(bits);
+                writer._slice.StartCabacWriting();
             }
-
-            if (skipped[macroblock])
-            {
-                skipRun++;
-                continue;
-            }
-
-            if (type == SliceType.P)
-            {
-                bits.WriteUe((uint)skipRun);
-                skipRun = 0;
-            }
-
-            writer.WriteMacroblock(bits, syntax);
         }
 
-        if (cabac is not null)
+        public void WriteUpTo(int endMacroblock)
         {
-            bits.ByteAlign();
-            return;
+            var slice = _writer._slice;
+            var count = _skipped.Length;
+            for (; _next < endMacroblock; _next++)
+            {
+                var macroblock = _next;
+                slice.SetPosition(macroblock);
+                var syntax = _syntaxes[macroblock];
+                slice.UseSyntax(syntax);
+                if (_cabac is not null)
+                {
+                    if (_skipped[macroblock])
+                    {
+                        slice.WriteSkippedMacroblockCabac(_cabac);
+                    }
+                    else
+                    {
+                        slice.WriteMacroblockCabac(_cabac);
+                    }
+
+                    _cabac.EncodeTerminate(macroblock == count - 1 ? 1 : 0);
+                    continue;
+                }
+
+                if (_skipped[macroblock])
+                {
+                    _skipRun++;
+                    continue;
+                }
+
+                if (_type == SliceType.P)
+                {
+                    _bits.WriteUe((uint)_skipRun);
+                    _skipRun = 0;
+                }
+
+                _writer.WriteMacroblock(_bits, syntax);
+            }
         }
 
-        if (skipRun > 0)
+        public void Finish()
         {
-            bits.WriteUe((uint)skipRun);
-        }
+            if (_cabac is not null)
+            {
+                _bits.ByteAlign();
+                return;
+            }
 
-        bits.WriteTrailingBits();
+            if (_skipRun > 0)
+            {
+                _bits.WriteUe((uint)_skipRun);
+            }
+
+            _bits.WriteTrailingBits();
+        }
     }
 
     private void Decide()
