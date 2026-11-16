@@ -53,7 +53,7 @@ dotnet test src/EggEncoder.UnitTests/EggEncoder.UnitTests.csproj --configuration
 ### Supporting infrastructure
 
 - **`Transform/`** — `BitReader`, `BitWriter`, `HuffmanTable`, `Mdct` — low-level bitstream and signal-processing primitives shared by the AAC/WMA/MP3/FLAC/ALAC/TTA codecs. `BitReader` reads a 64-bit big-endian window per call (`ReadUnary` via `LeadingZeroCount`), not one bit per loop iteration. `Mdct.Forward`/`Inverse` keep the direct definitions' scaling but run a power-of-two coefficient count of 4 or more (AAC's 1024/128, WMA's frame lengths) in O(N log N) via the MDCT↔DCT-IV fold and an N/2-point complex FFT, with plans cached per size; results match the direct sums to ~1e-12 relative, not bit for bit. Any other size (MP3's 18) keeps the direct sums, with cosines cached up to 65,536 table entries, so its output is bit-identical to the plain formula. See `docs/benchmarks.md`'s results log for before/after numbers
-- **`Native/` — gone.** `FlacNative.cs`/`NativeLibraryLoader.cs`/`libFLAC.dll` (the last native infrastructure in this project) were removed in `docs/managed-codec-rewrite-plan.md` item 8, the same way `WavPackNative.cs`/`wavpackdll.dll` and `Mp3Native.cs`/`libmp3lame.dll` were removed alongside their own respective managed rewrites (see the `WavPack/`/`Mp3/` rows above). There is no native binary or P/Invoke binding left anywhere in this codebase
+- **`Native/` — gone.** `FlacNative.cs`/`NativeLibraryLoader.cs`/`libFLAC.dll` (the last native infrastructure in this project) were removed in `docs/managed-codec-rewrite-plan.md` item 8, the same way `WavPackNative.cs`/`wavpackdll.dll` and `Mp3Native.cs`/`libmp3lame.dll` were removed alongside their own respective managed rewrites (see the `WavPack/`/`Mp3/` rows above). No native binary is bundled anywhere in this codebase; the one interop is the optional NVENC GPU encoder (`Codecs/H264/Nvenc/`), which calls the installed NVIDIA driver
 - **`Waveform/WaveformCalculator.cs`** — streaming peak-window calculator fed blocks during decode, used by every codec's probe path to produce `ProbeResult.Waveform`; also tracks an overall peak absolute sample and running sum-of-squares across every block (independent of window finalization, so no flush step needed) to back `ProbeResult.PeakAmplitude`/`RmsLevel`. An optional `sampleRate` constructor parameter additionally measures real perceptual loudness — ITU-R BS.1770-4 / EBU R128 integrated loudness in LUFS, via `GetIntegratedLoudness()` (gated 400ms-block energy averaging per the standard, backed by `KWeightingFilter` below) — surfaced as `ProbeResult.IntegratedLoudness`; every `Probe`/`Probe(Stream, AudioFormat)` entry point passes its own sample rate so this is always populated when audio decodes at all. The gating itself lives in the internal `IntegratedLoudnessAccumulator`, shared with `Pcm.LoudnessMeter` so there is one implementation
 - **`Waveform/KWeightingFilter.cs`** — the two-cascaded-biquad K-weighting pre-filter ITU-R BS.1770-4 loudness measurement requires before any mean-square/gating step. Structurally similar to `Pcm.BiquadTransform` (Direct Form II Transposed, two state values per stage) but not reusable from it — the standard's own tan-prewarped bilinear-transform coefficient formula is a different parameterization from `BiquadTransform`'s RBJ-cookbook one. Coefficients verified against the reference `libebur128` source, not memory; the whole filter+gating pipeline is further confirmed against the standard's own published conformance signal (a 997Hz/-23dBFS sine must measure -23.0 LUFS) — see `docs/feature-roadmap.md` item 3
 - **`Results/ProbeResult.cs`** — the public `ProbeResult` DTO returned by every `Probe` call
@@ -239,6 +239,24 @@ macroblock row of the next frame waits only for `ReferencePublisher.LinesNeeded`
 never points more than `ReferencePublisher.MaxDownwardVector` (64) pixels down, in every mode, so the
 bytes don't depend on threads or delay; rate control measures complexity against the previous source
 frame. Intra 4x4 analysis stops once its running cost reaches the cost it has to beat.
+
+### NVENC H.264 encoder (`src/EggEncoder/Codecs/H264/Nvenc/`)
+
+`IH264Encoder` (public: `DecoderConfiguration`, `Encode`, `Flush`, `IDisposable`) is implemented by `H264Encoder` and
+by `NvencH264Encoder`, which encodes on an NVIDIA GPU through NVENC API 12.0 (driver 522+), our own code calling the
+driver, no ffmpeg. `NvencLibrary` loads the CUDA and NVENC driver libraries once (64-bit Windows/Linux), checks
+`NvEncodeAPIGetMaxSupportedVersion`, fills the function list and keeps `delegate* unmanaged` pointers. `NvencApi`
+holds sizes, offsets, versions, GUIDs and enums printed by compiling the header with gcc (MSVC lays these structs out
+the same way: only `uint32_t` bitfields, no `long`); structs are zeroed native blocks written by offset. The encoder
+creates its own CUDA context (pushed around every call, so any thread can use it), opens a session, asks for
+IYUV input (NV12 when that's all the GPU lists), takes the P1-P7 preset's config (HIGH_QUALITY tuning) and changes
+only: profile, GOP = IDR period = `EffectiveKeyframeInterval`, no B-frames, VBR with `targetQuality` = CRF and no
+bitrate cap (ffmpeg `-cq` with `-b:v 0`), no lookahead, SPS/PPS out of band (`disableSPSPPS`, read with
+`nvEncGetSequenceParams` into the avcC), CAVLC for Baseline, the 8x8 transform for High only, VUI range and
+matrix. Four input/bitstream buffer pairs, synchronous mode; output is converted to 4-byte length prefixes with any
+SPS/PPS/AUD dropped. Even width and height only. `IsSupported` opens and closes one 256x256 session once.
+`VideoComposition.VideoEncoder` (`H264EncoderBackend.Software` default, `Nvenc`, `Auto`; Auto falls back for odd
+canvases or no GPU). Tests skip their GPU parts when `IsSupported` is false.
 
 ### MPEG-2 video decoder (`src/EggEncoder/Codecs/Mpeg2/`)
 
@@ -743,8 +761,11 @@ defaults every network-facing item must meet.
 the corresponding `EggEncoder.csproj` `<None>` packaging entries and `THIRD-PARTY-NOTICES.md`
 section) — `wavpackdll.dll`/`WavPackNative.cs` and `libmp3lame.dll`/`Mp3Native.cs` were removed
 earlier, alongside their own respective managed rewrites (see the `WavPack/`/`Mp3/` rows above).
-EggEncoder is now 100% pure managed C# with zero native dependency of any kind, and CI builds
-and tests on `windows-latest`/`ubuntu-latest`/`macos-latest` to prove it.
+EggEncoder ships no native binary, and CI builds and tests on
+`windows-latest`/`ubuntu-latest`/`macos-latest` to prove it. The one exception to "pure managed" is opt-in:
+`NvencH264Encoder` loads the NVIDIA driver's own `nvEncodeAPI64.dll`/`nvcuda.dll` (Windows) or
+`libnvidia-encode.so.1`/`libcuda.so.1` (Linux) at run time with `NativeLibrary.TryLoad`, nothing bundled; without a
+driver it reports `IsSupported == false` and every other code path is unaffected.
 
 ### External NuGet dependencies (product code)
 
@@ -759,7 +780,7 @@ own "Decision" section and `THIRD-PARTY-NOTICES.md`'s matching entry for the ful
 
 ### Native AOT
 
-`EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe constructs now that no P/Invoke remains at all — no `[LibraryImport]`/`[DllImport]`, no `[UnmanagedCallersOnly]` native callbacks (`FlacDecoder`'s own decode callback was this pattern's last example, until it was replaced by the pure managed decoder in `FlacFrameDecoder`; `WavPackEncoderSession`'s own encode callback was replaced by the pure managed `WavPackBlockWriter`/`WavPackEntropyEncoder` before that). `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project, multi-RID (`win-x64`/`linux-x64`/`osx-arm64`), that round-trips WAV → MP3/FLAC/WavPack → probe through a real native-compiled binary on every OS in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling, `Reflection.Emit`, or a native binary dependency.
+`EggEncoder.csproj` sets `IsAotCompatible=true` (enables the trim/AOT/single-file Roslyn analyzers on every build). The codebase relies only on AOT-safe constructs — no `[LibraryImport]`/`[DllImport]` marshalling stubs (the NVENC encoder calls the driver through `delegate* unmanaged` function pointers with blittable arguments, resolved by `NativeLibrary.TryGetExport`), no `[UnmanagedCallersOnly]` native callbacks (`FlacDecoder`'s own decode callback was this pattern's last example, until it was replaced by the pure managed decoder in `FlacFrameDecoder`; `WavPackEncoderSession`'s own encode callback was replaced by the pure managed `WavPackBlockWriter`/`WavPackEntropyEncoder` before that). `src/EggEncoder.AotSmokeTest/` is a `PublishAot=true` console project, multi-RID (`win-x64`/`linux-x64`/`osx-arm64`), that round-trips WAV → MP3/FLAC/WavPack → probe through a real native-compiled binary on every OS in CI — see "Testing Conventions" below. If you add a dependency or interop call, make sure it doesn't reintroduce reflection-based marshaling, `Reflection.Emit`, or a native binary dependency.
 
 ## Testing Conventions
 

@@ -294,6 +294,8 @@ namespace EggEncoder.UnitTests.Video.Composition
                 valid with { AudioBitRate = 1000 },
                 valid with { ThumbnailAt = TimeSpan.FromSeconds(-1) },
                 valid with { ThumbnailQuantizerScale = 0 },
+                valid with { VideoEncoder = (EggEncoder.Codecs.H264.H264EncoderBackend)7 },
+                valid with { Width = 33, VideoEncoder = EggEncoder.Codecs.H264.H264EncoderBackend.Nvenc },
                 valid with { Scenes = [new CompositionScene { Source = clip, Start = TimeSpan.FromSeconds(10) }] }
             };
 
