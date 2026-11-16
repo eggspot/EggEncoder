@@ -54,6 +54,29 @@ pre-emptively covering everything.
 Point-in-time numbers from real runs, newest first, so a later change can be compared against
 them. Same machine for every row of one entry; numbers from different machines aren't comparable.
 
+### MP3 encode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10, best of 6 encodes)
+
+60 s of stereo 44.1 kHz 16-bit WAV (a 440 Hz tone plus pink noise), `Mp3Encoder.Encode` at 192 kb/s CBR and
+`Mp3Encoder.EncodeVbr` at quality 4, including reading the WAV. ffmpeg 2021 build with `libmp3lame` (`-b:a 192k`
+and `-q:a 4`): 0.75 s wall, of which 0.15 s is ffmpeg starting and reading the file (`-f null`).
+
+| Encoder | CBR 192 | VBR q4 |
+|---------|-----:|-----:|
+| Before (one thread) | 2,794 ms | 2,362 ms |
+| One thread, after the changes below | about 1,140 ms | about 925 ms |
+| Default (up to 4 threads) | 462 ms | 465 ms |
+| ffmpeg + LAME | about 600 ms | about 600 ms |
+
+Every row writes the same bytes. What changed: the polyphase filter keeps its 512-sample history in a buffer it shifts
+once every 112 calls instead of every call, and runs its window and cosine matrix with one vector lane per output
+(each lane keeps the scalar summation order, with separate multiply and add, so results are identical); the
+18-point MDCT runs inputs-outer with vector lanes over outputs (same order per output); the quantiser takes
+`|x|^0.75` once per granule instead of `Math.Pow` per coefficient per gain, stops at the last coefficient that can
+be nonzero for the gain, and VBR reuses a granule's plan for a gain across every bitrate it tries; the session keeps
+pending samples in one array instead of removing a frame from the front of a list each time. Frames are analysed in
+order (the two channels' filter banks on two threads), collected in batches of 32 and planned and written on up to
+three more threads while the next batch is analysed, because no frame borrows from another (no bit reservoir).
+
 ### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
 60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to interleaved 16-bit PCM.

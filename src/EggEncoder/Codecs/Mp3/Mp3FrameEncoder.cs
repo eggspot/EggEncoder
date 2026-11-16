@@ -18,9 +18,8 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _sampleRate;
         private readonly int _bitRateKbps;
         private readonly int _sampleRateIndex;
-        private readonly int _tagBitrateIndex;
         private readonly int? _vbrTargetGain;
-        private int _bitrateIndex;
+        private readonly int _bitrateIndex;
         private readonly int _sideInfoBytes;
         private readonly double[] _sineWindow;
         private readonly Mp3PolyphaseFilter[] _filters;
@@ -52,7 +51,6 @@ namespace EggEncoder.Codecs.Mp3
                 throw new NotSupportedException($"'{bitRateKbps}' is not a valid MPEG-1 Layer III bitrate");
             }
 
-            _tagBitrateIndex = _bitrateIndex;
             _sideInfoBytes = channels == 1 ? 17 : 32;
             _sineWindow = BuildSineWindow(MdctWindowSize);
 
@@ -69,7 +67,11 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        public byte[] EncodeFrame(ReadOnlySpan<int> interleavedSamples)
+        internal readonly record struct AnalyzedFrame(double[][][] GranuleXr, int FrameLengthBytes, int Padding);
+
+        public byte[] EncodeFrame(ReadOnlySpan<int> interleavedSamples) => Encode(Analyze(interleavedSamples));
+
+        internal AnalyzedFrame Analyze(ReadOnlySpan<int> interleavedSamples)
         {
             var granuleXr = new double[GranuleCount][][];
             for (var gr = 0; gr < GranuleCount; gr++)
@@ -81,24 +83,82 @@ namespace EggEncoder.Codecs.Mp3
                 }
             }
 
-            int frameLengthBytes;
-            int padding;
-            Mp3Quantizer.Plan[,] plans;
-            if (_vbrTargetGain is { } targetGain)
+            if (_vbrTargetGain is not null)
             {
-                (frameLengthBytes, plans) = ChooseVbrFrame(granuleXr, targetGain);
-                padding = 0;
+                return new AnalyzedFrame(granuleXr, 0, 0);
+            }
+
+            var (frameLengthBytes, padding) = NextFrameLength();
+            return new AnalyzedFrame(granuleXr, frameLengthBytes, padding);
+        }
+
+        internal AnalyzedFrame[] AnalyzeFrames(int[] samples, int offset, int frameCount, int maxDegreeOfParallelism)
+        {
+            var frameLength = GranuleCount * GranuleSamples * _channels;
+            var granuleXr = new double[frameCount][][][];
+            for (var f = 0; f < frameCount; f++)
+            {
+                granuleXr[f] = new double[GranuleCount][][];
+                for (var gr = 0; gr < GranuleCount; gr++)
+                {
+                    granuleXr[f][gr] = new double[_channels][];
+                }
+            }
+
+            void AnalyzeChannel(int channel)
+            {
+                for (var f = 0; f < frameCount; f++)
+                {
+                    var frameSamples = samples.AsSpan(offset + (f * frameLength), frameLength);
+                    for (var gr = 0; gr < GranuleCount; gr++)
+                    {
+                        granuleXr[f][gr][channel] = ComputeGranuleCoefficients(frameSamples, gr, channel);
+                    }
+                }
+            }
+
+            if (_channels == 1 || maxDegreeOfParallelism == 1)
+            {
+                for (var channel = 0; channel < _channels; channel++)
+                {
+                    AnalyzeChannel(channel);
+                }
             }
             else
             {
-                (frameLengthBytes, padding) = NextFrameLength();
-                plans = PlanFrame(granuleXr, frameLengthBytes);
+                Parallel.For(0, _channels, AnalyzeChannel);
+            }
+
+            var frames = new AnalyzedFrame[frameCount];
+            for (var f = 0; f < frameCount; f++)
+            {
+                var (frameLengthBytes, padding) = _vbrTargetGain is null ? NextFrameLength() : (0, 0);
+                frames[f] = new AnalyzedFrame(granuleXr[f], frameLengthBytes, padding);
+            }
+
+            return frames;
+        }
+
+        internal byte[] Encode(AnalyzedFrame frame)
+        {
+            int frameLengthBytes;
+            int bitrateIndex;
+            Mp3Quantizer.Plan[,] plans;
+            if (_vbrTargetGain is { } targetGain)
+            {
+                (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(frame.GranuleXr, targetGain);
+            }
+            else
+            {
+                frameLengthBytes = frame.FrameLengthBytes;
+                bitrateIndex = _bitrateIndex;
+                plans = PlanFrame(frame.GranuleXr, frameLengthBytes);
             }
 
             var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
 
             var writer = new BitWriter();
-            WriteHeader(writer, padding);
+            WriteHeader(writer, frame.Padding, bitrateIndex);
             WriteSideInfo(writer, plans);
 
             var usedBits = 0;
@@ -202,13 +262,13 @@ namespace EggEncoder.Codecs.Mp3
             return (baseLength, 0);
         }
 
-        internal void WriteHeader(BitWriter writer, int padding)
+        internal void WriteHeader(BitWriter writer, int padding, int bitrateIndex)
         {
             writer.WriteBits(0x7FF, 11);
             writer.WriteBits(0b11, 2);
             writer.WriteBits(0b01, 2);
             writer.WriteBits(1, 1);
-            writer.WriteBits((uint)_bitrateIndex, 4);
+            writer.WriteBits((uint)bitrateIndex, 4);
             writer.WriteBits((uint)_sampleRateIndex, 2);
             writer.WriteBits((uint)padding, 1);
             writer.WriteBits(0, 1);
@@ -256,10 +316,9 @@ namespace EggEncoder.Codecs.Mp3
         internal byte[] BuildInfoTagFrame(int frameCount, int byteCount, int startPadSamples, int endPadSamples, byte[]? seekTable = null)
         {
             var frameLengthBytes = (144000 * _bitRateKbps) / _sampleRate;
-            _bitrateIndex = _tagBitrateIndex;
 
             var writer = new BitWriter();
-            WriteHeader(writer, padding: 0);
+            WriteHeader(writer, padding: 0, _bitrateIndex);
             writer.WriteBits(0, _sideInfoBytes * 8);
 
             foreach (var c in seekTable is null ? "Info" : "Xing")
@@ -316,9 +375,18 @@ namespace EggEncoder.Codecs.Mp3
             return writer.ToArray();
         }
 
-        private (int FrameLengthBytes, Mp3Quantizer.Plan[,] Plans) ChooseVbrFrame(double[][][] granuleXr, int targetGain)
+        private (int FrameLengthBytes, Mp3Quantizer.Plan[,] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int targetGain)
         {
             var lastIndex = Array.FindLastIndex(Mp3Probe.Mpeg1Layer3BitrateKbps, rate => rate > 0);
+            var caches = new Mp3Quantizer.PlanCache[GranuleCount, _channels];
+            for (var gr = 0; gr < GranuleCount; gr++)
+            {
+                for (var ch = 0; ch < _channels; ch++)
+                {
+                    caches[gr, ch] = new Mp3Quantizer.PlanCache();
+                }
+            }
+
             for (var index = 1; index <= lastIndex; index++)
             {
                 var kbps = Mp3Probe.Mpeg1Layer3BitrateKbps[index];
@@ -328,7 +396,7 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 var frameLengthBytes = (144000 * kbps) / _sampleRate;
-                var plans = PlanFrame(granuleXr, frameLengthBytes);
+                var plans = PlanFrame(granuleXr, frameLengthBytes, caches);
                 var fits = true;
                 foreach (var plan in plans)
                 {
@@ -337,15 +405,14 @@ namespace EggEncoder.Codecs.Mp3
 
                 if (fits || index == lastIndex)
                 {
-                    _bitrateIndex = index;
-                    return (frameLengthBytes, plans);
+                    return (frameLengthBytes, plans, index);
                 }
             }
 
             throw new InvalidOperationException("MP3 VBR: no bitrate was tried");
         }
 
-        private Mp3Quantizer.Plan[,] PlanFrame(double[][][] granuleXr, int frameLengthBytes)
+        private Mp3Quantizer.Plan[,] PlanFrame(double[][][] granuleXr, int frameLengthBytes, Mp3Quantizer.PlanCache[,]? caches = null)
         {
             var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
             var bitsPerSegment = (mainDataBytes * 8) / (GranuleCount * _channels);
@@ -354,7 +421,7 @@ namespace EggEncoder.Codecs.Mp3
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    plans[gr, ch] = Mp3Quantizer.FindPlan(granuleXr[gr][ch], bitsPerSegment);
+                    plans[gr, ch] = Mp3Quantizer.FindPlan(granuleXr[gr][ch], bitsPerSegment, caches?[gr, ch]);
                 }
             }
 
