@@ -12,7 +12,8 @@ namespace EggEncoder.Codecs.Mp3
         private const int BandCount = 22;
         private const int MaxRegion0Count = 15;
         private const int MaxRegion1Count = 7;
-        private const int MaxPart23Bits = 4095;
+        internal const int MaxSegmentBits = 4095;
+        internal const int MaxGlobalGain = 255;
 
         private static readonly int[] _tableSelects = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
         private static readonly int[] _lowEscapeTableSelects = [16, 17, 18, 19, 20, 21, 22, 23];
@@ -31,107 +32,6 @@ namespace EggEncoder.Codecs.Mp3
         public readonly record struct Division(int Region0Count, int Region1Count, int Table0, int Table1, int Table2);
 
         public readonly record struct Plan(int GlobalGain, int BigValues, int BitCount, int[] Quantized, Division Division, int Count1Table, int Count1End);
-
-        public static Plan FindPlan(double[] xr, int maxBits, int[] bandStarts) => FindPlan(xr, maxBits, bandStarts, null);
-
-        public static Plan FindPlan(double[] xr, int maxBits, int[] bandStarts, PlanCache? cache, int? gainHint = null)
-        {
-            cache ??= new PlanCache();
-            if (xr.Length != CoefficientCount)
-            {
-                throw new ArgumentException($"Expected exactly {CoefficientCount} coefficients", nameof(xr));
-            }
-
-            maxBits = Math.Min(maxBits, MaxPart23Bits);
-            var low = 0;
-            var high = 255;
-            Plan? best = null;
-            Plan? Fitting(int gain) => cache.Get(xr, gain, maxBits, bandStarts) is { } plan && plan.BitCount <= maxBits ? plan : null;
-
-            if (gainHint is { } hint)
-            {
-                var start = Math.Clamp(hint, 0, 255);
-                if (Fitting(start) is { } fits)
-                {
-                    best = fits;
-                    high = start - 1;
-                    for (var step = 1; high >= 0; step *= 2)
-                    {
-                        var probe = Math.Max(0, start - step);
-                        if (Fitting(probe) is not { } finer)
-                        {
-                            low = probe + 1;
-                            break;
-                        }
-
-                        best = finer;
-                        high = probe - 1;
-                        if (probe == 0)
-                        {
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    low = start + 1;
-                    for (var step = 1; low <= 255; step *= 2)
-                    {
-                        var probe = Math.Min(255, start + step);
-                        if (Fitting(probe) is { } coarser)
-                        {
-                            best = coarser;
-                            high = probe - 1;
-                            break;
-                        }
-
-                        low = probe + 1;
-                    }
-                }
-            }
-
-            while (low <= high)
-            {
-                var mid = (low + high) / 2;
-                var candidate = cache.Get(xr, mid, maxBits, bandStarts);
-
-                if (candidate is { } plan && plan.BitCount <= maxBits)
-                {
-                    best = plan;
-                    high = mid - 1;
-                }
-                else
-                {
-                    low = mid + 1;
-                }
-            }
-
-            if (best is not { } found)
-            {
-                return cache.Get(xr, 255, int.MaxValue, bandStarts) ?? EmptyPlan(255);
-            }
-
-            var refined = WithBestDivision(found, bandStarts);
-            while (refined.GlobalGain > 0 && cache.Get(xr, refined.GlobalGain - 1, int.MaxValue, bandStarts) is { } finer)
-            {
-                var sameRegions = WithRegions(finer, refined.Division.Region0Count, refined.Division.Region1Count, bandStarts, maxBits);
-                if (sameRegions.BitCount <= maxBits)
-                {
-                    refined = sameRegions;
-                    continue;
-                }
-
-                var finerBest = WithBestDivision(finer, bandStarts);
-                if (finerBest.BitCount > maxBits)
-                {
-                    break;
-                }
-
-                refined = finerBest;
-            }
-
-            return refined;
-        }
 
         public static void Write(BitWriter writer, Plan plan, int[] bandStarts)
         {
@@ -201,7 +101,7 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        private static Plan EmptyPlan(int globalGain) => new(globalGain, 0, 0, new int[CoefficientCount], default, 0, 0);
+        internal static Plan EmptyPlan(int globalGain) => new(globalGain, 0, 0, new int[CoefficientCount], default, 0, 0);
 
         private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int globalGain, int bitLimit, int[] bandStarts)
         {
@@ -268,7 +168,7 @@ namespace EggEncoder.Codecs.Mp3
             return new Plan(globalGain, bigEnd / 2, count1Bits + divisionBits, quantized, division, count1Table, count1End);
         }
 
-        private static Plan WithBestDivision(Plan plan, int[] bandStarts)
+        internal static Plan WithBestDivision(Plan plan, int[] bandStarts)
         {
             var (division, bits) = BestDivision(plan.Quantized, plan.BigValues * 2, bandStarts);
             if (bits >= plan.BitCount - Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits)
@@ -279,11 +179,11 @@ namespace EggEncoder.Codecs.Mp3
             return plan with { Division = division, BitCount = Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits + bits };
         }
 
-        private static Plan WithRegions(Plan plan, int region0, int region1, int[] bandStarts, int bitLimit)
+        internal static Plan WithRegions(Plan plan, int region0, int region1, int[] bandStarts)
         {
             var bigEnd = plan.BigValues * 2;
             var count1Bits = Count1Cost(plan.Quantized, bigEnd, plan.Count1End).Bits;
-            var (division, bits) = DivisionFor(plan.Quantized, bigEnd, bandStarts, region0, region1, bitLimit - count1Bits);
+            var (division, bits) = DivisionFor(plan.Quantized, bigEnd, bandStarts, region0, region1, int.MaxValue);
             return plan with { Division = division, BitCount = count1Bits + bits };
         }
 

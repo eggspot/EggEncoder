@@ -81,6 +81,17 @@ again is the next MP3 encoder item. Quality on the same file, decoded by ffmpeg,
 | CBR 320 kb/s | 24.86 dB | 27.67 dB | 29.36 dB |
 | VBR best quality | 0.62 MB, 10.3 dB | 2.39 MB, 27.6 dB | 1.14 MB, 25.2 dB (`-V 0`) |
 
+Then joint stereo and frame-level bit allocation, on a correlated stereo file (`ffmpeg` mixes of tones and pink noise,
+right = 0.85 x left plus its own noise and tone):
+
+| | Huffman regions only | + frame allocation and mid/side | LAME |
+|---|---|---|---|
+| CBR 192 kb/s | 20.44 dB | 24.35 dB | 22.78 dB |
+| CBR 320 kb/s | 28.56 dB | 32.60 dB | 28.65 dB |
+
+Uncorrelated stereo stays at 17.63 dB (LAME 17.90); mid/side is never chosen there. Speed is unchanged by this step
+(780 ms at 192 kb/s and 888 ms at 320 kb/s by default).
+
 Every row writes the same bytes. What changed: the polyphase filter keeps its 512-sample history in a buffer it shifts
 once every 112 calls instead of every call, and runs its window and cosine matrix with one vector lane per output
 (each lane keeps the scalar summation order, with separate multiply and add, so results are identical); the
