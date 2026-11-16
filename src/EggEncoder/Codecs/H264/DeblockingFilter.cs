@@ -10,6 +10,7 @@ internal readonly record struct SliceFilterParameters(int DisableIdc, int Offset
 internal static partial class DeblockingFilter
 {
     private const int UniformMotion = 1 << 16;
+    private const int UniformQuadrants = 1 << 17;
 
     private static readonly byte[] Alpha =
     [
@@ -61,7 +62,17 @@ internal static partial class DeblockingFilter
         var width = picture.WidthInMacroblocks;
         for (var macroblock = firstRow * width; macroblock < endRow * width; macroblock++)
         {
-            masks[macroblock] = CoefficientMask(picture, macroblock) | (HasUniformMotion(picture, macroblock) ? UniformMotion : 0);
+            var mask = CoefficientMask(picture, macroblock);
+            if (HasUniformMotion(picture, macroblock))
+            {
+                mask |= UniformMotion;
+            }
+            else if (HasUniformQuadrants(picture, macroblock))
+            {
+                mask |= UniformQuadrants;
+            }
+
+            masks[macroblock] = mask;
         }
     }
 
@@ -129,6 +140,36 @@ internal static partial class DeblockingFilter
                 }
             }
         }
+    }
+
+    private static bool HasUniformQuadrants(H264Picture picture, int macroblock)
+    {
+        if (picture.IsIntra(macroblock) || picture.Kinds[macroblock] == MacroblockKind.NotDecoded)
+        {
+            return false;
+        }
+
+        for (var list = 0; list < 2; list++)
+        {
+            var references = picture.ReferenceIndexes[list].AsSpan(macroblock * 4, 4);
+            var vectors = MemoryMarshal.Cast<short, int>(picture.MotionVectors[list].AsSpan(macroblock * 32, 32));
+            for (var quadrant = 0; quadrant < 4; quadrant++)
+            {
+                if (references[quadrant] < 0)
+                {
+                    continue;
+                }
+
+                var first = ((quadrant >> 1) * 8) + ((quadrant & 1) * 2);
+                var vector = vectors[first];
+                if (vectors[first + 1] != vector || vectors[first + 4] != vector || vectors[first + 5] != vector)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static bool HasUniformMotion(H264Picture picture, int macroblock)
@@ -215,6 +256,9 @@ internal static partial class DeblockingFilter
             return any;
         }
 
+        var quadrants = (qMask & (UniformMotion | UniformQuadrants)) != 0 && (pMask & (UniformMotion | UniformQuadrants)) != 0;
+        var insideQuadrants = quadrants && (edge & 1) == 1;
+        Span<int> pairMotion = [-1, -1];
         for (var k = 0; k < 4; k++)
         {
             var qBlock = vertical ? (k * 4) + edge : (edge * 4) + k;
@@ -223,6 +267,20 @@ internal static partial class DeblockingFilter
             if (((qMask >> qBlock) & 1) != 0 || ((pMask >> pBlock) & 1) != 0)
             {
                 strength = 2;
+            }
+            else if (insideQuadrants)
+            {
+                strength = 0;
+            }
+            else if (quadrants)
+            {
+                ref var motion = ref pairMotion[k >> 1];
+                if (motion < 0)
+                {
+                    motion = !SameMotion(picture, q, qBlock, p, pBlock) && MotionDiffers(picture, q, qBlock, p, pBlock) ? 1 : 0;
+                }
+
+                strength = (byte)motion;
             }
             else
             {
