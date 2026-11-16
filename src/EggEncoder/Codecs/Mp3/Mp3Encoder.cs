@@ -62,7 +62,6 @@ namespace EggEncoder.Codecs.Mp3
         /// <summary>The variable-bit-rate quality <see cref="EncodeVbr"/> and <see cref="OpenVbrSession"/> use by default.</summary>
         public const int DefaultVbrQuality = 4;
 
-        private static readonly int[] VbrTargetGains = [171, 172, 175, 176, 179, 180, 181, 182, 183, 184];
 
         /// <summary>
         /// Encodes a WAV file to a variable-bit-rate MP3: each frame uses the lowest MPEG-1 Layer III bitrate (32 to
@@ -101,7 +100,7 @@ namespace EggEncoder.Codecs.Mp3
         public static Mp3EncoderSession OpenVbrSession(string destMp3FilePath, int channels, int sampleRate, int bitsPerSample, int quality = DefaultVbrQuality, IReadOnlyDictionary<string, string>? tags = null)
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(quality, 0);
-            ArgumentOutOfRangeException.ThrowIfGreaterThan(quality, VbrTargetGains.Length - 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(quality, Mp3FrameEncoder.VbrQualityCount - 1);
             var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
             var destStream = File.Create(destMp3FilePath);
             if (tagBytes is not null)
@@ -111,7 +110,7 @@ namespace EggEncoder.Codecs.Mp3
 
             try
             {
-                return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, 128, VbrTargetGains[quality]);
+                return new Mp3EncoderSession(destStream, channels, sampleRate, bitsPerSample, 128, quality);
             }
             catch
             {
@@ -155,13 +154,13 @@ namespace EggEncoder.Codecs.Mp3
         private bool _finished;
         private bool _disposed;
 
-        internal Mp3EncoderSession(FileStream destStream, int channels, int sampleRate, int bitsPerSample, int bitRateKbps, int? vbrTargetGain = null)
+        internal Mp3EncoderSession(FileStream destStream, int channels, int sampleRate, int bitsPerSample, int bitRateKbps, int? vbrQuality = null)
         {
             _destStream = destStream;
             _channels = channels;
             _bitsPerSampleShift = bitsPerSample - 16;
-            _variableBitRate = vbrTargetGain is not null;
-            _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps, vbrTargetGain);
+            _variableBitRate = vbrQuality is not null;
+            _frameEncoder = new Mp3FrameEncoder(channels, sampleRate, bitRateKbps, vbrQuality);
 
             _infoTagFrameOffset = destStream.Position;
             var placeholderInfoTagFrame = _frameEncoder.BuildInfoTagFrame(frameCount: 0, byteCount: 0, startPadSamples: 0, endPadSamples: 0);
