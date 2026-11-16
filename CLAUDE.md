@@ -124,7 +124,8 @@ Filters (`Video/Filters/`, backlog item 21) are `IVideoFrameTransform`s plus two
 summing to 16384, kernel widened when shrinking, edge taps folded onto the edge sample; rows into an
 int16 intermediate (value << 6), then columns accumulated four vectors at a time and narrowed with
 `Vector.Narrow`); an optional source rectangle crops inside the scaler, and chroma is left-sited
-horizontally, centred vertically. `FitTransform.Plan` decides contain/cover sizes (even on even
+horizontally, centred vertically. A whole-frame source at the output size passes the frame through
+untouched (at scale 1 the scaler copies exactly for every kernel, `IdentityScaleTest`). `FitTransform.Plan` decides contain/cover sizes (even on even
 canvases). `CropTransform`/`PadTransform` round positions down to even. `FrameRateTransform` is
 ffmpeg `fps` `round=near`. `BoxBlurTransform` keeps its row sums between frames. `VideoDraw.Composite`
 is the one blending routine (generic over `ILayer`: solid, mask, image), blending each chroma sample
