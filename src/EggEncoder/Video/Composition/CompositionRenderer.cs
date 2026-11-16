@@ -360,7 +360,7 @@ internal sealed class CompositionFrameSource
             new ColorConvertTransform(VideoColorRange.Limited, VideoColorMatrix.Bt709),
             new FitTransform(_composition.Width, _composition.Height, scene.Fit, _composition.Background, ScaleKernel.Bicubic, Math.Max(1, _parallelism / 2)));
         var overlays = new VideoFrameTransformPipeline([.. scene.Overlays]);
-        using var reader = Mp4VideoReader.Open(scene.Source, _pool);
+        using var reader = Mp4VideoReader.Open(scene.Source, _pool, _composition.VideoDecoder);
         var halfFrame = rate.FrameDuration / 2;
         var next = plan.FirstFrame;
         VideoFrame? current = null;

@@ -259,6 +259,21 @@ SPS/PPS/AUD dropped. Even width and height only. `IsSupported` opens and closes 
 `VideoComposition.VideoEncoder` (`H264EncoderBackend.Software` default, `Nvenc`, `Auto`; Auto falls back for odd
 canvases or no GPU). Tests skip their GPU parts when `IsSupported` is false.
 
+`NvdecH264Decoder` (`Codecs/H264/Nvdec/`) is the decode side: `IH264Decoder` (`Decode`, `Flush`, `IDisposable`) is
+implemented by `H264Decoder` and by it. It feeds Annex B (4-byte length prefixes converted, SPS/PPS from the avcC sent
+before the first access unit) to the driver's `cuvid` parser with the presentation time in 100 ns ticks; the parser's
+sequence/decode/display callbacks are `[UnmanagedCallersOnly]` statics reaching the instance through a `GCHandle`
+(exceptions are kept and rethrown after `cuvidParseVideoData` returns). The sequence callback (re)creates the decoder
+(8-bit 4:2:0 only, NV12 output, the display area as the target, rounded up to even and copied back to the real size),
+the display callback maps the surface, copies luma with `cuMemcpy2D` straight into a pooled `VideoFrame` and
+deinterleaves chroma, colour range and matrix mapped like `ParameterSets.ReadVui`. Display delay 2. `NvdecApi` keeps
+two offset tables for the structs with `unsigned long` (4 bytes on Windows, 8 on Linux), printed by gcc with and
+without `__CYGWIN__`. `CudaDriver` (shared by NVENC and NVDEC) loads CUDA once and owns contexts and the push/pop
+scope; `NativeBlock` is the zeroed parameter block both use. H.264 decoding is bit-exact, so the tests require NVDEC's
+frames to equal `H264Decoder`'s (B-frames, odd sizes, seeks) and a composition decoded on the GPU to write the same
+file. `Mp4VideoReader` takes an `H264DecoderBackend` (`Software` default, `Nvdec`, `Auto`) in new overloads, and
+`VideoComposition.VideoDecoder` passes it through.
+
 ### MPEG-2 video decoder (`src/EggEncoder/Codecs/Mpeg2/`)
 
 `docs/video-support-backlog.md` item 8, clean-room from ISO/IEC 13818-2 (MPEG-2's last US patent expired in 2018).

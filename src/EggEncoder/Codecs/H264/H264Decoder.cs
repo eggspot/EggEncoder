@@ -13,7 +13,7 @@ namespace EggEncoder.Codecs.H264;
 /// or <see cref="Flush"/> call; after an <see cref="InvalidDataException"/> the decoder drops the pictures it holds and
 /// resumes at the next IDR picture. Not thread-safe: use one decoder per stream.
 /// </summary>
-public sealed partial class H264Decoder : IDisposable
+public sealed partial class H264Decoder : IH264Decoder
 {
     private readonly Dictionary<int, SequenceParameterSet> _sequenceSets = new();
     private readonly Dictionary<int, PictureParameterSet> _pictureSets = new();

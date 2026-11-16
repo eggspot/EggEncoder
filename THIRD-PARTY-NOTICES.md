@@ -133,13 +133,15 @@ are general, published encoder techniques. No source of x264, openh264, the JM r
 ffmpeg was read or copied; x264 and ffmpeg were used only as black boxes, to compare sizes and to
 decode the output.
 
-## NVIDIA Video Codec SDK header `nvEncodeAPI.h` (struct layouts and constants only)
+## NVIDIA Video Codec SDK headers `nvEncodeAPI.h`, `dynlink_cuviddec.h`, `dynlink_nvcuvid.h`, `dynlink_cuda.h` (struct layouts and constants only)
 
 `Codecs/H264/Nvenc/NvencApi.cs` holds struct sizes, field offsets, struct version numbers, GUIDs and
-enum values for NVENC API 12.0, taken from `nvEncodeAPI.h` as distributed in FFmpeg's
-`nv-codec-headers` (tag `n12.0.16.1`). The offsets were printed by compiling that header (`offsetof`,
-`sizeof`), not copied as source. Nothing NVIDIA ships is bundled: `NvencH264Encoder` loads the
-NVENC and CUDA driver libraries already installed with the NVIDIA driver. The header's licence:
+enum values for NVENC API 12.0, and `Codecs/H264/Nvdec/NvdecApi.cs` the same for the NVDEC video parser and
+decoder (`dynlink_cuviddec.h`, `dynlink_nvcuvid.h`, with `CUDA_MEMCPY2D` from `dynlink_cuda.h`), taken from the
+headers as distributed in FFmpeg's `nv-codec-headers` (tag `n12.0.16.1`); the NVDEC structs that use `unsigned long`
+have one table per platform (4 bytes on Windows, 8 on Linux). The offsets were printed by compiling that header (`offsetof`,
+`sizeof`), not copied as source. Nothing NVIDIA ships is bundled: `NvencH264Encoder` and `NvdecH264Decoder` load the
+NVENC, NVDEC (`nvcuvid`) and CUDA driver libraries already installed with the NVIDIA driver. The headers' licence:
 
 > Copyright (c) 2010-2022 NVIDIA Corporation
 >
