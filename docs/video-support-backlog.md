@@ -738,9 +738,11 @@ Rules for every Phase 5 item, on top of the ones above:
     H.264, H.265, AV1, VP9, AAC, MP3 and Opus tracks (others skipped and counted), lacing, unknown-size clusters,
     non-seekable streams, video DTS rebuilt from a reorder window, Opus codec delay applied as ffprobe does.
 
-- [ ] **10. Matroska/WebM mux (pure C#)**
+- [x] **10. Matroska/WebM mux (pure C#)**
   - **Depends on**: 9.
-  - Status: not started.
+  - Status: done. `Containers/Matroska/MatroskaWriter` writes Matroska or WebM from packets (H.264, H.265, AV1, VP9,
+    AAC, MP3, Opus; WebM limited to VP9/AV1/Opus), forward-only, with cues, size and duration patched in when the
+    destination can seek.
 
 - [x] **11. AVI (RIFF) demux + mux (pure C#)**
   - **Feasibility**: pure C#, simpler container than MP4/MKV (flat RIFF chunk structure). Legacy
@@ -768,7 +770,7 @@ stays gated; writing already-encoded H.265 samples into a container (backlog ite
 passthrough, not codec work, and stays allowed. An in-house implementation isn't covered by
 Cisco's grant; it rests on the owner's own legal advice.
 
-- [ ] **12. H.264/AVC decode via `openh264`** — was gated on owner sign-off; approved 2026-11-14
+- [x] **12. H.264/AVC decode via `openh264`** — was gated on owner sign-off; approved 2026-11-14
   for an in-house build (see the sign-off above), so `openh264` itself isn't used.
   - **Licensing, the critical nuance**: the H.264 patent pool (MPEG LA, consolidated into Via
     Licensing Alliance in 2023) is actively, commercially enforced — this is not a dormant or
@@ -785,7 +787,7 @@ Cisco's grant; it rests on the owner's own legal advice.
   - Status: approved 2026-11-14 (see the sign-off above); built in pure C# as Phase 5 items 24-27
     instead of through `openh264`.
 
-- [ ] **13. H.264/AVC encode via `openh264`** — was gated like item 12; approved the same day.
+- [x] **13. H.264/AVC encode via `openh264`** — was gated like item 12; approved the same day.
   Do not use `x264` for this even if sign-off is given — `x264` is GPL-licensed, which is
   copyleft and incompatible with bundling into this MIT-licensed project's binary distribution
   the way every other native dependency here is bundled.
