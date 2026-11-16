@@ -231,7 +231,7 @@ compares it with a test-only copy of the standard's bit-serial process. `RowProg
 row and wakes a waiter only when the progress it registered is reached. With
 `H264EncoderSettings.MaxDelayedFrames` > 0 (default 0) a frame's entropy writer keeps running while
 later frames are analysed (`PendingFrame` holds its syntax, CABAC state, bit writer and picture holds)
-and the frame comes out of a later `Encode` or `Flush`, in order; the composition renderer uses 2.
+and the frame comes out of a later `Encode` or `Flush`, in order; the composition renderer uses the maximum, 8.
 Above 0 up to delay + 1 frames run at once on their own jobs, the threads split between them: each
 frame's deblocking stage publishes its reference rows as they become final (`ReferencePublisher`:
 borders extended and half-pel rows filled row by row, `Lines` counting published luma lines), and a

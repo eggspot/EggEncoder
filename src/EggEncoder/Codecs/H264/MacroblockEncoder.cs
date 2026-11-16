@@ -147,7 +147,7 @@ internal sealed partial class MacroblockEncoder
             {
                 var macroblock = _next;
                 slice.SetPosition(macroblock);
-                var syntax = _syntaxes[macroblock];
+                var syntax = _syntaxes[macroblock % _syntaxes.Length];
                 slice.UseSyntax(syntax);
                 if (_cabac is not null)
                 {
