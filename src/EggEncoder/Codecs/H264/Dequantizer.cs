@@ -341,10 +341,10 @@ internal static class InverseTransform
             high[row] = Vector128.LoadUnsafe(ref start, (nuint)((row * 8) + 4));
         }
 
-        Transpose8x8(low, high);
+        IntegerTransposes.Transpose8x8(low, high);
         Transform8Lanes(low);
         Transform8Lanes(high);
-        Transpose8x8(low, high);
+        IntegerTransposes.Transpose8x8(low, high);
         Transform8Lanes(low);
         Transform8Lanes(high);
         var rows = plane.AsSpan(offset, (7 * stride) + 8);
@@ -353,30 +353,6 @@ internal static class InverseTransform
             AddResidualRow(rows, row * stride, low[row]);
             AddResidualRow(rows, (row * stride) + 4, high[row]);
         }
-    }
-
-    private static void Transpose8x8(Span<Vector128<int>> low, Span<Vector128<int>> high)
-    {
-        var (a0, a1, a2, a3) = Transpose4x4(low[0], low[1], low[2], low[3]);
-        var (b0, b1, b2, b3) = Transpose4x4(low[4], low[5], low[6], low[7]);
-        var (c0, c1, c2, c3) = Transpose4x4(high[0], high[1], high[2], high[3]);
-        var (e0, e1, e2, e3) = Transpose4x4(high[4], high[5], high[6], high[7]);
-        low[0] = a0;
-        low[1] = a1;
-        low[2] = a2;
-        low[3] = a3;
-        high[0] = b0;
-        high[1] = b1;
-        high[2] = b2;
-        high[3] = b3;
-        low[4] = c0;
-        low[5] = c1;
-        low[6] = c2;
-        low[7] = c3;
-        high[4] = e0;
-        high[5] = e1;
-        high[6] = e2;
-        high[7] = e3;
     }
 
     private static void Transform8Lanes(Span<Vector128<int>> v)
@@ -410,7 +386,7 @@ internal static class InverseTransform
     private static void Add4x4Vectors(Span<int> d, byte[] plane, int offset, int stride)
     {
         ref var start = ref MemoryMarshal.GetReference(d[..16]);
-        var (c0, c1, c2, c3) = Transpose4x4(
+        var (c0, c1, c2, c3) = IntegerTransposes.Transpose4x4(
             Vector128.LoadUnsafe(ref start),
             Vector128.LoadUnsafe(ref start, 4),
             Vector128.LoadUnsafe(ref start, 8),
@@ -419,7 +395,7 @@ internal static class InverseTransform
         var e1 = c0 - c2;
         var e2 = Vector128.ShiftRightArithmetic(c1, 1) - c3;
         var e3 = c1 + Vector128.ShiftRightArithmetic(c3, 1);
-        var (r0, r1, r2, r3) = Transpose4x4(e0 + e3, e1 + e2, e1 - e2, e0 - e3);
+        var (r0, r1, r2, r3) = IntegerTransposes.Transpose4x4(e0 + e3, e1 + e2, e1 - e2, e0 - e3);
         var g0 = r0 + r2;
         var g1 = r0 - r2;
         var g2 = Vector128.ShiftRightArithmetic(r1, 1) - r3;
@@ -441,36 +417,6 @@ internal static class InverseTransform
         var words = Vector128.Narrow(clamped, clamped);
         Unsafe.WriteUnaligned(ref target, Vector128.Narrow(words, words).AsUInt32().ToScalar());
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (Vector128<int>, Vector128<int>, Vector128<int>, Vector128<int>) Transpose4x4(Vector128<int> r0, Vector128<int> r1, Vector128<int> r2, Vector128<int> r3)
-    {
-        var a = ZipLow(r0, r1);
-        var b = ZipLow(r2, r3);
-        var c = ZipHigh(r0, r1);
-        var e = ZipHigh(r2, r3);
-        return (
-            ZipLow(a.AsUInt64(), b.AsUInt64()).AsInt32(),
-            ZipHigh(a.AsUInt64(), b.AsUInt64()).AsInt32(),
-            ZipLow(c.AsUInt64(), e.AsUInt64()).AsInt32(),
-            ZipHigh(c.AsUInt64(), e.AsUInt64()).AsInt32());
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<int> ZipLow(Vector128<int> left, Vector128<int> right) =>
-        Sse2.IsSupported ? Sse2.UnpackLow(left, right) : AdvSimd.Arm64.ZipLow(left, right);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<int> ZipHigh(Vector128<int> left, Vector128<int> right) =>
-        Sse2.IsSupported ? Sse2.UnpackHigh(left, right) : AdvSimd.Arm64.ZipHigh(left, right);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<ulong> ZipLow(Vector128<ulong> left, Vector128<ulong> right) =>
-        Sse2.IsSupported ? Sse2.UnpackLow(left, right) : AdvSimd.Arm64.ZipLow(left, right);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector128<ulong> ZipHigh(Vector128<ulong> left, Vector128<ulong> right) =>
-        Sse2.IsSupported ? Sse2.UnpackHigh(left, right) : AdvSimd.Arm64.ZipHigh(left, right);
 
     private static void Put(byte[] plane, int index, int residual) =>
         plane[index] = IntraPrediction.Clip(plane[index] + ((residual + 32) >> 6));
