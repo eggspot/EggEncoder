@@ -1,4 +1,5 @@
 using EggEncoder.Codecs.H264;
+using EggEncoder.Codecs.H264.Nvdec;
 using EggEncoder.Codecs.Jpeg;
 using EggEncoder.Media;
 using EggEncoder.Video;
@@ -17,6 +18,7 @@ namespace EggEncoder.Containers.Mp4
         private readonly Mp4FileSource _source;
         private readonly MediaTrackInfo _track;
         private readonly VideoFramePool? _pool;
+        private readonly H264DecoderBackend _decoder;
         private bool _disposed;
 
         /// <param name="source">A readable, seekable MP4/MOV stream.</param>
@@ -25,9 +27,26 @@ namespace EggEncoder.Containers.Mp4
         /// <exception cref="NotSupportedException">The file has no H.264 track.</exception>
         /// <exception cref="InvalidDataException">The file is malformed.</exception>
         public Mp4VideoReader(Stream source, bool leaveOpen = false, VideoFramePool? pool = null)
+            : this(source, leaveOpen, pool, H264DecoderBackend.Software)
         {
+        }
+
+        /// <param name="source">A readable, seekable MP4/MOV stream.</param>
+        /// <param name="leaveOpen">Leave <paramref name="source"/> open when the reader is disposed.</param>
+        /// <param name="pool">Where decoded frames are rented; a private pool when null.</param>
+        /// <param name="decoder">The CPU decoder, NVDEC on an NVIDIA GPU, or NVDEC when available.</param>
+        /// <exception cref="NotSupportedException">The file has no H.264 track.</exception>
+        /// <exception cref="InvalidDataException">The file is malformed.</exception>
+        public Mp4VideoReader(Stream source, bool leaveOpen, VideoFramePool? pool, H264DecoderBackend decoder)
+        {
+            if (!Enum.IsDefined(decoder))
+            {
+                throw new ArgumentOutOfRangeException(nameof(decoder), decoder, "Unknown decoder");
+            }
+
             _source = new Mp4FileSource(source, leaveOpen);
             _pool = pool;
+            _decoder = decoder;
             var track = _source.Tracks.Tracks.FirstOrDefault(t => t.Kind == MediaKind.Video && t.Codec == MediaCodec.H264);
             if (track is null)
             {
@@ -40,12 +59,16 @@ namespace EggEncoder.Containers.Mp4
 
         /// <summary>Opens the file at <paramref name="path"/>.</summary>
         /// <inheritdoc cref="Mp4VideoReader(Stream, bool, VideoFramePool?)"/>
-        public static Mp4VideoReader Open(string path, VideoFramePool? pool = null)
+        public static Mp4VideoReader Open(string path, VideoFramePool? pool = null) => Open(path, pool, H264DecoderBackend.Software);
+
+        /// <summary>Opens the file at <paramref name="path"/>.</summary>
+        /// <inheritdoc cref="Mp4VideoReader(Stream, bool, VideoFramePool?, H264DecoderBackend)"/>
+        public static Mp4VideoReader Open(string path, VideoFramePool? pool, H264DecoderBackend decoder)
         {
             var stream = File.OpenRead(path);
             try
             {
-                return new Mp4VideoReader(stream, leaveOpen: false, pool);
+                return new Mp4VideoReader(stream, leaveOpen: false, pool, decoder);
             }
             catch
             {
@@ -128,9 +151,16 @@ namespace EggEncoder.Containers.Mp4
             _source.Dispose();
         }
 
+        private IH264Decoder CreateDecoder() => _decoder switch
+        {
+            H264DecoderBackend.Nvdec => new NvdecH264Decoder(_track.CodecConfiguration.Span, _pool),
+            H264DecoderBackend.Auto when NvdecH264Decoder.IsSupported => new NvdecH264Decoder(_track.CodecConfiguration.Span, _pool),
+            _ => new H264Decoder(_track.CodecConfiguration.Span, _pool)
+        };
+
         private IEnumerable<VideoFrame> ReadFramesCore(TimeSpan startAt, TimeSpan dropBefore)
         {
-            using var decoder = new H264Decoder(_track.CodecConfiguration.Span, _pool);
+            using var decoder = CreateDecoder();
             var rotate = _track.Rotation == 0 ? null : new RotateTransform(_track.Rotation);
             var ready = new Queue<VideoFrame>();
             void Collect(VideoFrame frame)

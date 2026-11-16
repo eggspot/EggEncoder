@@ -70,6 +70,13 @@ public sealed record VideoComposition
     /// </summary>
     public H264EncoderBackend VideoEncoder { get; init; } = H264EncoderBackend.Software;
 
+    /// <summary>
+    /// The H.264 decoder for the clips: this library's own on the CPU by default, <see cref="H264DecoderBackend.Nvdec"/>
+    /// on an NVIDIA GPU, or <see cref="H264DecoderBackend.Auto"/> for the GPU when
+    /// <see cref="Codecs.H264.Nvdec.NvdecH264Decoder.IsSupported"/>.
+    /// </summary>
+    public H264DecoderBackend VideoDecoder { get; init; } = H264DecoderBackend.Software;
+
     /// <summary>Where on the output timeline the thumbnail is taken: the first frame at or after it, or the last frame.</summary>
     public TimeSpan ThumbnailAt { get; init; }
 
@@ -163,6 +170,11 @@ public sealed record VideoComposition
         if (ThumbnailAt < TimeSpan.Zero)
         {
             throw new ArgumentException("The thumbnail position can't be negative", nameof(ThumbnailAt));
+        }
+
+        if (!Enum.IsDefined(VideoDecoder))
+        {
+            throw new ArgumentException("Unknown video decoder", nameof(VideoDecoder));
         }
 
         if (!Enum.IsDefined(VideoEncoder))

@@ -53,13 +53,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         ArgumentOutOfRangeException.ThrowIfNegative(deviceIndex);
         _settings = settings;
         _api = NvencLibrary.Get();
-        int device;
-        CheckCuda(_api.CuDeviceGet(&device, deviceIndex), "cuDeviceGet");
-        nint context;
-        CheckCuda(_api.CuCtxCreate(&context, 0, device), "cuCtxCreate");
-        _context = context;
-        nint popped;
-        _api.CuCtxPopCurrent(&popped);
+        _context = _api.Cuda.CreateContext(deviceIndex);
         try
         {
             using var scope = EnterContext();
@@ -105,7 +99,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         var slot = _nextSlot;
         _nextSlot = (_nextSlot + 1) % BufferCount;
         var pitch = CopyIntoInput(frame, _inputs[slot]);
-        var picture = new Block(NvencApi.PictureParams.Size);
+        var picture = new NativeBlock(NvencApi.PictureParams.Size);
         try
         {
             picture.Write(0, NvencApi.PictureParams.Version);
@@ -145,7 +139,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(output);
         using var scope = EnterContext();
-        var picture = new Block(NvencApi.PictureParams.Size);
+        var picture = new NativeBlock(NvencApi.PictureParams.Size);
         try
         {
             picture.Write(0, NvencApi.PictureParams.Version);
@@ -190,14 +184,6 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         }
     }
 
-    private static void CheckCuda(int status, string call)
-    {
-        if (status != 0)
-        {
-            throw new InvalidOperationException($"CUDA {call} failed with error {status}");
-        }
-    }
-
     private static Guid ProfileGuid(H264Profile profile) => profile switch
     {
         H264Profile.Baseline => NvencApi.ProfileBaseline,
@@ -232,7 +218,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
 
     private void OpenSession()
     {
-        var open = new Block(NvencApi.OpenSessionParams.Size);
+        var open = new NativeBlock(NvencApi.OpenSessionParams.Size);
         try
         {
             open.Write(0, NvencApi.OpenSessionParams.Version);
@@ -278,9 +264,9 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
 
     private void Initialize(int preset)
     {
-        var presetConfig = new Block(NvencApi.PresetConfig.Size);
-        var config = new Block(NvencApi.Config.Size);
-        var initialize = new Block(NvencApi.InitializeParams.Size);
+        var presetConfig = new NativeBlock(NvencApi.PresetConfig.Size);
+        var config = new NativeBlock(NvencApi.Config.Size);
+        var initialize = new NativeBlock(NvencApi.InitializeParams.Size);
         try
         {
             presetConfig.Write(0, NvencApi.PresetConfig.Version);
@@ -314,7 +300,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         }
     }
 
-    private void Configure(Block config)
+    private void Configure(NativeBlock config)
     {
         var keyframeInterval = (uint)_settings.EffectiveKeyframeInterval;
         config.Write(NvencApi.Config.ProfileGuid, ProfileGuid(_settings.Profile));
@@ -356,8 +342,8 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
     {
         for (var slot = 0; slot < BufferCount; slot++)
         {
-            var input = new Block(NvencApi.CreateInputBuffer.Size);
-            var bitstream = new Block(NvencApi.CreateBitstreamBuffer.Size);
+            var input = new NativeBlock(NvencApi.CreateInputBuffer.Size);
+            var bitstream = new NativeBlock(NvencApi.CreateBitstreamBuffer.Size);
             try
             {
                 input.Write(0, NvencApi.CreateInputBuffer.Version);
@@ -380,8 +366,8 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
 
     private AvcDecoderConfigurationRecord ReadConfiguration()
     {
-        var payload = new Block(NvencApi.SequenceParamPayload.Size);
-        var buffer = new Block(SequenceParameterBufferSize);
+        var payload = new NativeBlock(NvencApi.SequenceParamPayload.Size);
+        var buffer = new NativeBlock(SequenceParameterBufferSize);
         try
         {
             uint size = 0;
@@ -431,7 +417,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
 
     private int CopyIntoInput(VideoFrame frame, nint input)
     {
-        var lockParams = new Block(NvencApi.LockInputBuffer.Size);
+        var lockParams = new NativeBlock(NvencApi.LockInputBuffer.Size);
         try
         {
             lockParams.Write(0, NvencApi.LockInputBuffer.Version);
@@ -499,7 +485,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         {
             byte[] payload;
             bool keyframe;
-            var lockParams = new Block(NvencApi.LockBitstream.Size);
+            var lockParams = new NativeBlock(NvencApi.LockBitstream.Size);
             try
             {
                 lockParams.Write(0, NvencApi.LockBitstream.Version);
@@ -537,7 +523,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
         throw new InvalidOperationException($"NVENC {call} failed with status {status}{(string.IsNullOrEmpty(detail) ? string.Empty : ": " + detail)}");
     }
 
-    private ContextScope EnterContext() => new(_api, _context);
+    private CudaDriver.ContextScope EnterContext() => _api.Cuda.Enter(_context);
 
     private void Release()
     {
@@ -570,53 +556,7 @@ public sealed unsafe class NvencH264Encoder : IH264Encoder
             }
         }
 
-        _api.CuCtxDestroy(_context);
+        _api.Cuda.CuCtxDestroy(_context);
         _context = 0;
-    }
-
-    private readonly struct ContextScope : IDisposable
-    {
-        private readonly NvencLibrary _api;
-
-        public ContextScope(NvencLibrary api, nint context)
-        {
-            _api = api;
-            CheckCuda(api.CuCtxPushCurrent(context), "cuCtxPushCurrent");
-        }
-
-        public void Dispose()
-        {
-            nint popped;
-            _api.CuCtxPopCurrent(&popped);
-        }
-    }
-
-    private readonly struct Block
-    {
-        public Block(int size)
-        {
-            Pointer = (byte*)NativeMemory.AllocZeroed((nuint)size);
-            Size = size;
-        }
-
-        public byte* Pointer { get; }
-
-        public int Size { get; }
-
-        public T Read<T>(int offset)
-            where T : unmanaged => *(T*)(Pointer + offset);
-
-        public void Write<T>(int offset, T value)
-            where T : unmanaged
-        {
-            if (offset < 0 || offset + sizeof(T) > Size)
-            {
-                throw new ArgumentOutOfRangeException(nameof(offset));
-            }
-
-            *(T*)(Pointer + offset) = value;
-        }
-
-        public void Free() => NativeMemory.Free(Pointer);
     }
 }

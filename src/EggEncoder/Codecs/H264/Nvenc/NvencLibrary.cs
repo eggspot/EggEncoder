@@ -11,19 +11,7 @@ internal sealed unsafe class NvencLibrary
     {
     }
 
-    public delegate* unmanaged<uint, int> CuInit;
-
-    public delegate* unmanaged<int*, int> CuDeviceGetCount;
-
-    public delegate* unmanaged<int*, int, int> CuDeviceGet;
-
-    public delegate* unmanaged<nint*, uint, int, int> CuCtxCreate;
-
-    public delegate* unmanaged<nint, int> CuCtxDestroy;
-
-    public delegate* unmanaged<nint, int> CuCtxPushCurrent;
-
-    public delegate* unmanaged<nint*, int> CuCtxPopCurrent;
+    public CudaDriver Cuda { get; private init; } = null!;
 
     public delegate* unmanaged<void*, void**, int> OpenEncodeSessionEx;
 
@@ -84,32 +72,20 @@ internal sealed unsafe class NvencLibrary
 
     private static NvencLibrary? Load()
     {
-        var (cudaName, nvencName) = OperatingSystem.IsWindows()
-            ? ("nvcuda.dll", "nvEncodeAPI64.dll")
-            : OperatingSystem.IsLinux() ? ("libcuda.so.1", "libnvidia-encode.so.1") : (null, null);
-        if (cudaName is null || nvencName is null || !Environment.Is64BitProcess)
+        if (!CudaDriver.TryGet(out var cuda, out var cudaFailure))
         {
-            _loadFailure = "NVENC is used on 64-bit Windows and Linux only";
+            _loadFailure = cudaFailure;
             return null;
         }
 
-        if (!NativeLibrary.TryLoad(cudaName, out var cuda) || !NativeLibrary.TryLoad(nvencName, out var nvenc))
+        var nvencName = OperatingSystem.IsWindows() ? "nvEncodeAPI64.dll" : "libnvidia-encode.so.1";
+        if (!NativeLibrary.TryLoad(nvencName, out var nvenc))
         {
-            _loadFailure = $"the NVIDIA driver's {cudaName} or {nvencName} wasn't found";
+            _loadFailure = $"the NVIDIA driver's {nvencName} wasn't found";
             return null;
         }
 
-        var library = new NvencLibrary
-        {
-            CuInit = (delegate* unmanaged<uint, int>)Export(cuda, "cuInit"),
-            CuDeviceGetCount = (delegate* unmanaged<int*, int>)Export(cuda, "cuDeviceGetCount"),
-            CuDeviceGet = (delegate* unmanaged<int*, int, int>)Export(cuda, "cuDeviceGet"),
-            CuCtxCreate = (delegate* unmanaged<nint*, uint, int, int>)Export(cuda, "cuCtxCreate_v2"),
-            CuCtxDestroy = (delegate* unmanaged<nint, int>)Export(cuda, "cuCtxDestroy_v2"),
-            CuCtxPushCurrent = (delegate* unmanaged<nint, int>)Export(cuda, "cuCtxPushCurrent_v2"),
-            CuCtxPopCurrent = (delegate* unmanaged<nint*, int>)Export(cuda, "cuCtxPopCurrent_v2")
-        };
-
+        var library = new NvencLibrary { Cuda = cuda! };
         var getMaxVersion = (delegate* unmanaged<uint*, int>)Export(nvenc, "NvEncodeAPIGetMaxSupportedVersion");
         uint driverVersion = 0;
         if (getMaxVersion(&driverVersion) != NvencApi.Success || driverVersion < NvencApi.MinimumDriverApiVersion)
@@ -153,24 +129,8 @@ internal sealed unsafe class NvencLibrary
             NativeMemory.Free(functions);
         }
 
-        if (library.CuInit(0) != 0)
-        {
-            _loadFailure = "cuInit failed: no usable NVIDIA GPU";
-            return null;
-        }
-
-        int devices;
-        if (library.CuDeviceGetCount(&devices) != 0 || devices == 0)
-        {
-            _loadFailure = "no NVIDIA GPU was found";
-            return null;
-        }
-
         return library;
     }
 
-    private static void* Export(nint library, string name) =>
-        NativeLibrary.TryGetExport(library, name, out var address)
-            ? (void*)address
-            : throw new NotSupportedException($"The NVIDIA driver library has no {name}");
+    private static void* Export(nint library, string name) => CudaDriver.Export(library, name);
 }
