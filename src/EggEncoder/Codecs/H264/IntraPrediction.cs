@@ -1,3 +1,4 @@
+using System.Runtime.Intrinsics;
 namespace EggEncoder.Codecs.H264;
 
 internal static class IntraPrediction
@@ -336,11 +337,21 @@ internal static class IntraPrediction
         var a = 16 * (plane[offset + ((height - 1) * stride) - 1] + plane[offset - stride + width - 1]);
         var b = ((horizontalScale * h) + 32) >> 6;
         var c = ((verticalScale * v) + 32) >> 6;
+        var lanes = Vector128.Create(0, 1, 2, 3) * b;
+        var fourSteps = Vector128.Create(4 * b);
+        var rows = plane.AsSpan(offset, ((height - 1) * stride) + width);
         for (var y = 0; y < height; y++)
         {
-            for (var x = 0; x < width; x++)
+            var rowStart = a + (c * (y - (halfHeight - 1))) - (b * (halfWidth - 1)) + 16;
+            for (var x = 0; x < width; x += 8)
             {
-                plane[offset + (y * stride) + x] = Clip((a + (b * (x - (halfWidth - 1))) + (c * (y - (halfHeight - 1))) + 16) >> 5);
+                var low = Vector128.Create(rowStart + (b * x)) + lanes;
+                var high = low + fourSteps;
+                var clampedLow = Vector128.Min(Vector128.Max(Vector128.ShiftRightArithmetic(low, 5), Vector128<int>.Zero), Vector128.Create(255)).AsUInt32();
+                var clampedHigh = Vector128.Min(Vector128.Max(Vector128.ShiftRightArithmetic(high, 5), Vector128<int>.Zero), Vector128.Create(255)).AsUInt32();
+                var words = Vector128.Narrow(clampedLow, clampedHigh);
+                var bytes = Vector128.Narrow(words, words);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(rows.Slice((y * stride) + x, 8), bytes.AsUInt64().ToScalar());
             }
         }
     }
