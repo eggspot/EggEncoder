@@ -1,3 +1,4 @@
+using System.Numerics;
 using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.Mp3
@@ -9,6 +10,8 @@ namespace EggEncoder.Codecs.Mp3
         private const int GainCount = 256;
 
         private static readonly int[] _escapeTableSelects = [24, 25, 26, 27, 28, 29, 30, 31];
+        private static readonly int[][] _pairBits = BuildPairBits();
+        private static readonly int _largestCodableMagnitude = LargestCodableMagnitude();
 
         public readonly record struct Plan(int GlobalGain, int TableSelect, int BigValues, int BitCount, int[] Quantized);
 
@@ -29,7 +32,7 @@ namespace EggEncoder.Codecs.Mp3
             while (low <= high)
             {
                 var mid = (low + high) / 2;
-                var candidate = cache.Get(xr, mid);
+                var candidate = cache.Get(xr, mid, maxBits);
 
                 if (candidate is { } plan && plan.BitCount <= maxBits)
                 {
@@ -42,7 +45,7 @@ namespace EggEncoder.Codecs.Mp3
                 }
             }
 
-            return best ?? cache.Get(xr, 255) ?? new Plan(255, 24, 0, 0, new int[CoefficientCount]);
+            return best ?? cache.Get(xr, 255, int.MaxValue) ?? new Plan(255, 24, 0, 0, new int[CoefficientCount]);
         }
 
         public static void Write(BitWriter writer, Plan plan)
@@ -67,11 +70,12 @@ namespace EggEncoder.Codecs.Mp3
         {
             private readonly Plan?[] _plans = new Plan?[GainCount];
             private readonly bool[] _built = new bool[GainCount];
+            private readonly int[] _countedUpTo = new int[GainCount];
             private readonly double[] _companded = new double[CoefficientCount];
             private readonly double[] _largestFrom = new double[CoefficientCount];
             private double[]? _coefficients;
 
-            public Plan? Get(double[] xr, int globalGain)
+            public Plan? Get(double[] xr, int globalGain, int bitLimit)
             {
                 if (!ReferenceEquals(xr, _coefficients))
                 {
@@ -90,19 +94,26 @@ namespace EggEncoder.Codecs.Mp3
                     }
                 }
 
-                if (!_built[globalGain])
+                if (!_built[globalGain] || bitLimit > _countedUpTo[globalGain])
                 {
-                    _plans[globalGain] = BuildPlan(xr, _companded, _largestFrom, globalGain);
+                    var plan = BuildPlan(xr, _companded, _largestFrom, globalGain, bitLimit);
+                    _plans[globalGain] = plan;
                     _built[globalGain] = true;
+                    _countedUpTo[globalGain] = plan is { } built && built.BitCount > bitLimit ? bitLimit : int.MaxValue;
                 }
 
                 return _plans[globalGain];
             }
         }
 
-        private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int globalGain)
+        private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int globalGain, int bitLimit)
         {
             var scale = Math.Pow(2.0, -(globalGain - GainBase) * 3.0 / 16.0);
+            if (largestFrom[0] * scale >= _largestCodableMagnitude + 0.5)
+            {
+                return null;
+            }
+
             var quantized = new int[CoefficientCount];
             var maxMagnitude = 0;
             var lastNonZero = -1;
@@ -112,16 +123,41 @@ namespace EggEncoder.Codecs.Mp3
                 end--;
             }
 
-            for (var i = 0; i < end; i++)
+            var i = 0;
+            if (Vector.IsHardwareAccelerated)
             {
-                var magnitude = companded[i] * scale;
-                var value = magnitude >= 0.5 ? (int)Math.Round(magnitude, MidpointRounding.AwayFromZero) : 0;
-                quantized[i] = xr[i] < 0 ? -value : value;
-
-                if (value != 0)
+                var lanes = Vector<double>.Count;
+                var scales = new Vector<double>(scale);
+                var half = new Vector<double>(0.5);
+                var one = Vector<double>.One;
+                for (; i + lanes <= end; i += lanes)
                 {
-                    lastNonZero = i;
-                    maxMagnitude = Math.Max(maxMagnitude, value);
+                    var magnitude = new Vector<double>(companded, i) * scales;
+                    var whole = Vector.Floor(magnitude);
+                    var rounded = Vector.ConditionalSelect(Vector.GreaterThanOrEqual(magnitude - whole, half), whole + one, whole);
+                    var values = Vector.ConvertToInt64(rounded);
+                    for (var lane = 0; lane < lanes; lane++)
+                    {
+                        var value = (int)values[lane];
+                        quantized[i + lane] = xr[i + lane] < 0 ? -value : value;
+                        maxMagnitude = Math.Max(maxMagnitude, value);
+                    }
+                }
+            }
+
+            for (; i < end; i++)
+            {
+                var value = Quantize(companded[i] * scale);
+                quantized[i] = xr[i] < 0 ? -value : value;
+                maxMagnitude = Math.Max(maxMagnitude, value);
+            }
+
+            for (var j = end - 1; j >= 0; j--)
+            {
+                if (quantized[j] != 0)
+                {
+                    lastNonZero = j;
+                    break;
                 }
             }
 
@@ -137,14 +173,23 @@ namespace EggEncoder.Codecs.Mp3
                 return null;
             }
 
-            var (table, _, _) = Mp3HuffmanTables.GetBigValueTable(tableSelect);
+            var pairBits = _pairBits[tableSelect];
             var bitCount = 0;
             var maxDirect = width - 1;
             for (var pair = 0; pair < bigValues; pair++)
             {
-                var x = quantized[pair * 2];
-                var y = quantized[(pair * 2) + 1];
-                bitCount += PairBitCount(table, maxDirect, linbits, x, y);
+                var absX = Math.Abs(quantized[pair * 2]);
+                var absY = Math.Abs(quantized[(pair * 2) + 1]);
+                bitCount += pairBits[(Math.Min(absX, maxDirect) * width) + Math.Min(absY, maxDirect)];
+                if (linbits > 0)
+                {
+                    bitCount += (absX >= maxDirect ? linbits : 0) + (absY >= maxDirect ? linbits : 0);
+                }
+
+                if (bitCount > bitLimit)
+                {
+                    break;
+                }
             }
 
             return new Plan(globalGain, tableSelect, bigValues, bitCount, quantized);
@@ -176,35 +221,37 @@ namespace EggEncoder.Codecs.Mp3
             return -1;
         }
 
-        private static int PairBitCount(HuffmanTable table, int maxDirect, int linbits, int x, int y)
+        private static int Quantize(double magnitude)
         {
-            var absX = Math.Abs(x);
-            var absY = Math.Abs(y);
-            var codeX = Math.Min(absX, maxDirect);
-            var codeY = Math.Min(absY, maxDirect);
+            var whole = Math.Floor(magnitude);
+            return (int)whole + (magnitude - whole >= 0.5 ? 1 : 0);
+        }
 
-            var (_, bits) = table.GetCode((codeX * (maxDirect + 1)) + codeY);
-            if (absX >= maxDirect && linbits > 0)
+        private static int LargestCodableMagnitude()
+        {
+            var (_, width, linbits) = Mp3HuffmanTables.GetBigValueTable(_escapeTableSelects[^1]);
+            return (width - 1) + (1 << linbits) - 1;
+        }
+
+        private static int[][] BuildPairBits()
+        {
+            var pairBits = new int[32][];
+            foreach (var select in _escapeTableSelects.Prepend(15))
             {
-                bits += linbits;
+                var (table, width, _) = Mp3HuffmanTables.GetBigValueTable(select);
+                var bits = new int[width * width];
+                for (var x = 0; x < width; x++)
+                {
+                    for (var y = 0; y < width; y++)
+                    {
+                        bits[(x * width) + y] = table.GetCode((x * width) + y).Length + (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0);
+                    }
+                }
+
+                pairBits[select] = bits;
             }
 
-            if (x != 0)
-            {
-                bits++;
-            }
-
-            if (absY >= maxDirect && linbits > 0)
-            {
-                bits += linbits;
-            }
-
-            if (y != 0)
-            {
-                bits++;
-            }
-
-            return bits;
+            return pairBits;
         }
 
         private static void WritePair(BitWriter writer, HuffmanTable table, int maxDirect, int linbits, int x, int y)

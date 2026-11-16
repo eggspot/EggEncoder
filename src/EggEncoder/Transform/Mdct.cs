@@ -90,12 +90,14 @@ namespace EggEncoder.Transform
             }
         }
 
-        private static void DirectForwardFromTable(double[] samples, double[] coefficients, double[] table)
+        internal static double[]? DirectTable(int coefficientCount) => GetDirectTable(coefficientCount);
+
+        internal static void DirectForwardFromTable(ReadOnlySpan<double> samples, Span<double> coefficients, double[] table)
         {
             var coefficientCount = coefficients.Length;
-            Array.Clear(coefficients);
+            coefficients.Clear();
             var vectorEnd = coefficientCount - (coefficientCount % Vector<double>.Count);
-            var output = coefficients.AsSpan();
+            var output = coefficients;
             for (var n = 0; n < samples.Length; n++)
             {
                 var sample = samples[n];

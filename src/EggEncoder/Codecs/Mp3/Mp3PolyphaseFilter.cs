@@ -8,11 +8,13 @@ namespace EggEncoder.Codecs.Mp3
         private const int PartialSumCount = 64;
         private const int SubbandCount = 32;
         private const int BufferLength = HistoryLength * 8;
+        private const int FoldedCount = 32;
 
         private static readonly double[] TransposedMatrix = BuildTransposedMatrix();
 
         private readonly double[] _samples = new double[BufferLength];
         private readonly double[] _partialSums = new double[PartialSumCount];
+        private readonly double[] _folded = new double[FoldedCount];
         private readonly double[] _subbandSamples = new double[SubbandCount];
         private int _newest = BufferLength - HistoryLength;
 
@@ -36,7 +38,8 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             PartialSums(_samples.AsSpan(_newest, HistoryLength), Mp3Tables.WindowCoefficients, _partialSums);
-            Matrix(_partialSums, _subbandSamples);
+            Fold(_partialSums, _folded);
+            Matrix(_folded, _subbandSamples);
             return _subbandSamples;
         }
 
@@ -72,7 +75,21 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        private static void Matrix(ReadOnlySpan<double> partialSums, Span<double> subbandSamples)
+        private static void Fold(ReadOnlySpan<double> partialSums, Span<double> folded)
+        {
+            folded[0] = partialSums[16];
+            for (var j = 1; j <= 16; j++)
+            {
+                folded[j] = partialSums[16 + j] + partialSums[16 - j];
+            }
+
+            for (var j = 17; j < FoldedCount; j++)
+            {
+                folded[j] = partialSums[16 + j] - partialSums[80 - j];
+            }
+        }
+
+        private static void Matrix(ReadOnlySpan<double> folded, Span<double> subbandSamples)
         {
             var lanes = Vector<double>.Count;
             var k = 0;
@@ -82,9 +99,9 @@ namespace EggEncoder.Codecs.Mp3
                 for (; k < SubbandCount; k += lanes)
                 {
                     var sum = Vector<double>.Zero;
-                    for (var i = 0; i < PartialSumCount; i++)
+                    for (var j = 0; j < FoldedCount; j++)
                     {
-                        sum += new Vector<double>(TransposedMatrix.AsSpan((i * SubbandCount) + k)) * new Vector<double>(partialSums[i]);
+                        sum += new Vector<double>(TransposedMatrix.AsSpan((j * SubbandCount) + k)) * new Vector<double>(folded[j]);
                     }
 
                     (sum / divisor).CopyTo(subbandSamples[k..]);
@@ -94,9 +111,9 @@ namespace EggEncoder.Codecs.Mp3
             for (; k < SubbandCount; k++)
             {
                 var sum = 0.0;
-                for (var i = 0; i < PartialSumCount; i++)
+                for (var j = 0; j < FoldedCount; j++)
                 {
-                    sum += TransposedMatrix[(i * SubbandCount) + k] * partialSums[i];
+                    sum += TransposedMatrix[(j * SubbandCount) + k] * folded[j];
                 }
 
                 subbandSamples[k] = sum / 32.0;
@@ -105,12 +122,12 @@ namespace EggEncoder.Codecs.Mp3
 
         private static double[] BuildTransposedMatrix()
         {
-            var matrix = new double[PartialSumCount * SubbandCount];
+            var matrix = new double[FoldedCount * SubbandCount];
             for (var k = 0; k < SubbandCount; k++)
             {
-                for (var i = 0; i < PartialSumCount; i++)
+                for (var j = 0; j < FoldedCount; j++)
                 {
-                    matrix[(i * SubbandCount) + k] = Math.Cos(((2 * k) + 1) * (i - 16) * Math.PI / 64.0);
+                    matrix[(j * SubbandCount) + k] = Math.Cos(((2 * k) + 1) * j * Math.PI / 64.0);
                 }
             }
 

@@ -23,7 +23,10 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _sideInfoBytes;
         private readonly double[] _sineWindow;
         private readonly Mp3PolyphaseFilter[] _filters;
+        private static readonly double[] MdctTable = Mdct.DirectTable(CoefficientsPerSubband)!;
+
         private readonly double[][][] _subbandHistory;
+        private readonly GranuleScratch[] _scratch;
 
         private double _paddingAccumulator;
 
@@ -55,6 +58,12 @@ namespace EggEncoder.Codecs.Mp3
             _sineWindow = BuildSineWindow(MdctWindowSize);
 
             _filters = new Mp3PolyphaseFilter[channels];
+            _scratch = new GranuleScratch[channels];
+            for (var c = 0; c < channels; c++)
+            {
+                _scratch[c] = new GranuleScratch();
+            }
+
             _subbandHistory = new double[channels][][];
             for (var c = 0; c < channels; c++)
             {
@@ -143,7 +152,7 @@ namespace EggEncoder.Codecs.Mp3
         {
             int frameLengthBytes;
             int bitrateIndex;
-            Mp3Quantizer.Plan[,] plans;
+            Mp3Quantizer.Plan[] plans;
             if (_vbrTargetGain is { } targetGain)
             {
                 (frameLengthBytes, plans, bitrateIndex) = ChooseVbrFrame(frame.GranuleXr, targetGain);
@@ -166,8 +175,8 @@ namespace EggEncoder.Codecs.Mp3
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    Mp3Quantizer.Write(writer, plans[gr, ch]);
-                    usedBits += plans[gr, ch].BitCount;
+                    Mp3Quantizer.Write(writer, plans[(gr * _channels) + ch]);
+                    usedBits += plans[(gr * _channels) + ch].BitCount;
                 }
             }
 
@@ -184,13 +193,9 @@ namespace EggEncoder.Codecs.Mp3
         internal double[] ComputeGranuleCoefficients(ReadOnlySpan<int> interleavedSamples, int granule, int channel)
         {
             var granuleOffset = (granule * GranuleSamples * _channels) + channel;
-            var perSubband = new double[SubbandCount][];
-            for (var sb = 0; sb < SubbandCount; sb++)
-            {
-                perSubband[sb] = new double[PolyphaseTicksPerGranule];
-            }
-
-            var tick = new int[SubbandCount];
+            var scratch = _scratch[channel];
+            var perSubband = scratch.PerSubband;
+            var tick = scratch.Tick;
             for (var t = 0; t < PolyphaseTicksPerGranule; t++)
             {
                 for (var s = 0; s < SubbandCount; s++)
@@ -202,7 +207,7 @@ namespace EggEncoder.Codecs.Mp3
                 var subbandSamples = _filters[channel].Analyze(tick);
                 for (var sb = 0; sb < SubbandCount; sb++)
                 {
-                    perSubband[sb][t] = subbandSamples[sb];
+                    perSubband[(sb * PolyphaseTicksPerGranule) + t] = subbandSamples[sb];
                 }
             }
 
@@ -210,22 +215,24 @@ namespace EggEncoder.Codecs.Mp3
             {
                 for (var t = 1; t < PolyphaseTicksPerGranule; t += 2)
                 {
-                    perSubband[sb][t] = -perSubband[sb][t];
+                    perSubband[(sb * PolyphaseTicksPerGranule) + t] = -perSubband[(sb * PolyphaseTicksPerGranule) + t];
                 }
             }
 
             var xr = new double[GranuleSamples];
-            var windowed = new double[MdctWindowSize];
+            var windowed = scratch.Windowed;
+            var coefficients = scratch.Coefficients;
             for (var sb = 0; sb < SubbandCount; sb++)
             {
                 var history = _subbandHistory[channel][sb];
+                var current = perSubband.AsSpan(sb * PolyphaseTicksPerGranule, PolyphaseTicksPerGranule);
                 for (var i = 0; i < CoefficientsPerSubband; i++)
                 {
                     windowed[i] = history[i] * _sineWindow[i];
-                    windowed[CoefficientsPerSubband + i] = perSubband[sb][i] * _sineWindow[CoefficientsPerSubband + i];
+                    windowed[CoefficientsPerSubband + i] = current[i] * _sineWindow[CoefficientsPerSubband + i];
                 }
 
-                var coefficients = Mdct.Forward(windowed);
+                Mdct.DirectForwardFromTable(windowed, coefficients, MdctTable);
 
                 for (var k = 0; k < CoefficientsPerSubband; k++)
                 {
@@ -234,7 +241,7 @@ namespace EggEncoder.Codecs.Mp3
 
                 Array.Copy(coefficients, 0, xr, sb * CoefficientsPerSubband, CoefficientsPerSubband);
 
-                Array.Copy(perSubband[sb], history, CoefficientsPerSubband);
+                current.CopyTo(history);
             }
 
             for (var i = 0; i < GranuleSamples; i++)
@@ -279,7 +286,7 @@ namespace EggEncoder.Codecs.Mp3
             writer.WriteBits(0, 2);
         }
 
-        internal void WriteSideInfo(BitWriter writer, Mp3Quantizer.Plan[,] plans)
+        internal void WriteSideInfo(BitWriter writer, Mp3Quantizer.Plan[] plans)
         {
             writer.WriteBits(0, 9);
             writer.WriteBits(0, _channels == 1 ? 5 : 3);
@@ -293,7 +300,7 @@ namespace EggEncoder.Codecs.Mp3
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    var plan = plans[gr, ch];
+                    var plan = plans[(gr * _channels) + ch];
                     writer.WriteBits((uint)plan.BitCount, 12);
                     writer.WriteBits((uint)plan.BigValues, 9);
                     writer.WriteBits((uint)plan.GlobalGain, 8);
@@ -375,15 +382,15 @@ namespace EggEncoder.Codecs.Mp3
             return writer.ToArray();
         }
 
-        private (int FrameLengthBytes, Mp3Quantizer.Plan[,] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int targetGain)
+        private (int FrameLengthBytes, Mp3Quantizer.Plan[] Plans, int BitrateIndex) ChooseVbrFrame(double[][][] granuleXr, int targetGain)
         {
             var lastIndex = Array.FindLastIndex(Mp3Probe.Mpeg1Layer3BitrateKbps, rate => rate > 0);
-            var caches = new Mp3Quantizer.PlanCache[GranuleCount, _channels];
+            var caches = new Mp3Quantizer.PlanCache[GranuleCount * _channels];
             for (var gr = 0; gr < GranuleCount; gr++)
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    caches[gr, ch] = new Mp3Quantizer.PlanCache();
+                    caches[(gr * _channels) + ch] = new Mp3Quantizer.PlanCache();
                 }
             }
 
@@ -412,16 +419,16 @@ namespace EggEncoder.Codecs.Mp3
             throw new InvalidOperationException("MP3 VBR: no bitrate was tried");
         }
 
-        private Mp3Quantizer.Plan[,] PlanFrame(double[][][] granuleXr, int frameLengthBytes, Mp3Quantizer.PlanCache[,]? caches = null)
+        private Mp3Quantizer.Plan[] PlanFrame(double[][][] granuleXr, int frameLengthBytes, Mp3Quantizer.PlanCache[]? caches = null)
         {
             var mainDataBytes = frameLengthBytes - 4 - _sideInfoBytes;
             var bitsPerSegment = (mainDataBytes * 8) / (GranuleCount * _channels);
-            var plans = new Mp3Quantizer.Plan[GranuleCount, _channels];
+            var plans = new Mp3Quantizer.Plan[GranuleCount * _channels];
             for (var gr = 0; gr < GranuleCount; gr++)
             {
                 for (var ch = 0; ch < _channels; ch++)
                 {
-                    plans[gr, ch] = Mp3Quantizer.FindPlan(granuleXr[gr][ch], bitsPerSegment, caches?[gr, ch]);
+                    plans[(gr * _channels) + ch] = Mp3Quantizer.FindPlan(granuleXr[gr][ch], bitsPerSegment, caches?[(gr * _channels) + ch]);
                 }
             }
 
@@ -437,6 +444,17 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             return window;
+        }
+
+        private sealed class GranuleScratch
+        {
+            public int[] Tick { get; } = new int[SubbandCount];
+
+            public double[] PerSubband { get; } = new double[SubbandCount * PolyphaseTicksPerGranule];
+
+            public double[] Windowed { get; } = new double[MdctWindowSize];
+
+            public double[] Coefficients { get; } = new double[CoefficientsPerSubband];
         }
     }
 }

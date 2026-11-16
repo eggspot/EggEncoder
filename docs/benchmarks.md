@@ -63,8 +63,10 @@ and `-q:a 4`): 0.75 s wall, of which 0.15 s is ffmpeg starting and reading the f
 | Encoder | CBR 192 | VBR q4 |
 |---------|-----:|-----:|
 | Before (one thread) | 2,794 ms | 2,362 ms |
-| One thread, after the changes below | about 1,140 ms | about 925 ms |
-| Default (up to 4 threads) | 462 ms | 465 ms |
+| One thread, v4.111.2 | about 1,140 ms | about 925 ms |
+| Default (up to 4 threads), v4.111.2 | 462 ms | 465 ms |
+| One thread, now | 770-830 ms | 600-680 ms |
+| Default (up to 4 threads), now | 306 ms | 308 ms |
 | ffmpeg + LAME | about 600 ms | about 600 ms |
 
 Every row writes the same bytes. What changed: the polyphase filter keeps its 512-sample history in a buffer it shifts
@@ -75,7 +77,15 @@ once every 112 calls instead of every call, and runs its window and cosine matri
 be nonzero for the gain, and VBR reuses a granule's plan for a gain across every bitrate it tries; the session keeps
 pending samples in one array instead of removing a frame from the front of a list each time. Frames are analysed in
 order (the two channels' filter banks on two threads), collected in batches of 32 and planned and written on up to
-three more threads while the next batch is analysed, because no frame borrows from another (no bit reservoir).
+three more threads while the next batch is analysed, because no frame borrows from another (no bit reservoir). Since v4.111.2: the per-channel analysis reuses scratch buffers and
+calls the cached 18-point MDCT table directly instead of allocating about forty arrays per granule; the quantiser
+rounds with `floor` and a fraction test (exactly `Math.Round(x, AwayFromZero)` for x >= 0) four coefficients at a
+time, counts bits from a per-table cost array holding code length plus sign bits, rejects a gain whose largest
+value no table can code from the granule maximum alone (rounding and scaling are monotonic), and stops counting
+once a probe passes its budget (cached with that limit, so VBR recounts for a bigger budget); the polyphase matrix
+folds its 64 window sums into 32 first (the cosine is symmetric about index 16 and antisymmetric about 48, where it
+is zero), halving its multiply-adds. The fold reorders additions; on the benchmark file and every test fixture the
+output bytes are still unchanged.
 
 ### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
