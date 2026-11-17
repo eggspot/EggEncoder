@@ -12,6 +12,9 @@ namespace EggEncoder.Codecs.Mp3
         private const int BandCount = 22;
         private const int MaxRegion0Count = 15;
         private const int MaxRegion1Count = 7;
+        private const int SymbolMagnitudeLimit = 15;
+        private const int SymbolCount = (SymbolMagnitudeLimit + 1) * (SymbolMagnitudeLimit + 1);
+        private const double ExactIntegerBias = 4503599627370496.0;
         internal const int MaxSegmentBits = 4095;
         internal const int MaxGlobalGain = 255;
 
@@ -20,7 +23,7 @@ namespace EggEncoder.Codecs.Mp3
         private static readonly int[] _escapeTableSelects = [24, 25, 26, 27, 28, 29, 30, 31];
         private static readonly int[] _widths = new int[32];
         private static readonly int[] _linbits = new int[32];
-        private static readonly int[][] _pairBits = BuildPairBits();
+        private static readonly int[][] _pairSymbolBits = BuildPairSymbolBits();
         private static readonly int[][] _candidates = BuildCandidates();
         private static readonly int[][] _escapeCandidates = BuildEscapeCandidates();
         private static readonly int[] _count1BitsA = BuildCount1Bits();
@@ -31,7 +34,7 @@ namespace EggEncoder.Codecs.Mp3
 
         public readonly record struct Division(int Region0Count, int Region1Count, int Table0, int Table1, int Table2);
 
-        public readonly record struct Plan(int GlobalGain, int BigValues, int BitCount, int[] Quantized, Division Division, int Count1Table, int Count1End);
+        public readonly record struct Plan(int GlobalGain, int BigValues, int BitCount, int[] Quantized, byte[] PairSymbols, Division Division, int Count1Table, int Count1End);
 
         public static void Write(BitWriter writer, Plan plan, int[] bandStarts)
         {
@@ -66,17 +69,56 @@ namespace EggEncoder.Codecs.Mp3
             private readonly Plan?[] _plans = new Plan?[GainCount];
             private readonly bool[] _built = new bool[GainCount];
             private readonly int[] _countedUpTo = new int[GainCount];
+            private readonly Plan?[] _quantized = new Plan?[GainCount];
+            private readonly bool[] _quantizedBuilt = new bool[GainCount];
             private readonly double[] _companded = new double[CoefficientCount];
             private readonly double[] _largestFrom = new double[CoefficientCount];
+            private readonly int[] _signs = new int[CoefficientCount];
             private double[]? _coefficients;
 
+            public Plan? GetQuantized(double[] xr, int globalGain, int[] bandStarts)
+            {
+                Prepare(xr);
+                if (_built[globalGain] && _countedUpTo[globalGain] == int.MaxValue)
+                {
+                    return _plans[globalGain] is { } counted ? counted with { BitCount = Count1Cost(counted.Quantized, counted.BigValues * 2, counted.Count1End).Bits, Division = default } : null;
+                }
+
+                if (!_quantizedBuilt[globalGain])
+                {
+                    _quantized[globalGain] = BuildPlan(xr, _companded, _largestFrom, _signs, globalGain, int.MaxValue, bandStarts, costRegions: false);
+                    _quantizedBuilt[globalGain] = true;
+                }
+
+                return _quantized[globalGain];
+            }
+
             public Plan? Get(double[] xr, int globalGain, int bitLimit, int[] bandStarts)
+            {
+                Prepare(xr);
+                if (!_built[globalGain] || bitLimit > _countedUpTo[globalGain])
+                {
+                    var plan = BuildPlan(xr, _companded, _largestFrom, _signs, globalGain, bitLimit, bandStarts, costRegions: true);
+                    _plans[globalGain] = plan;
+                    _built[globalGain] = true;
+                    _countedUpTo[globalGain] = plan is { } built && built.BitCount > bitLimit ? bitLimit : int.MaxValue;
+                }
+
+                return _plans[globalGain];
+            }
+
+            private void Prepare(double[] xr)
             {
                 if (!ReferenceEquals(xr, _coefficients))
                 {
                     Array.Clear(_built);
+                    Array.Clear(_quantizedBuilt);
                     _coefficients = xr;
                     Compand(xr, _companded);
+                    for (var i = 0; i < CoefficientCount; i++)
+                    {
+                        _signs[i] = xr[i] < 0 ? -1 : 0;
+                    }
 
                     var largest = 0.0;
                     for (var i = CoefficientCount - 1; i >= 0; i--)
@@ -85,16 +127,6 @@ namespace EggEncoder.Codecs.Mp3
                         _largestFrom[i] = largest;
                     }
                 }
-
-                if (!_built[globalGain] || bitLimit > _countedUpTo[globalGain])
-                {
-                    var plan = BuildPlan(xr, _companded, _largestFrom, globalGain, bitLimit, bandStarts);
-                    _plans[globalGain] = plan;
-                    _built[globalGain] = true;
-                    _countedUpTo[globalGain] = plan is { } built && built.BitCount > bitLimit ? bitLimit : int.MaxValue;
-                }
-
-                return _plans[globalGain];
             }
         }
 
@@ -117,9 +149,9 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        internal static Plan EmptyPlan(int globalGain) => new(globalGain, 0, 0, new int[CoefficientCount], default, 0, 0);
+        internal static Plan EmptyPlan(int globalGain) => new(globalGain, 0, 0, new int[CoefficientCount], [], default, 0, 0);
 
-        private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int globalGain, int bitLimit, int[] bandStarts)
+        private static Plan? BuildPlan(double[] xr, double[] companded, double[] largestFrom, int[] signs, int globalGain, int bitLimit, int[] bandStarts, bool costRegions)
         {
             var scale = Math.Pow(2.0, -(globalGain - GainBase) * 3.0 / 16.0);
             if (largestFrom[0] * scale >= _largestCodableMagnitude + 0.5)
@@ -128,30 +160,21 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var quantized = new int[CoefficientCount];
-            var end = CoefficientCount;
-            while (end > 0 && largestFrom[end - 1] * scale < 0.5)
-            {
-                end--;
-            }
-
+            var end = FirstRoundingToZero(largestFrom, scale);
             var i = 0;
             if (Vector.IsHardwareAccelerated)
             {
                 var lanes = Vector<double>.Count;
                 var scales = new Vector<double>(scale);
                 var half = new Vector<double>(0.5);
-                var one = Vector<double>.One;
-                for (; i + lanes <= end; i += lanes)
+                var bias = new Vector<double>(ExactIntegerBias);
+                var biasBits = Vector.AsVectorInt64(bias);
+                for (; i + (2 * lanes) <= end; i += 2 * lanes)
                 {
-                    var magnitude = new Vector<double>(companded, i) * scales;
-                    var whole = Vector.Floor(magnitude);
-                    var rounded = Vector.ConditionalSelect(Vector.GreaterThanOrEqual(magnitude - whole, half), whole + one, whole);
-                    var values = Vector.ConvertToInt64(rounded);
-                    for (var lane = 0; lane < lanes; lane++)
-                    {
-                        var value = (int)values[lane];
-                        quantized[i + lane] = xr[i + lane] < 0 ? -value : value;
-                    }
+                    var low = Vector.AsVectorInt64(Vector.Floor((new Vector<double>(companded, i) * scales) + half) + bias) - biasBits;
+                    var high = Vector.AsVectorInt64(Vector.Floor((new Vector<double>(companded, i + lanes) * scales) + half) + bias) - biasBits;
+                    var sign = new Vector<int>(signs, i);
+                    ((Vector.Narrow(low, high) ^ sign) - sign).CopyTo(quantized, i);
                 }
             }
 
@@ -180,26 +203,63 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var (count1Table, count1Bits) = Count1Cost(quantized, bigEnd, count1End);
-            var (division, divisionBits) = ThirdsDivision(quantized, bigEnd, bandStarts, bitLimit - count1Bits);
-            return new Plan(globalGain, bigEnd / 2, count1Bits + divisionBits, quantized, division, count1Table, count1End);
+            var symbols = PairSymbols(quantized, bigEnd);
+            if (!costRegions)
+            {
+                return new Plan(globalGain, bigEnd / 2, count1Bits, quantized, symbols, default, count1Table, count1End);
+            }
+
+            var (division, divisionBits) = ThirdsDivision(quantized, symbols, bigEnd, bandStarts, bitLimit - count1Bits);
+            return new Plan(globalGain, bigEnd / 2, count1Bits + divisionBits, quantized, symbols, division, count1Table, count1End);
+        }
+
+        private static int FirstRoundingToZero(double[] largestFrom, double scale)
+        {
+            var low = 0;
+            var high = CoefficientCount;
+            while (low < high)
+            {
+                var middle = (low + high) >> 1;
+                if (largestFrom[middle] * scale < 0.5)
+                {
+                    high = middle;
+                }
+                else
+                {
+                    low = middle + 1;
+                }
+            }
+
+            return low;
+        }
+
+        private static byte[] PairSymbols(int[] quantized, int bigEnd)
+        {
+            var symbols = new byte[bigEnd / 2];
+            for (var pair = 0; pair < symbols.Length; pair++)
+            {
+                var x = Math.Min(Math.Abs(quantized[pair * 2]), SymbolMagnitudeLimit);
+                var y = Math.Min(Math.Abs(quantized[(pair * 2) + 1]), SymbolMagnitudeLimit);
+                symbols[pair] = (byte)((x * (SymbolMagnitudeLimit + 1)) + y);
+            }
+
+            return symbols;
         }
 
         internal static Plan WithBestDivision(Plan plan, int[] bandStarts)
         {
-            var (division, bits) = BestDivision(plan.Quantized, plan.BigValues * 2, bandStarts);
+            var (division, bits) = BestDivision(plan.Quantized, plan.PairSymbols, plan.BigValues * 2, bandStarts);
             var count1Bits = Count1Cost(plan.Quantized, plan.BigValues * 2, plan.Count1End).Bits;
             return bits >= plan.BitCount - count1Bits ? plan : plan with { Division = division, BitCount = count1Bits + bits };
         }
 
-        internal static Plan WithRegions(Plan plan, int region0, int region1, int[] bandStarts)
+        internal static Plan AddRegions(Plan quantizedOnly, int region0, int region1, int[] bandStarts)
         {
-            var bigEnd = plan.BigValues * 2;
-            var count1Bits = Count1Cost(plan.Quantized, bigEnd, plan.Count1End).Bits;
-            var (division, bits) = DivisionFor(plan.Quantized, bigEnd, bandStarts, region0, region1, int.MaxValue);
-            return plan with { Division = division, BitCount = count1Bits + bits };
+            var (division, bits) = DivisionFor(quantizedOnly.Quantized, quantizedOnly.PairSymbols, quantizedOnly.BigValues * 2, bandStarts, region0, region1, int.MaxValue);
+            return quantizedOnly with { Division = division, BitCount = quantizedOnly.BitCount + bits };
         }
 
-        private static (Division Division, int Bits) ThirdsDivision(int[] quantized, int bigEnd, int[] bandStarts, int bitLimit)
+        private static (Division Division, int Bits) ThirdsDivision(int[] quantized, byte[] symbols, int bigEnd, int[] bandStarts, int bitLimit)
         {
             if (bigEnd == 0)
             {
@@ -214,10 +274,10 @@ namespace EggEncoder.Codecs.Mp3
 
             var region0 = Math.Clamp((bands / 3) - 1, 0, MaxRegion0Count);
             var region1 = Math.Clamp((bands / 3) - 1, 0, MaxRegion1Count);
-            return DivisionFor(quantized, bigEnd, bandStarts, region0, region1, bitLimit);
+            return DivisionFor(quantized, symbols, bigEnd, bandStarts, region0, region1, bitLimit);
         }
 
-        private static (Division Division, int Bits) DivisionFor(int[] quantized, int bigEnd, int[] bandStarts, int region0, int region1, int bitLimit)
+        private static (Division Division, int Bits) DivisionFor(int[] quantized, byte[] symbols, int bigEnd, int[] bandStarts, int region0, int region1, int bitLimit)
         {
             if (bigEnd == 0)
             {
@@ -225,16 +285,16 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var (region0End, region1End) = RegionEnds(new Division(region0, region1, 0, 0, 0), bigEnd, bandStarts);
-            var first = CheapestRegion(quantized, 0, region0End, bitLimit);
+            var first = CheapestRegion(quantized, symbols, 0, region0End, bitLimit);
             var bits = first.Bits;
-            var second = bits <= bitLimit ? CheapestRegion(quantized, region0End, region1End, bitLimit - bits) : (Table: 0, Bits: 0);
+            var second = bits <= bitLimit ? CheapestRegion(quantized, symbols, region0End, region1End, bitLimit - bits) : (Table: 0, Bits: 0);
             bits += second.Bits;
-            var third = bits <= bitLimit ? CheapestRegion(quantized, region1End, bigEnd, bitLimit - bits) : (Table: 0, Bits: 0);
+            var third = bits <= bitLimit ? CheapestRegion(quantized, symbols, region1End, bigEnd, bitLimit - bits) : (Table: 0, Bits: 0);
             bits += third.Bits;
             return (new Division(region0, region1, first.Table, second.Table, third.Table), bits);
         }
 
-        private static (int Table, int Bits) CheapestRegion(int[] quantized, int start, int end, int bitLimit)
+        private static (int Table, int Bits) CheapestRegion(int[] quantized, byte[] symbols, int start, int end, int bitLimit)
         {
             var largest = 0;
             for (var i = start; i < end; i++)
@@ -245,7 +305,7 @@ namespace EggEncoder.Codecs.Mp3
             var best = (Table: 0, Bits: int.MaxValue);
             foreach (var table in Candidates(largest))
             {
-                var bits = RegionCost(quantized, start, end, table, Math.Min(bitLimit, best.Bits));
+                var bits = RegionCost(symbols, start, end, table, Math.Min(bitLimit, best.Bits));
                 if (bits < best.Bits)
                 {
                     best = (table, bits);
@@ -255,28 +315,18 @@ namespace EggEncoder.Codecs.Mp3
             return best;
         }
 
-        private static int RegionCost(int[] quantized, int start, int end, int table, int bitLimit)
+        private static int RegionCost(byte[] symbols, int start, int end, int table, int bitLimit)
         {
             if (table == 0 || start >= end)
             {
                 return 0;
             }
 
-            var pairBits = _pairBits[table];
-            var width = _widths[table];
-            var linbits = _linbits[table];
-            var maxDirect = width - 1;
+            var symbolBits = _pairSymbolBits[table];
             var bits = 0;
-            for (var i = start; i < end; i += 2)
+            for (var pair = start / 2; pair < end / 2; pair++)
             {
-                var absX = Math.Abs(quantized[i]);
-                var absY = Math.Abs(quantized[i + 1]);
-                bits += pairBits[(Math.Min(absX, maxDirect) * width) + Math.Min(absY, maxDirect)];
-                if (linbits > 0)
-                {
-                    bits += (absX >= maxDirect ? linbits : 0) + (absY >= maxDirect ? linbits : 0);
-                }
-
+                bits += symbolBits[symbols[pair]];
                 if (bits > bitLimit)
                 {
                     break;
@@ -315,7 +365,7 @@ namespace EggEncoder.Codecs.Mp3
             return (region0End, Math.Max(region0End, region1End));
         }
 
-        private static (Division Division, int Bits) BestDivision(int[] quantized, int bigEnd, int[] bandStarts)
+        private static (Division Division, int Bits) BestDivision(int[] quantized, byte[] symbols, int bigEnd, int[] bandStarts)
         {
             if (bigEnd == 0)
             {
@@ -323,7 +373,7 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             var scratch = _divisionScratch ??= new DivisionScratch();
-            scratch.Begin(quantized, bigEnd, bandStarts);
+            scratch.Begin(quantized, symbols, bigEnd, bandStarts);
             var bands = scratch.Bands;
             var bestDivision = default(Division);
             var bestBits = int.MaxValue;
@@ -340,12 +390,15 @@ namespace EggEncoder.Codecs.Mp3
                 {
                     var region1Bands = Math.Min(region0 + region1 + 2, bands);
                     var second = scratch.Region(region0Bands, region1Bands);
-                    var third = scratch.Region(region1Bands, bands);
-                    var bits = first.Bits + second.Bits + third.Bits;
-                    if (bits < bestBits)
+                    if (first.Bits + second.Bits < bestBits)
                     {
-                        bestBits = bits;
-                        bestDivision = new Division(region0, region1, first.Table, second.Table, third.Table);
+                        var third = scratch.Region(region1Bands, bands);
+                        var bits = first.Bits + second.Bits + third.Bits;
+                        if (bits < bestBits)
+                        {
+                            bestBits = bits;
+                            bestDivision = new Division(region0, region1, first.Table, second.Table, third.Table);
+                        }
                     }
 
                     if (region1Bands == bands)
@@ -370,16 +423,18 @@ namespace EggEncoder.Codecs.Mp3
             private readonly int[] _rangeLargest = new int[(BandCount + 1) * (BandCount + 1)];
             private readonly int[] _bandEnds = new int[BandCount + 1];
             private readonly int[] _bandLargest = new int[BandCount];
-            private int[] _quantized = [];
+            private readonly int[] _regionStamps = new int[(BandCount + 1) * (BandCount + 1)];
+            private readonly (int Table, int Bits)[] _regions = new (int Table, int Bits)[(BandCount + 1) * (BandCount + 1)];
+            private byte[] _symbols = [];
             private int _pairs;
             private int _stamp;
 
             public int Bands { get; private set; }
 
-            public void Begin(int[] quantized, int bigEnd, int[] bandStarts)
+            public void Begin(int[] quantized, byte[] symbols, int bigEnd, int[] bandStarts)
             {
                 _stamp++;
-                _quantized = quantized;
+                _symbols = symbols;
                 _pairs = bigEnd / 2;
                 var bands = 0;
                 while (bands < BandCount && bandStarts[bands] < bigEnd)
@@ -423,7 +478,13 @@ namespace EggEncoder.Codecs.Mp3
                     return (0, 0);
                 }
 
-                var largest = _rangeLargest[(firstBand * (BandCount + 1)) + endBand];
+                var key = (firstBand * (BandCount + 1)) + endBand;
+                if (_regionStamps[key] == _stamp)
+                {
+                    return _regions[key];
+                }
+
+                var largest = _rangeLargest[key];
                 var startPair = _bandEnds[firstBand] / 2;
                 var endPair = _bandEnds[endBand] / 2;
                 var best = (Table: 0, Bits: int.MaxValue);
@@ -442,6 +503,8 @@ namespace EggEncoder.Codecs.Mp3
                     }
                 }
 
+                _regionStamps[key] = _stamp;
+                _regions[key] = best;
                 return best;
             }
 
@@ -453,22 +516,12 @@ namespace EggEncoder.Codecs.Mp3
                     return prefix;
                 }
 
-                var pairBits = _pairBits[table];
-                var width = _widths[table];
-                var linbits = _linbits[table];
-                var maxDirect = width - 1;
-                var quantized = _quantized;
+                var symbolBits = _pairSymbolBits[table];
+                var symbols = _symbols;
                 var bits = 0;
                 for (var pair = 0; pair < _pairs; pair++)
                 {
-                    var absX = Math.Abs(quantized[pair * 2]);
-                    var absY = Math.Abs(quantized[(pair * 2) + 1]);
-                    bits += pairBits[(Math.Min(absX, maxDirect) * width) + Math.Min(absY, maxDirect)];
-                    if (linbits > 0)
-                    {
-                        bits += (absX >= maxDirect ? linbits : 0) + (absY >= maxDirect ? linbits : 0);
-                    }
-
+                    bits += symbolBits[symbols[pair]];
                     prefix[pair + 1] = bits;
                 }
 
@@ -544,27 +597,28 @@ namespace EggEncoder.Codecs.Mp3
             return (width - 1) + (1 << linbits) - 1;
         }
 
-        private static int[][] BuildPairBits()
+        private static int[][] BuildPairSymbolBits()
         {
-            var pairBits = new int[32][];
+            var symbolBits = new int[32][];
             foreach (var select in _tableSelects)
             {
                 var (table, width, linbits) = Mp3HuffmanTables.GetBigValueTable(select);
                 _widths[select] = width;
                 _linbits[select] = linbits;
-                var bits = new int[width * width];
+                var bits = new int[SymbolCount];
                 for (var x = 0; x < width; x++)
                 {
                     for (var y = 0; y < width; y++)
                     {
-                        bits[(x * width) + y] = table.GetCode((x * width) + y).Length + (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0);
+                        var escapeBits = linbits > 0 ? ((x == width - 1 ? 1 : 0) + (y == width - 1 ? 1 : 0)) * linbits : 0;
+                        bits[(x * (SymbolMagnitudeLimit + 1)) + y] = table.GetCode((x * width) + y).Length + (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0) + escapeBits;
                     }
                 }
 
-                pairBits[select] = bits;
+                symbolBits[select] = bits;
             }
 
-            return pairBits;
+            return symbolBits;
         }
 
         private static void WritePair(BitWriter writer, HuffmanTable table, int maxDirect, int linbits, int x, int y)

@@ -4,25 +4,26 @@ namespace EggEncoder.Codecs.Mp3
 {
     internal sealed class Mp3PolyphaseFilter
     {
+        internal const int SubbandCount = 32;
+
         private const int HistoryLength = 512;
         private const int PartialSumCount = 64;
-        private const int SubbandCount = 32;
         private const int BufferLength = HistoryLength * 8;
         private const int FoldedCount = 32;
 
-        private static readonly double[] TransposedMatrix = BuildTransposedMatrix();
+        private static readonly float[] TransposedMatrix = BuildTransposedMatrix();
+        private static readonly float[] Window = Array.ConvertAll(Mp3Tables.WindowCoefficients, value => (float)value);
 
-        private readonly double[] _samples = new double[BufferLength];
-        private readonly double[] _partialSums = new double[PartialSumCount];
-        private readonly double[] _folded = new double[FoldedCount];
-        private readonly double[] _subbandSamples = new double[SubbandCount];
+        private readonly float[] _samples = new float[BufferLength];
+        private readonly float[] _partialSums = new float[PartialSumCount];
+        private readonly float[] _folded = new float[FoldedCount];
         private int _newest = BufferLength - HistoryLength;
 
-        public double[] Analyze(ReadOnlySpan<int> pcmSamples)
+        public void Analyze(ReadOnlySpan<int> pcmSamples, int stride, Span<float> subbandSamples)
         {
-            if (pcmSamples.Length != SubbandCount)
+            if (pcmSamples.Length < ((SubbandCount - 1) * stride) + 1 || subbandSamples.Length < SubbandCount)
             {
-                throw new ArgumentException($"Analyze expects exactly {SubbandCount} PCM samples per call", nameof(pcmSamples));
+                throw new ArgumentException($"Analyze expects {SubbandCount} PCM samples and room for {SubbandCount} subband samples", nameof(pcmSamples));
             }
 
             if (_newest < SubbandCount)
@@ -34,48 +35,31 @@ namespace EggEncoder.Codecs.Mp3
             _newest -= SubbandCount;
             for (var i = 0; i < SubbandCount; i++)
             {
-                _samples[_newest + SubbandCount - 1 - i] = pcmSamples[i];
+                _samples[_newest + SubbandCount - 1 - i] = pcmSamples[i * stride];
             }
 
-            PartialSums(_samples.AsSpan(_newest, HistoryLength), Mp3Tables.WindowCoefficients, _partialSums);
+            PartialSums(_samples.AsSpan(_newest, HistoryLength), _partialSums);
             Fold(_partialSums, _folded);
-            Matrix(_folded, _subbandSamples);
-            return _subbandSamples;
+            Matrix(_folded, subbandSamples);
         }
 
-        private static void PartialSums(ReadOnlySpan<double> history, ReadOnlySpan<double> window, Span<double> partialSums)
+        private static void PartialSums(ReadOnlySpan<float> history, Span<float> partialSums)
         {
-            var lanes = Vector<double>.Count;
-            var i = 0;
-            if (Vector.IsHardwareAccelerated && PartialSumCount % lanes == 0)
+            var lanes = Vector<float>.Count;
+            for (var i = 0; i < PartialSumCount; i += lanes)
             {
-                for (; i < PartialSumCount; i += lanes)
-                {
-                    var sum = Vector<double>.Zero;
-                    for (var j = 0; j < 8; j++)
-                    {
-                        var index = i + (PartialSumCount * j);
-                        sum += new Vector<double>(history[index..]) * new Vector<double>(window[index..]);
-                    }
-
-                    sum.CopyTo(partialSums[i..]);
-                }
-            }
-
-            for (; i < PartialSumCount; i++)
-            {
-                var sum = 0.0;
+                var sum = Vector<float>.Zero;
                 for (var j = 0; j < 8; j++)
                 {
                     var index = i + (PartialSumCount * j);
-                    sum += history[index] * window[index];
+                    sum += new Vector<float>(history[index..]) * new Vector<float>(Window.AsSpan(index));
                 }
 
-                partialSums[i] = sum;
+                sum.CopyTo(partialSums[i..]);
             }
         }
 
-        private static void Fold(ReadOnlySpan<double> partialSums, Span<double> folded)
+        private static void Fold(ReadOnlySpan<float> partialSums, Span<float> folded)
         {
             folded[0] = partialSums[16];
             for (var j = 1; j <= 16; j++)
@@ -89,45 +73,29 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
-        private static void Matrix(ReadOnlySpan<double> folded, Span<double> subbandSamples)
+        private static void Matrix(ReadOnlySpan<float> folded, Span<float> subbandSamples)
         {
-            var lanes = Vector<double>.Count;
-            var k = 0;
-            if (Vector.IsHardwareAccelerated && SubbandCount % lanes == 0)
+            var lanes = Vector<float>.Count;
+            for (var k = 0; k < SubbandCount; k += lanes)
             {
-                var divisor = new Vector<double>(32.0);
-                for (; k < SubbandCount; k += lanes)
-                {
-                    var sum = Vector<double>.Zero;
-                    for (var j = 0; j < FoldedCount; j++)
-                    {
-                        sum += new Vector<double>(TransposedMatrix.AsSpan((j * SubbandCount) + k)) * new Vector<double>(folded[j]);
-                    }
-
-                    (sum / divisor).CopyTo(subbandSamples[k..]);
-                }
-            }
-
-            for (; k < SubbandCount; k++)
-            {
-                var sum = 0.0;
+                var sum = Vector<float>.Zero;
                 for (var j = 0; j < FoldedCount; j++)
                 {
-                    sum += TransposedMatrix[(j * SubbandCount) + k] * folded[j];
+                    sum += new Vector<float>(TransposedMatrix.AsSpan((j * SubbandCount) + k)) * new Vector<float>(folded[j]);
                 }
 
-                subbandSamples[k] = sum / 32.0;
+                sum.CopyTo(subbandSamples[k..]);
             }
         }
 
-        private static double[] BuildTransposedMatrix()
+        private static float[] BuildTransposedMatrix()
         {
-            var matrix = new double[FoldedCount * SubbandCount];
+            var matrix = new float[FoldedCount * SubbandCount];
             for (var k = 0; k < SubbandCount; k++)
             {
                 for (var j = 0; j < FoldedCount; j++)
                 {
-                    matrix[(j * SubbandCount) + k] = Math.Cos(((2 * k) + 1) * j * Math.PI / 64.0);
+                    matrix[(j * SubbandCount) + k] = (float)(Math.Cos(((2 * k) + 1) * j * Math.PI / 64.0) / 32);
                 }
             }
 
