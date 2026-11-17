@@ -125,6 +125,32 @@ folds its 64 window sums into 32 first (the cosine is symmetric about index 16 a
 is zero), halving its multiply-adds. The fold reorders additions; on the benchmark file and every test fixture the
 output bytes are still unchanged.
 
+Single-thread speed (v4.113.3+, same correlated 60 s file, both builds measured back to back; best of 6 per run):
+
+| | CBR 192 | CBR 320 | VBR q4 |
+|---|---:|---:|---:|
+| One thread, before | 1,061-1,156 ms | 1,276-1,307 ms | 1,764-1,767 ms |
+| One thread, now | 524-527 ms | 602-610 ms | 724-763 ms |
+| Default (up to 4 threads), before | 513-567 ms | 627-662 ms | 905-922 ms |
+| Default, now | 266-442 ms | 307-464 ms | 377-592 ms |
+| ffmpeg + LAME, whole process (`-threads 1`) | 1,007 ms | 1,112 ms | 881 ms (`-q:a 4`) |
+
+One thread now beats LAME's own encode time measured above (about 600 and 700 ms). What changed:
+
+- Analysis (`Mp3HybridFilterBank`) runs in `float` across all 32 subbands at once. The polyphase filter writes each
+  tick's 32 subband samples straight into the bank's buffer, and the 18-point MDCT is folded into an 18-point DCT-IV
+  with the window, the MDCT scale and the 1/32768 PCM scale folded into its table, vectorised over subbands.
+  `float` changes the output bytes; SNR is unchanged to 0.001 dB (24.309 dB at 192, 32.579 dB at 320, 26.854 dB
+  at VBR q4).
+- Planning gives the same bytes as the float analysis alone on every file tried (CBR 128/192/320, VBR q0/q4/q9,
+  correlated, independent and music). Each quantisation stores a byte per pair, min(|x|,15)·16 + min(|y|,15), and
+  every table's cost is one lookup in a 256-entry array that also holds the escape bits. The quantiser rounds and
+  narrows to `int` in vector lanes: floor(m + 0.5) is exact here, then adding 2^52 gives the integer's bits, since
+  `Vector.ConvertToInt64` isn't accelerated without AVX-512. Signs come from a mask kept per granule, and a binary
+  search finds the last coefficient that rounds to nonzero. The full region search remembers each region it costed
+  and skips the third region when the first two already cost more than the best split. Plan caches are reused per
+  thread instead of allocating about 128 KB per frame.
+
 ### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
 60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to interleaved 16-bit PCM.
