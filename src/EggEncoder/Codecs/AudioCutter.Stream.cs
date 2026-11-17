@@ -86,6 +86,7 @@ namespace EggEncoder.Codecs
             var sourceChannels = 0;
             var sourceSampleRate = 0;
             var sourceBitsPerSample = 0;
+            var decodedFrames = 0L;
 
             try
             {
@@ -93,6 +94,7 @@ namespace EggEncoder.Codecs
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    decodedFrames += block.Length / channels;
                     sourceChannels = channels;
                     sourceSampleRate = sampleRate;
                     sourceBitsPerSample = bitsPerSample;
@@ -106,6 +108,11 @@ namespace EggEncoder.Codecs
                     destSink ??= OpenSinkStream(destFormat, dest, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
+
+                if (decodedFrames == 0)
+                {
+                    throw NoAudioDecoded($"The {sourceFormat} source stream");
+                }
 
                 if (destSink is not null)
                 {
@@ -160,6 +167,7 @@ namespace EggEncoder.Codecs
             var endSample = 0L;
             var retainedFrames = 0L;
             var currentFrame = 0L;
+            var decodedFrames = 0L;
             var scratch = new ScratchBuffer();
             PcmTransformPipeline? effectivePipeline = null;
             var sourceChannels = 0;
@@ -171,6 +179,7 @@ namespace EggEncoder.Codecs
                 DecodeSourceStream(source, sourceFormat, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    decodedFrames += block.Length / channels;
 
                     if (!rangeComputed)
                     {
@@ -204,6 +213,11 @@ namespace EggEncoder.Codecs
 
                     currentFrame += block.Length / channels;
                 });
+
+                if (decodedFrames == 0)
+                {
+                    throw NoAudioDecoded($"The {sourceFormat} source stream");
+                }
 
                 if (destSink is not null)
                 {

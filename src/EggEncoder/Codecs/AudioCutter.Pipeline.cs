@@ -132,6 +132,7 @@ namespace EggEncoder.Codecs
             var sourceChannels = 0;
             var sourceSampleRate = 0;
             var sourceBitsPerSample = 0;
+            var decodedFrames = 0L;
 
             try
             {
@@ -139,6 +140,7 @@ namespace EggEncoder.Codecs
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    decodedFrames += block.Length / channels;
                     sourceChannels = channels;
                     sourceSampleRate = sampleRate;
                     sourceBitsPerSample = bitsPerSample;
@@ -153,6 +155,11 @@ namespace EggEncoder.Codecs
                     destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat, destinationAiffFormat, destinationAuFormat);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
+
+                if (decodedFrames == 0)
+                {
+                    throw NoAudioDecoded($"'{sourceFilePath}'");
+                }
 
                 if (destSink is not null)
                 {
@@ -200,6 +207,7 @@ namespace EggEncoder.Codecs
             var endSample = 0L;
             var retainedFrames = 0L;
             var currentFrame = 0L;
+            var decodedFrames = 0L;
             var scratch = new ScratchBuffer();
             PcmTransformPipeline? effectivePipeline = null;
             var sourceChannels = 0;
@@ -211,6 +219,7 @@ namespace EggEncoder.Codecs
                 DecodeSource(sourceFilePath, sourceExtension, (block, channels, sampleRate, bitsPerSample, totalSamples) =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    decodedFrames += block.Length / channels;
 
                     if (!rangeComputed)
                     {
@@ -246,6 +255,11 @@ namespace EggEncoder.Codecs
 
                     currentFrame += block.Length / channels;
                 });
+
+                if (decodedFrames == 0)
+                {
+                    throw NoAudioDecoded($"'{sourceFilePath}'");
+                }
 
                 if (destSink is not null)
                 {
@@ -417,6 +431,7 @@ namespace EggEncoder.Codecs
             var expectedChannels = -1;
             var expectedSampleRate = -1;
             var expectedBitsPerSample = -1;
+            var decodedFrames = 0L;
 
             try
             {
@@ -446,7 +461,13 @@ namespace EggEncoder.Codecs
 
                         var buffer = scratch.CopyFrom(block);
                         destSink!.WriteInterleavedSamples(buffer, block.Length / channels);
+                        decodedFrames += block.Length / channels;
                     });
+                }
+
+                if (decodedFrames == 0)
+                {
+                    throw NoAudioDecoded($"'{string.Join("', '", sourceFilePaths)}'");
                 }
 
                 destSink?.Finish();
@@ -456,6 +477,9 @@ namespace EggEncoder.Codecs
                 destSink?.Dispose();
             }
         }
+
+        private static InvalidDataException NoAudioDecoded(string source) =>
+            new($"{source} decoded to no audio samples, so no output was written");
 
         private static PcmTransformPipeline BuildCutPipeline(CutOptions options, long retainedFrames, int sampleRate)
         {

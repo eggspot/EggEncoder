@@ -1181,7 +1181,7 @@ namespace EggEncoder.UnitTests.Codecs.Wav
                 }
 
                 using var wavReader = WavReader.Open(filePath);
-                wavReader.TotalSamples.Should().Be(200, "the data-chunk-derived fallback total (10 declared bytes * 2 nibbles/byte) is itself computed from the declared size, same as any other malformed-header case");
+                wavReader.TotalSamples.Should().Be(20, "a data chunk declaring more bytes than the file holds runs to the end of the file, so the total comes from the 10 bytes actually there");
 
                 var buffer = new int[4096];
                 var totalDecoded = 0;
