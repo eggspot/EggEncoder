@@ -74,6 +74,8 @@ namespace EggEncoder.Codecs.Mp3
             private readonly double[] _companded = new double[CoefficientCount];
             private readonly double[] _largestFrom = new double[CoefficientCount];
             private readonly int[] _signs = new int[CoefficientCount];
+            private readonly int[] _builtGains = new int[GainCount * 2];
+            private int _builtGainCount;
             private double[]? _coefficients;
 
             public Plan? GetQuantized(double[] xr, int globalGain, int[] bandStarts)
@@ -86,6 +88,7 @@ namespace EggEncoder.Codecs.Mp3
 
                 if (!_quantizedBuilt[globalGain])
                 {
+                    _builtGains[_builtGainCount++] = globalGain;
                     _quantized[globalGain] = BuildPlan(xr, _companded, _largestFrom, _signs, globalGain, int.MaxValue, bandStarts, costRegions: false);
                     _quantizedBuilt[globalGain] = true;
                 }
@@ -98,6 +101,11 @@ namespace EggEncoder.Codecs.Mp3
                 Prepare(xr);
                 if (!_built[globalGain] || bitLimit > _countedUpTo[globalGain])
                 {
+                    if (!_built[globalGain])
+                    {
+                        _builtGains[_builtGainCount++] = globalGain;
+                    }
+
                     var plan = BuildPlan(xr, _companded, _largestFrom, _signs, globalGain, bitLimit, bandStarts, costRegions: true);
                     _plans[globalGain] = plan;
                     _built[globalGain] = true;
@@ -111,8 +119,16 @@ namespace EggEncoder.Codecs.Mp3
             {
                 if (!ReferenceEquals(xr, _coefficients))
                 {
-                    Array.Clear(_built);
-                    Array.Clear(_quantizedBuilt);
+                    for (var g = 0; g < _builtGainCount; g++)
+                    {
+                        var gain = _builtGains[g];
+                        _plans[gain] = null;
+                        _quantized[gain] = null;
+                        _built[gain] = false;
+                        _quantizedBuilt[gain] = false;
+                    }
+
+                    _builtGainCount = 0;
                     _coefficients = xr;
                     Compand(xr, _companded);
                     for (var i = 0; i < CoefficientCount; i++)
