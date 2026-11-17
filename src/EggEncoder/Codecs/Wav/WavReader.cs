@@ -197,6 +197,7 @@ namespace EggEncoder.Codecs.Wav
                 long dataChunkStart = 0;
                 long dataChunkLength = 0;
                 var dataChunkFound = false;
+                var dataRunsToEndOfStream = false;
                 long? factChunkTotalSamples = null;
                 Dictionary<string, string>? tags = null;
 
@@ -295,8 +296,15 @@ namespace EggEncoder.Codecs.Wav
                     else if (chunkId == "data")
                     {
                         dataChunkStart = chunkDataStart;
-                        dataChunkLength = chunkSize;
                         dataChunkFound = true;
+                        if (IsUnsizedDataChunk(reader, chunkDataStart, chunkSize))
+                        {
+                            dataChunkLength = stream.Length - chunkDataStart;
+                            dataRunsToEndOfStream = true;
+                            break;
+                        }
+
+                        dataChunkLength = chunkSize;
                     }
                     else if (chunkId == "LIST")
                     {
@@ -326,6 +334,11 @@ namespace EggEncoder.Codecs.Wav
                 if (!dataChunkFound)
                 {
                     throw new InvalidDataException($"'{filePath}' is missing a 'data' chunk");
+                }
+
+                if (dataRunsToEndOfStream || factChunkTotalSamples == 0)
+                {
+                    factChunkTotalSamples = null;
                 }
 
                 if (isAdpcm)
@@ -453,7 +466,13 @@ namespace EggEncoder.Codecs.Wav
                     throw new NotSupportedException($"'{filePath}' has {bitsPerSample}-bit samples; only 8-bit, 16-bit, 24-bit, and 32-bit PCM are supported");
                 }
 
-                var pcmTotalSamples = dataChunkLength / (channels.Value * (bitsPerSample.Value / 8));
+                var pcmFrameBytes = channels.Value * (bitsPerSample.Value / 8);
+                if (dataRunsToEndOfStream)
+                {
+                    dataChunkLength -= dataChunkLength % pcmFrameBytes;
+                }
+
+                var pcmTotalSamples = dataChunkLength / pcmFrameBytes;
 
                 return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample.Value, isFloatFormat, dataChunkStart, dataChunkLength, pcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
             }
@@ -497,6 +516,34 @@ namespace EggEncoder.Codecs.Wav
         // optional, decorative metadata, not something the audio decode itself depends on, so a
         // truncated or malformed tag list degrades to "parse whatever tags came before the
         // inconsistency, then stop" rather than failing the whole file open.
+        private const uint UnknownDataChunkSize = 0xFFFFFFFF;
+
+        private static bool IsUnsizedDataChunk(BinaryReader reader, long chunkDataStart, uint chunkSize)
+        {
+            var available = reader.BaseStream.Length - chunkDataStart;
+            if (chunkSize == UnknownDataChunkSize || chunkSize > available)
+            {
+                return true;
+            }
+
+            return chunkSize == 0 && available > 0 && !StartsWithWellFormedChunk(reader, chunkDataStart);
+        }
+
+        private static bool StartsWithWellFormedChunk(BinaryReader reader, long position)
+        {
+            var stream = reader.BaseStream;
+            if (stream.Length - position < 8)
+            {
+                return false;
+            }
+
+            stream.Position = position;
+            var id = reader.ReadBytes(4);
+            var size = reader.ReadUInt32();
+            stream.Position = position;
+            return Array.TrueForAll(id, character => character is >= 0x20 and <= 0x7E) && position + 8 + size <= stream.Length;
+        }
+
         private static Dictionary<string, string>? TryParseListInfoTags(BinaryReader reader, long chunkDataStart, uint chunkSize)
         {
             if (chunkSize < 4)
