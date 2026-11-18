@@ -158,6 +158,8 @@ namespace EggEncoder.Codecs.Flac
         private long _totalSamples;
         private long _frameIndex;
         private int _lastBlockSize;
+        private int _minFrameBytes = int.MaxValue;
+        private int _maxFrameBytes;
         private bool _disposed;
 
         private FlacEncoderSession(Stream destStream, bool leaveOpen, int channels, int bitsPerSample, int sampleRate)
@@ -261,7 +263,7 @@ namespace EggEncoder.Codecs.Flac
             }
 
             var writer = new BitWriter();
-            WriteStreamInfoPayload(writer, _channels, _bitsPerSample, _sampleRate, minBlockSize, maxBlockSize, _totalSamples, md5);
+            WriteStreamInfoPayload(writer, _channels, _bitsPerSample, _sampleRate, minBlockSize, maxBlockSize, _totalSamples, md5, _frameIndex == 0 ? 0 : _minFrameBytes, _maxFrameBytes);
 
             _destStream.Seek(StreamInfoPayloadOffset, SeekOrigin.Begin);
             _destStream.Write(writer.ToArray());
@@ -300,8 +302,10 @@ namespace EggEncoder.Codecs.Flac
                 }
             }
 
-            var frameBytes = FlacFrameEncoder.EncodeFrame(channelSamples, _pendingFrameCount, _bitsPerSample, _frameIndex);
+            var frameBytes = FlacFrameEncoder.EncodeFrame(channelSamples, _pendingFrameCount, _bitsPerSample, _sampleRate, _frameIndex);
             _destStream.Write(frameBytes);
+            _minFrameBytes = Math.Min(_minFrameBytes, frameBytes.Length);
+            _maxFrameBytes = Math.Max(_maxFrameBytes, frameBytes.Length);
 
             _frameIndex++;
             _lastBlockSize = _pendingFrameCount;
@@ -312,12 +316,12 @@ namespace EggEncoder.Codecs.Flac
         // conformance tests specifically, which must build a real STREAMINFO out-of-band to make
         // its own raw frames decodable at all -- see that type's own doc comment) can reuse this
         // exact bit layout rather than duplicating it.
-        internal static void WriteStreamInfoPayload(BitWriter writer, int channels, int bitsPerSample, int sampleRate, int minBlockSize, int maxBlockSize, long totalSamples, byte[] md5)
+        internal static void WriteStreamInfoPayload(BitWriter writer, int channels, int bitsPerSample, int sampleRate, int minBlockSize, int maxBlockSize, long totalSamples, byte[] md5, int minFrameBytes = 0, int maxFrameBytes = 0)
         {
             writer.WriteBits((uint)minBlockSize, 16);
             writer.WriteBits((uint)maxBlockSize, 16);
-            writer.WriteBits(0, 24); // minimum frame size -- RFC 9639 allows 0 for "unknown", never read by FlacDecoder anyway
-            writer.WriteBits(0, 24); // maximum frame size -- likewise
+            writer.WriteBits((uint)minFrameBytes, 24);
+            writer.WriteBits((uint)maxFrameBytes, 24);
             writer.WriteBits((uint)sampleRate, 20);
             writer.WriteBits((uint)(channels - 1), 3);
             writer.WriteBits((uint)(bitsPerSample - 1), 5);
