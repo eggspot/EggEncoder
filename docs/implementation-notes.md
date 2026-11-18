@@ -70,3 +70,10 @@ Reasons and edge cases behind code that keeps no comments. Each section names th
   WMA take the source bit depth and rescale to 16-bit, since a 24-bit source would otherwise wrap into
   noise.
 - **Scratch buffer.** Block callbacks reuse one grow-only array instead of allocating per block.
+
+## Probing (`NativeEncoder.cs`)
+
+- The path and `Stream` forms of the MP3 and MOV/MP4 probes share one mapping helper each, so the two can't
+  drift apart.
+- A MOV/MP4 probe whose audio track is missing or can't be decoded (non-AAC-LC, more than two channels)
+  still returns the video metadata with no audio fields, instead of failing the whole probe.

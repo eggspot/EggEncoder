@@ -21,6 +21,7 @@ namespace EggEncoder
     {
         public Task<ProbeResult> Probe(Stream source, AudioFormat format)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(source);
 
             try
@@ -63,6 +64,7 @@ namespace EggEncoder
         /// </summary>
         public Task<ProbeResult> Probe(Stream source, AudioFormat format, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             cancellationToken.ThrowIfCancellationRequested();
             return Probe(source, format);
         }
@@ -533,6 +535,7 @@ namespace EggEncoder
         /// </summary>
         public Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(dest);
 
@@ -562,6 +565,7 @@ namespace EggEncoder
         /// </summary>
         public Task ConvertFile(Stream source, AudioFormat sourceFormat, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(dest);
 
@@ -595,6 +599,7 @@ namespace EggEncoder
         /// </summary>
         public Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(dest);
 
@@ -626,6 +631,7 @@ namespace EggEncoder
         /// </summary>
         public Task<bool> CutFile(Stream source, AudioFormat sourceFormat, int startInSeconds, int endInSeconds, Stream dest, AudioFormat destFormat, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(dest);
 

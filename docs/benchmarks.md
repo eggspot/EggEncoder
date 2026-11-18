@@ -151,6 +151,22 @@ One thread now beats LAME's own encode time measured above (about 600 and 700 ms
   and skips the third region when the first two already cost more than the best split. Plan caches are reused per
   thread instead of allocating about 128 KB per frame.
 
+Threads and a thread cap (v4.114.0+, 5 min of 44.1 kHz stereo music, CBR 320 through `NativeEncoder.ConvertFile`;
+fastest of six alternating rounds, each run best of 4, while another process kept about two of the six cores busy):
+
+| Threads | v4.113.5 | now |
+|---|---:|---:|
+| 1 | 2,162 ms | 2,161 ms |
+| 2 | 1,644 ms | 1,623 ms |
+| 4 (default) | 1,093 ms | 1,056 ms |
+
+Runs of 8 frames now go to the thread pool one by one (at most threads - 1 at once, written in order) instead of
+batches of 32 whose four runs left one of three planning threads idle half the time; the two channels are analysed
+on two threads only from 6 threads up, so "N threads" means at most N busy. Same bytes for every thread count. The
+change is within noise on this laptop: 4 threads give about 2x one thread because turbo drops as cores load, not
+because of serial code (the copies between reader and encoder measured nothing: `ConvertFile` and a direct
+`Mp3Encoder.Encode` take the same time). `EggEncoderOptions.MaxDegreeOfParallelism` caps the threads one call uses.
+
 ### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
 60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to interleaved 16-bit PCM.

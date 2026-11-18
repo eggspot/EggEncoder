@@ -18,9 +18,58 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var oneThreadOneWrite = Encode(samples, variableBitRate, threads: 1, writeFrames: samples.Length / Channels);
             var fourThreadsOneWrite = Encode(samples, variableBitRate, threads: 4, writeFrames: samples.Length / Channels);
             var twoThreadsSmallWrites = Encode(samples, variableBitRate, threads: 2, writeFrames: 1001);
+            var threeThreadsBlockWrites = Encode(samples, variableBitRate, threads: 3, writeFrames: 4096);
+            var eightThreadsSplitChannels = Encode(samples, variableBitRate, threads: 8, writeFrames: 4096);
 
             fourThreadsOneWrite.Should().Equal(oneThreadOneWrite);
             twoThreadsSmallWrites.Should().Equal(oneThreadOneWrite);
+            threeThreadsBlockWrites.Should().Equal(oneThreadOneWrite);
+            eightThreadsSplitChannels.Should().Equal(oneThreadOneWrite);
+        }
+
+        [Fact]
+        public void Dropping_To_One_Thread_Mid_Stream_Should_Keep_Frames_In_Order()
+        {
+            var samples = Music(3.1);
+            var expected = Encode(samples, variableBitRate: false, threads: 1, writeFrames: 4096);
+            var path = Path.Combine(Path.GetTempPath(), $"mp3_parallel_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                using (var session = Mp3Encoder.OpenSession(path, Channels, SampleRate, bitsPerSample: 16, bitRateKbps: 192))
+                {
+                    session.MaxDegreeOfParallelism = 4;
+                    var half = samples.Length / Channels / 2;
+                    session.WriteInterleavedSamples(samples[..(half * Channels)], half);
+                    session.MaxDegreeOfParallelism = 1;
+                    var rest = samples[(half * Channels)..];
+                    session.WriteInterleavedSamples(rest, rest.Length / Channels);
+                    session.Finish();
+                }
+
+                File.ReadAllBytes(path).Should().Equal(expected);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void A_Thread_Count_Below_One_Should_Be_Rejected()
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"mp3_parallel_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                using var session = Mp3Encoder.OpenSession(path, Channels, SampleRate, bitsPerSample: 16);
+
+                var setZero = () => session.MaxDegreeOfParallelism = 0;
+
+                setZero.Should().Throw<ArgumentOutOfRangeException>();
+            }
+            finally
+            {
+                File.Delete(path);
+            }
         }
 
         private static byte[] Encode(int[] samples, bool variableBitRate, int threads, int writeFrames)

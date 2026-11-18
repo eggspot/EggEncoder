@@ -304,7 +304,7 @@ namespace EggEncoder.Codecs
             var decoded = new (int[] Samples, int Channels, int SampleRate, int BitsPerSample)[inputs.Count];
             var failures = new Exception?[inputs.Count];
 
-            Parallel.For(0, inputs.Count, i =>
+            Parallel.For(0, inputs.Count, new ParallelOptions { MaxDegreeOfParallelism = CodecParallelism.Current ?? -1 }, i =>
             {
                 try
                 {

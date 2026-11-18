@@ -23,6 +23,7 @@ namespace EggEncoder
 
         private readonly ILogger _logger;
         private readonly bool _loggingEnabled;
+        private readonly int? _maxDegreeOfParallelism;
 
         public NativeEncoder(ILogger<NativeEncoder> logger, bool enableLogging = true)
         {
@@ -30,8 +31,16 @@ namespace EggEncoder
             _loggingEnabled = enableLogging;
         }
 
+        /// <summary>Creates an encoder with the given <see cref="EggEncoderOptions"/>.</summary>
+        public NativeEncoder(ILogger<NativeEncoder> logger, EggEncoderOptions options)
+            : this(logger, (options ?? throw new ArgumentNullException(nameof(options))).EnableLogging)
+        {
+            _maxDegreeOfParallelism = options.MaxDegreeOfParallelism;
+        }
+
         public Task<ProbeResult> Probe(string filePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native probe '{filePath}'");
@@ -76,12 +85,14 @@ namespace EggEncoder
         /// </summary>
         public Task<ProbeResult> Probe(string filePath, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             cancellationToken.ThrowIfCancellationRequested();
             return Probe(filePath);
         }
 
         public Task ConvertFile(string sourceFilePath, string destFilePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
@@ -108,6 +119,7 @@ namespace EggEncoder
         /// </summary>
         public Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
@@ -133,6 +145,7 @@ namespace EggEncoder
 
         public Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
@@ -162,6 +175,7 @@ namespace EggEncoder
         /// </summary>
         public Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
@@ -206,9 +220,9 @@ namespace EggEncoder
         private static void EnsureDestinationDirectory(string destFilePath)
         {
             var directory = Path.GetDirectoryName(destFilePath);
-            if (!Directory.Exists(directory))
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
-                Directory.CreateDirectory(directory!);
+                Directory.CreateDirectory(directory);
             }
         }
 
@@ -381,8 +395,6 @@ namespace EggEncoder
             return BuildMp3ProbeResult(mp3ProbeResult, GetFileSize(filePath), waveformCalculator);
         }
 
-        // Shared by the path-based ProbeMp3 above and NativeEncoder.Stream.cs's own ProbeMp3Stream,
-        // so the two can't drift apart on how an Mp3ProbeResult maps onto ProbeResult.
         private static ProbeResult BuildMp3ProbeResult(Mp3ProbeResult mp3ProbeResult, long sizeBytes, WaveformCalculator? waveformCalculator)
         {
             return new ProbeResult
@@ -704,10 +716,6 @@ namespace EggEncoder
             return TryDecodeAudioTrackCore(onBlockDecoded => MovDecoder.Decode(filePath, onBlockDecoded));
         }
 
-        // Shared by the path-based and Stream-based Probe entry points (NativeEncoder.Stream.cs's
-        // own ProbeMovStream) so the "decode, degrade to null on any failure, map to
-        // DecodedAudioTrack" logic isn't duplicated between them -- only how MovDecoder.Decode is
-        // actually invoked (path vs. Stream) differs, which the caller supplies as a delegate.
         private static DecodedAudioTrack? TryDecodeAudioTrackCore(Func<AudioBlockDecodedCallback, MovStreamInfo> decode)
         {
             WaveformCalculator? waveformCalculator = null;
@@ -723,9 +731,6 @@ namespace EggEncoder
             }
             catch (Exception)
             {
-                // No audio track, or an audio codec/configuration this library doesn't decode
-                // (stereo, non-AAC-LC, etc.) -- video-only metadata is still a useful probe result,
-                // so this degrades gracefully instead of failing the whole probe.
                 return null;
             }
 
