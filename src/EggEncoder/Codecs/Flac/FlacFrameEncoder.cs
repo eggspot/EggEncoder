@@ -65,7 +65,7 @@ namespace EggEncoder.Codecs.Flac
                 }
             }
 
-            var writer = new BitWriter();
+            var writer = new BitWriter(64 + (channels * sampleCount * (bitsPerSample + 1) / 8));
             writer.WriteBits(0xFF, 8); // sync code, first 8 bits
             writer.WriteBits(0xF8, 8); // sync code remainder + reserved(0) + fixed-blocking-strategy(0) -- every frame but the last uses the same block size
 
@@ -257,9 +257,57 @@ namespace EggEncoder.Codecs.Flac
         // The k-th order FIXED predictor is, by RFC 9639's own definition, the k-th finite
         // difference of the signal -- these are the exact inverses of FlacFrameDecoder's own
         // RestoreFixedPrediction formulas (order, not coefficients, determines the shape).
+        private static double[] AutocorrelationEightLags(double[] x)
+        {
+            var head = new double[MaxLpcOrder + 1];
+            for (var i = 0; i < MaxLpcOrder; i++)
+            {
+                for (var lag = 0; lag <= i; lag++)
+                {
+                    head[lag] += x[i] * x[i - lag];
+                }
+            }
+
+            double r0 = head[0], r1 = head[1], r2 = head[2], r3 = head[3], r4 = head[4], r5 = head[5], r6 = head[6], r7 = head[7], r8 = head[8];
+
+            for (var i = MaxLpcOrder; i < x.Length; i++)
+            {
+                var value = x[i];
+                r0 += value * value;
+                r1 += value * x[i - 1];
+                r2 += value * x[i - 2];
+                r3 += value * x[i - 3];
+                r4 += value * x[i - 4];
+                r5 += value * x[i - 5];
+                r6 += value * x[i - 6];
+                r7 += value * x[i - 7];
+                r8 += value * x[i - 8];
+            }
+
+            return [r0, r1, r2, r3, r4, r5, r6, r7, r8];
+        }
+
         private static int[] ComputeFixedResidual(int[] samples, int order)
         {
             var residual = new int[samples.Length - order];
+            var start = FixedResidualInIntLanes(samples, order, residual);
+            if (start > order)
+            {
+                for (var i = start; i < samples.Length; i++)
+                {
+                    residual[i - order] = order switch
+                    {
+                        0 => samples[i],
+                        1 => samples[i] - samples[i - 1],
+                        2 => samples[i] - (2 * samples[i - 1]) + samples[i - 2],
+                        3 => samples[i] - (3 * samples[i - 1]) + (3 * samples[i - 2]) - samples[i - 3],
+                        _ => samples[i] - (4 * samples[i - 1]) + (6 * samples[i - 2]) - (4 * samples[i - 3]) + samples[i - 4],
+                    };
+                }
+
+                return residual;
+            }
+
             switch (order)
             {
                 case 0:
@@ -329,6 +377,7 @@ namespace EggEncoder.Codecs.Flac
 
             var lpc = new double[maxOrder];
             var error = autocorrelation[0];
+            var values = bitsPerSample <= MaxExactDoubleLpcBits ? ToDoubles(samples) : null;
 
             for (var order = 1; order <= maxOrder; order++)
             {
@@ -363,7 +412,7 @@ namespace EggEncoder.Codecs.Flac
                     continue;
                 }
 
-                var residual = ComputeLpcResidual(samples, coefficients, shift, bitsPerSample);
+                var residual = ComputeLpcResidual(samples, values, coefficients, shift, bitsPerSample);
                 var (residualCost, riceParameter) = ChooseResidualCoding(residual);
 
                 // 8 (subframe header) + order*bitsPerSample (warmup) + 4 (precision code) + 5
@@ -398,6 +447,11 @@ namespace EggEncoder.Codecs.Flac
 
         private static double[] ComputeAutocorrelation(double[] samples, int maxLag)
         {
+            if (maxLag == MaxLpcOrder && samples.Length > MaxLpcOrder)
+            {
+                return AutocorrelationEightLags(samples);
+            }
+
             var r = new double[maxLag + 1];
             for (var lag = 0; lag <= maxLag; lag++)
             {
@@ -457,16 +511,16 @@ namespace EggEncoder.Codecs.Flac
         // accumulator width is used is decided the same way FlacFrameDecoder.NeedsWideLpcAccumulator
         // decides it on decode, since a mismatch here would silently produce a residual the decoder
         // could never reconstruct the original samples from.
-        private static int[] ComputeLpcResidual(int[] samples, int[] coefficients, int shift, int bitsPerSample)
+        private static int[] ComputeLpcResidual(int[] samples, double[]? values, int[] coefficients, int shift, int bitsPerSample)
         {
             var order = coefficients.Length;
             var residual = new int[samples.Length - order];
 
             if (FlacFrameDecoder.NeedsWideLpcAccumulator(bitsPerSample, order, LpcPrecision))
             {
-                if (bitsPerSample <= MaxExactDoubleLpcBits)
+                if (values is not null)
                 {
-                    LpcResidualInDoubles(samples, coefficients, shift, residual);
+                    LpcResidualInDoubles(samples, values, coefficients, shift, residual);
                     return residual;
                 }
 
@@ -576,14 +630,20 @@ namespace EggEncoder.Codecs.Flac
         private const int MaxExactDoubleLpcBits = 25;
         private const double ExactIntegerBias = 6755399441055744.0;
 
-        private static void LpcResidualInDoubles(int[] samples, int[] coefficients, int shift, int[] residual)
+        private static double[] ToDoubles(int[] samples)
         {
-            var order = coefficients.Length;
             var values = new double[samples.Length];
             for (var i = 0; i < samples.Length; i++)
             {
                 values[i] = samples[i];
             }
+
+            return values;
+        }
+
+        private static void LpcResidualInDoubles(int[] samples, double[] values, int[] coefficients, int shift, int[] residual)
+        {
+            var order = coefficients.Length;
 
             var scale = 1.0 / (1L << shift);
             var i0 = order;
@@ -646,6 +706,32 @@ namespace EggEncoder.Codecs.Flac
             }
 
             return i0;
+        }
+
+        private static int FixedResidualInIntLanes(int[] samples, int order, int[] residual)
+        {
+            if (!System.Numerics.Vector.IsHardwareAccelerated || order == 0)
+            {
+                return order;
+            }
+
+            var lanes = System.Numerics.Vector<int>.Count;
+            var i = order;
+            for (; i + lanes <= samples.Length; i += lanes)
+            {
+                var s0 = new System.Numerics.Vector<int>(samples, i);
+                var s1 = new System.Numerics.Vector<int>(samples, i - 1);
+                var value = order switch
+                {
+                    1 => s0 - s1,
+                    2 => s0 - (s1 * 2) + new System.Numerics.Vector<int>(samples, i - 2),
+                    3 => s0 - (s1 * 3) + (new System.Numerics.Vector<int>(samples, i - 2) * 3) - new System.Numerics.Vector<int>(samples, i - 3),
+                    _ => s0 - (s1 * 4) + (new System.Numerics.Vector<int>(samples, i - 2) * 6) - (new System.Numerics.Vector<int>(samples, i - 3) * 4) + new System.Numerics.Vector<int>(samples, i - 4),
+                };
+                value.CopyTo(residual, i - order);
+            }
+
+            return i;
         }
 
         private static long RiceDataBits(uint[] zigzag, int parameter)
