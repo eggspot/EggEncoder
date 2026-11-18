@@ -29,7 +29,7 @@ internal sealed class Mp3StreamDecoder
         var sampleRate = frames.Count == 0 ? 44100 : frames[0].Header.SampleRate;
         var samplesPerFrame = frames.Count == 0 ? 1152 : frames[0].Header.SamplesPerFrame;
         var totalSamples = (long)frames.Count * samplesPerFrame;
-        var parallelism = Math.Clamp(maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Math.Min(Environment.ProcessorCount, DefaultParallelism), 1, 64);
+        var parallelism = Math.Clamp(maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : CodecParallelism.Current ?? Math.Min(Environment.ProcessorCount, DefaultParallelism), 1, 64);
         var output = new BlockWriter(channels, sampleRate, totalSamples, onBlockDecoded);
         if (parallelism == 1 || frames.Count <= SegmentFrames * 2)
         {

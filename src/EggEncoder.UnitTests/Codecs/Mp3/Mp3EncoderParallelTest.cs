@@ -18,9 +18,31 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
             var oneThreadOneWrite = Encode(samples, variableBitRate, threads: 1, writeFrames: samples.Length / Channels);
             var fourThreadsOneWrite = Encode(samples, variableBitRate, threads: 4, writeFrames: samples.Length / Channels);
             var twoThreadsSmallWrites = Encode(samples, variableBitRate, threads: 2, writeFrames: 1001);
+            var threeThreadsBlockWrites = Encode(samples, variableBitRate, threads: 3, writeFrames: 4096);
+            var eightThreadsSplitChannels = Encode(samples, variableBitRate, threads: 8, writeFrames: 4096);
 
             fourThreadsOneWrite.Should().Equal(oneThreadOneWrite);
             twoThreadsSmallWrites.Should().Equal(oneThreadOneWrite);
+            threeThreadsBlockWrites.Should().Equal(oneThreadOneWrite);
+            eightThreadsSplitChannels.Should().Equal(oneThreadOneWrite);
+        }
+
+        [Fact]
+        public void A_Thread_Count_Below_One_Should_Be_Rejected()
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"mp3_parallel_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                using var session = Mp3Encoder.OpenSession(path, Channels, SampleRate, bitsPerSample: 16);
+
+                var setZero = () => session.MaxDegreeOfParallelism = 0;
+
+                setZero.Should().Throw<ArgumentOutOfRangeException>();
+            }
+            finally
+            {
+                File.Delete(path);
+            }
         }
 
         private static byte[] Encode(int[] samples, bool variableBitRate, int threads, int writeFrames)

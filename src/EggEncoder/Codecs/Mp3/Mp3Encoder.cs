@@ -119,6 +119,8 @@ namespace EggEncoder.Codecs.Mp3
             }
         }
 
+        internal static int DefaultMaxDegreeOfParallelism => CodecParallelism.Current ?? Math.Clamp(Environment.ProcessorCount, 1, 4);
+
         internal static int ChooseEncodedSampleRate(int sourceSampleRate)
         {
             if (sourceSampleRate is 32000 or 44100 or 48000)
@@ -138,12 +140,14 @@ namespace EggEncoder.Codecs.Mp3
         private readonly int _channels;
         private readonly int _bitsPerSampleShift;
         private readonly Mp3FrameEncoder _frameEncoder;
-        private const int FramesPerBatch = 32;
         private const int FramesPerRun = 8;
+        private const int ChannelSplitMinimumThreads = 6;
+        private const int PendingRunsPerThread = 2;
 
         private readonly List<Mp3FrameEncoder.AnalyzedFrame> _analyzed = [];
-        private Task<byte[][]>? _encoding;
-        private int _maxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 4);
+        private readonly Queue<Task<byte[][]>> _runs = new();
+        private SemaphoreSlim? _runSlots;
+        private int _maxDegreeOfParallelism = Mp3Encoder.DefaultMaxDegreeOfParallelism;
         private int[] _pending = new int[FrameSamples * 4];
         private int _pendingCount;
         private readonly long _infoTagFrameOffset;
@@ -169,10 +173,22 @@ namespace EggEncoder.Codecs.Mp3
             _totalByteCount = placeholderInfoTagFrame.Length;
         }
 
-        internal int MaxDegreeOfParallelism
+        /// <summary>
+        /// The most threads this session uses at once: the calling thread analyses the audio and writes frames,
+        /// and up to this many minus one encode frames in the background. 1 encodes everything on the calling
+        /// thread. The output is the same for every value. Defaults to the processor count, at most 4. Set it
+        /// before the first <see cref="WriteInterleavedSamples"/>.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">The value is less than 1.</exception>
+        public int MaxDegreeOfParallelism
         {
             get => _maxDegreeOfParallelism;
-            set => _maxDegreeOfParallelism = Math.Max(1, value);
+            set
+            {
+                ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+                _maxDegreeOfParallelism = value;
+                _runSlots = null;
+            }
         }
 
         public void WriteInterleavedSamples(int[] buffer, int frameCount)
@@ -208,8 +224,8 @@ namespace EggEncoder.Codecs.Mp3
             AppendSilence(naturalPaddingFrames * _channels);
             AppendSilence(FrameSamples * _channels);
             EncodeWholeFrames();
-            EncodeAnalyzedFrames();
-            WriteEncodedFrames();
+            QueueAnalyzedRun();
+            WriteFinishedRuns(all: true);
 
             const int flushFrameSamples = FrameSamples;
             var startPad = Mp3Encoder.EncoderDelaySamples;
@@ -263,15 +279,16 @@ namespace EggEncoder.Codecs.Mp3
         private void EncodeWholeFrames()
         {
             var frameLength = FrameSamples * _channels;
+            var analysisThreads = _channels == 2 && _maxDegreeOfParallelism >= ChannelSplitMinimumThreads ? 2 : 1;
             var offset = 0;
             while (_pendingCount - offset >= frameLength)
             {
-                var frames = Math.Min(FramesPerBatch - _analyzed.Count, (_pendingCount - offset) / frameLength);
-                _analyzed.AddRange(_frameEncoder.AnalyzeFrames(_pending, offset, frames, _maxDegreeOfParallelism));
+                var frames = Math.Min(FramesPerRun - _analyzed.Count, (_pendingCount - offset) / frameLength);
+                _analyzed.AddRange(_frameEncoder.AnalyzeFrames(_pending, offset, frames, analysisThreads));
                 offset += frames * frameLength;
-                if (_analyzed.Count == FramesPerBatch)
+                if (_analyzed.Count == FramesPerRun)
                 {
-                    EncodeAnalyzedFrames();
+                    QueueAnalyzedRun();
                 }
             }
 
@@ -279,9 +296,8 @@ namespace EggEncoder.Codecs.Mp3
             Array.Copy(_pending, offset, _pending, 0, _pendingCount);
         }
 
-        private void EncodeAnalyzedFrames()
+        private void QueueAnalyzedRun()
         {
-            WriteEncodedFrames();
             if (_analyzed.Count == 0)
             {
                 return;
@@ -289,44 +305,52 @@ namespace EggEncoder.Codecs.Mp3
 
             var frames = _analyzed.ToArray();
             _analyzed.Clear();
-            var encoded = new byte[frames.Length][];
-            var runs = (frames.Length + FramesPerRun - 1) / FramesPerRun;
-            void EncodeRun(int run)
-            {
-                var gainHint = Mp3FrameEncoder.NoGainHint;
-                for (var i = run * FramesPerRun; i < Math.Min(frames.Length, (run + 1) * FramesPerRun); i++)
-                {
-                    encoded[i] = _frameEncoder.Encode(frames[i], ref gainHint);
-                }
-            }
-
             if (_maxDegreeOfParallelism == 1)
             {
-                for (var run = 0; run < runs; run++)
-                {
-                    EncodeRun(run);
-                }
-
-                _encoding = Task.FromResult(encoded);
+                WriteFrames(EncodeRun(frames));
                 return;
             }
 
-            _encoding = Task.Run(() =>
+            var encodingThreads = _maxDegreeOfParallelism - (_channels == 2 && _maxDegreeOfParallelism >= ChannelSplitMinimumThreads ? 2 : 1);
+            var slots = _runSlots ??= new SemaphoreSlim(encodingThreads, encodingThreads);
+            _runs.Enqueue(Task.Run(async () =>
             {
-                Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = _maxDegreeOfParallelism - 1 }, EncodeRun);
-                return encoded;
-            });
+                await slots.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    return EncodeRun(frames);
+                }
+                finally
+                {
+                    slots.Release();
+                }
+            }));
+
+            WriteFinishedRuns(all: false, maxPending: encodingThreads * PendingRunsPerThread);
         }
 
-        private void WriteEncodedFrames()
+        private byte[][] EncodeRun(Mp3FrameEncoder.AnalyzedFrame[] frames)
         {
-            if (_encoding is null)
+            var encoded = new byte[frames.Length][];
+            var gainHint = Mp3FrameEncoder.NoGainHint;
+            for (var i = 0; i < frames.Length; i++)
             {
-                return;
+                encoded[i] = _frameEncoder.Encode(frames[i], ref gainHint);
             }
 
-            var encoded = _encoding.GetAwaiter().GetResult();
-            _encoding = null;
+            return encoded;
+        }
+
+        private void WriteFinishedRuns(bool all, int maxPending = 0)
+        {
+            while (_runs.Count > 0 && (all || _runs.Count > maxPending || _runs.Peek().IsCompleted))
+            {
+                WriteFrames(_runs.Dequeue().GetAwaiter().GetResult());
+            }
+        }
+
+        private void WriteFrames(byte[][] encoded)
+        {
             foreach (var frameBytes in encoded)
             {
                 _frameOffsets.Add(_totalByteCount);

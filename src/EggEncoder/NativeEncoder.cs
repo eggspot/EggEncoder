@@ -23,6 +23,7 @@ namespace EggEncoder
 
         private readonly ILogger _logger;
         private readonly bool _loggingEnabled;
+        private readonly int? _maxDegreeOfParallelism;
 
         public NativeEncoder(ILogger<NativeEncoder> logger, bool enableLogging = true)
         {
@@ -30,8 +31,16 @@ namespace EggEncoder
             _loggingEnabled = enableLogging;
         }
 
+        /// <summary>Creates an encoder with the given <see cref="EggEncoderOptions"/>.</summary>
+        public NativeEncoder(ILogger<NativeEncoder> logger, EggEncoderOptions options)
+            : this(logger, (options ?? throw new ArgumentNullException(nameof(options))).EnableLogging)
+        {
+            _maxDegreeOfParallelism = options.MaxDegreeOfParallelism;
+        }
+
         public Task<ProbeResult> Probe(string filePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native probe '{filePath}'");
@@ -76,12 +85,14 @@ namespace EggEncoder
         /// </summary>
         public Task<ProbeResult> Probe(string filePath, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             cancellationToken.ThrowIfCancellationRequested();
             return Probe(filePath);
         }
 
         public Task ConvertFile(string sourceFilePath, string destFilePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
@@ -108,6 +119,7 @@ namespace EggEncoder
         /// </summary>
         public Task ConvertFile(string sourceFilePath, string destFilePath, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native convert '{sourceFilePath}' to '{destFilePath}'");
@@ -133,6 +145,7 @@ namespace EggEncoder
 
         public Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
@@ -162,6 +175,7 @@ namespace EggEncoder
         /// </summary>
         public Task CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CancellationToken cancellationToken)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             try
             {
                 LogInformation($"Start native cut '{sourceFilePath}' to '{destFilePath}' start {startInSeconds} end {endInSeconds}");
@@ -206,9 +220,9 @@ namespace EggEncoder
         private static void EnsureDestinationDirectory(string destFilePath)
         {
             var directory = Path.GetDirectoryName(destFilePath);
-            if (!Directory.Exists(directory))
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
-                Directory.CreateDirectory(directory!);
+                Directory.CreateDirectory(directory);
             }
         }
 

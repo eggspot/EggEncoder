@@ -7,11 +7,13 @@ namespace EggEncoder
     {
         public Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             return ConvertFile(sourceFilePath, destFilePath, pipeline, WavSampleFormat.Integer);
         }
 
         public Task ConvertFile(string sourceFilePath, string destFilePath, PcmTransformPipeline pipeline, WavSampleFormat destinationWavFormat)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(pipeline);
 
             try
@@ -34,6 +36,7 @@ namespace EggEncoder
 
         public Task<bool> CutFile(string sourceFilePath, string destFilePath, int startInSeconds, int endInSeconds, CutOptions options)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(options);
 
             try
@@ -58,11 +61,13 @@ namespace EggEncoder
 
         public Task MixFiles(IReadOnlyList<MixInput> inputs, string destFilePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             return MixFiles(inputs, destFilePath, WavSampleFormat.Integer);
         }
 
         public Task MixFiles(IReadOnlyList<MixInput> inputs, string destFilePath, WavSampleFormat destinationWavFormat)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(inputs);
 
             try
@@ -85,11 +90,13 @@ namespace EggEncoder
 
         public Task ConcatenateFiles(IReadOnlyList<string> sourceFilePaths, string destFilePath)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             return ConcatenateFiles(sourceFilePaths, destFilePath, WavSampleFormat.Integer);
         }
 
         public Task ConcatenateFiles(IReadOnlyList<string> sourceFilePaths, string destFilePath, WavSampleFormat destinationWavFormat)
         {
+            using var parallelism = CodecParallelism.Limit(_maxDegreeOfParallelism);
             ArgumentNullException.ThrowIfNull(sourceFilePaths);
 
             try
