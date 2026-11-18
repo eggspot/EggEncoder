@@ -464,6 +464,12 @@ namespace EggEncoder.Codecs.Flac
 
             if (FlacFrameDecoder.NeedsWideLpcAccumulator(bitsPerSample, order, LpcPrecision))
             {
+                if (bitsPerSample <= MaxExactDoubleLpcBits)
+                {
+                    LpcResidualInDoubles(samples, coefficients, shift, residual);
+                    return residual;
+                }
+
                 for (var i = order; i < samples.Length; i++)
                 {
                     var sum = 0L;
@@ -477,7 +483,8 @@ namespace EggEncoder.Codecs.Flac
             }
             else
             {
-                for (var i = order; i < samples.Length; i++)
+                var start = LpcResidualInIntLanes(samples, coefficients, shift, residual);
+                for (var i = start; i < samples.Length; i++)
                 {
                     var sum = 0;
                     for (var j = 0; j < order; j++)
@@ -507,30 +514,164 @@ namespace EggEncoder.Codecs.Flac
             }
 
             var zigzag = new uint[n];
-            for (var i = 0; i < n; i++)
+            var total = 0L;
+            var z0 = 0;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var lanes = System.Numerics.Vector<int>.Count;
+                var sums = System.Numerics.Vector<ulong>.Zero;
+                for (; z0 + lanes <= n; z0 += lanes)
+                {
+                    var v = new System.Numerics.Vector<int>(residual, z0);
+                    var z = System.Numerics.Vector.AsVectorUInt32((v << 1) ^ System.Numerics.Vector.ShiftRightArithmetic(v, 31));
+                    z.CopyTo(zigzag, z0);
+                    System.Numerics.Vector.Widen(z, out var low, out var high);
+                    sums += low + high;
+                }
+
+                total = (long)System.Numerics.Vector.Sum(sums);
+            }
+
+            for (var i = z0; i < n; i++)
             {
                 var v = residual[i];
                 zigzag[i] = (uint)((v << 1) ^ (v >> 31));
+                total += zigzag[i];
             }
 
-            var bestRiceCost = long.MaxValue;
-            var bestParameter = 0;
-            for (var k = 0; k <= MaxRiceParameter; k++)
+            var mean = total / n;
+            var start = mean == 0 ? 0 : Math.Min(MaxRiceParameter, System.Numerics.BitOperations.Log2((ulong)mean));
+            var bestParameter = start;
+            var bestRiceCost = RiceDataBits(zigzag, start);
+            while (bestParameter > 0)
             {
-                var cost = (long)n * (k + 1);
-                foreach (var z in zigzag)
+                var lower = RiceDataBits(zigzag, bestParameter - 1);
+                if (lower > bestRiceCost)
                 {
-                    cost += z >> k;
+                    break;
                 }
 
-                if (cost < bestRiceCost)
+                bestParameter--;
+                bestRiceCost = lower;
+            }
+
+            if (bestParameter == start)
+            {
+                while (bestParameter < MaxRiceParameter)
                 {
-                    bestRiceCost = cost;
-                    bestParameter = k;
+                    var higher = RiceDataBits(zigzag, bestParameter + 1);
+                    if (higher >= bestRiceCost)
+                    {
+                        break;
+                    }
+
+                    bestParameter++;
+                    bestRiceCost = higher;
                 }
             }
 
             return (RiceParameterBits(bestParameter) + bestRiceCost, bestParameter);
+        }
+
+        private const int MaxExactDoubleLpcBits = 25;
+        private const double ExactIntegerBias = 6755399441055744.0;
+
+        private static void LpcResidualInDoubles(int[] samples, int[] coefficients, int shift, int[] residual)
+        {
+            var order = coefficients.Length;
+            var values = new double[samples.Length];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                values[i] = samples[i];
+            }
+
+            var scale = 1.0 / (1L << shift);
+            var i0 = order;
+            var lanes = System.Numerics.Vector<double>.Count;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var scales = new System.Numerics.Vector<double>(scale);
+                var bias = new System.Numerics.Vector<double>(ExactIntegerBias);
+                var biasBits = System.Numerics.Vector.AsVectorInt64(bias);
+                for (; i0 + (2 * lanes) <= samples.Length; i0 += 2 * lanes)
+                {
+                    var low = System.Numerics.Vector<double>.Zero;
+                    var high = System.Numerics.Vector<double>.Zero;
+                    for (var j = 0; j < order; j++)
+                    {
+                        var weight = new System.Numerics.Vector<double>(coefficients[j]);
+                        low += weight * new System.Numerics.Vector<double>(values, i0 - 1 - j);
+                        high += weight * new System.Numerics.Vector<double>(values, i0 - 1 - j + lanes);
+                    }
+
+                    var lowResidual = new System.Numerics.Vector<double>(values, i0) - System.Numerics.Vector.Floor(low * scales);
+                    var highResidual = new System.Numerics.Vector<double>(values, i0 + lanes) - System.Numerics.Vector.Floor(high * scales);
+                    var lowBits = System.Numerics.Vector.AsVectorInt64(lowResidual + bias) - biasBits;
+                    var highBits = System.Numerics.Vector.AsVectorInt64(highResidual + bias) - biasBits;
+                    System.Numerics.Vector.Narrow(lowBits, highBits).CopyTo(residual, i0 - order);
+                }
+            }
+
+            for (var i = i0; i < samples.Length; i++)
+            {
+                var sum = 0L;
+                for (var j = 0; j < order; j++)
+                {
+                    sum += (long)coefficients[j] * samples[i - 1 - j];
+                }
+
+                residual[i - order] = samples[i] - (int)(sum >> shift);
+            }
+        }
+
+        private static int LpcResidualInIntLanes(int[] samples, int[] coefficients, int shift, int[] residual)
+        {
+            var order = coefficients.Length;
+            var i0 = order;
+            if (!System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                return i0;
+            }
+
+            var lanes = System.Numerics.Vector<int>.Count;
+            for (; i0 + lanes <= samples.Length; i0 += lanes)
+            {
+                var sum = System.Numerics.Vector<int>.Zero;
+                for (var j = 0; j < order; j++)
+                {
+                    sum += new System.Numerics.Vector<int>(coefficients[j]) * new System.Numerics.Vector<int>(samples, i0 - 1 - j);
+                }
+
+                (new System.Numerics.Vector<int>(samples, i0) - System.Numerics.Vector.ShiftRightArithmetic(sum, shift)).CopyTo(residual, i0 - order);
+            }
+
+            return i0;
+        }
+
+        private static long RiceDataBits(uint[] zigzag, int parameter)
+        {
+            var bits = (long)zigzag.Length * (parameter + 1);
+            var i = 0;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var lanes = System.Numerics.Vector<uint>.Count;
+                var sums = System.Numerics.Vector<ulong>.Zero;
+                for (; i + lanes <= zigzag.Length; i += lanes)
+                {
+                    var shifted = System.Numerics.Vector.ShiftRightLogical(new System.Numerics.Vector<uint>(zigzag, i), parameter);
+                    System.Numerics.Vector.Widen(shifted, out var low, out var high);
+                    sums += low + high;
+                }
+
+                bits += (long)System.Numerics.Vector.Sum(sums);
+            }
+
+            for (; i < zigzag.Length; i++)
+            {
+                bits += zigzag[i] >> parameter;
+            }
+
+            return bits;
         }
 
         private const uint VerbatimSubframeHeader = 0b0000_0010;
