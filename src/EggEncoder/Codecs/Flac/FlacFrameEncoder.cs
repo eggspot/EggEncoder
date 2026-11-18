@@ -514,7 +514,12 @@ namespace EggEncoder.Codecs.Flac
             var sums = FixedOrderSums(samples, bitsPerSample);
             var smallest = Math.Min(Math.Min(Math.Min(sums[0], sums[1]), Math.Min(sums[2], sums[3])), sums[4]);
             var count = samples.Length - MaxFixedOrder;
-            return (smallest == 0 ? 0 : count * Math.Max(0, Math.Log2(Math.Log(2) * smallest / count)), sums);
+            var total = 2 * smallest;
+            var mean = total / count;
+            var parameter = mean == 0 ? 0 : Math.Min(MaxRiceParameter, System.Numerics.BitOperations.Log2((ulong)mean));
+            var riceBits = Math.Min(EstimatedRiceBits(total, count, parameter), parameter > 0 ? EstimatedRiceBits(total, count, parameter - 1) : long.MaxValue);
+            riceBits = Math.Min(riceBits, parameter < MaxRiceParameter ? EstimatedRiceBits(total, count, parameter + 1) : long.MaxValue);
+            return (Math.Min(riceBits, (long)count * bitsPerSample), sums);
         }
 
         private static int BestFixedOrderBySum(int[] samples, int maxOrder, long[]? knownSums, int bitsPerSample)
