@@ -91,6 +91,17 @@ namespace EggEncoder.Transform
 
         private void WriteBitsOneByOne(uint value, int bitCount)
         {
+            if (value == 0)
+            {
+                for (; bitCount > 32; bitCount -= 32)
+                {
+                    WriteBits(0u, 32);
+                }
+
+                WriteBits(0u, bitCount);
+                return;
+            }
+
             for (var i = bitCount - 1; i >= 0; i--)
             {
                 WriteBits((value >> i) & 1u, 1);
