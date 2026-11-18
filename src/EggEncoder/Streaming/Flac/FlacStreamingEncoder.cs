@@ -159,7 +159,7 @@ namespace EggEncoder.Streaming.Flac
                 }
             }
 
-            var frameBytes = FlacFrameEncoder.EncodeFrame(channelSamples, _pendingFrameCount, _bitsPerSample, _frameIndex);
+            var frameBytes = FlacFrameEncoder.EncodeFrame(channelSamples, _pendingFrameCount, _bitsPerSample, SampleRate, _frameIndex);
             var sampleCount = _pendingFrameCount;
             _pendingFrameCount = 0;
 

@@ -25,7 +25,7 @@ namespace EggEncoder.Codecs.Flac
         private const int MaxLpcOrder = 8; // a modest order cap -- real encoders' lower compression levels use similar values; higher orders cost more to search for a shrinking return
         private const int LpcPrecision = 14; // fits the 4-bit precision code's own range (1-15) with headroom; fixed rather than searched, unlike order
 
-        public static byte[] EncodeFrame(int[][] channelSamples, int sampleCount, int bitsPerSample, long frameIndex)
+        public static byte[] EncodeFrame(int[][] channelSamples, int sampleCount, int bitsPerSample, int sampleRate, long frameIndex)
         {
             var channels = channelSamples.Length;
             int channelAssignment;
@@ -69,15 +69,18 @@ namespace EggEncoder.Codecs.Flac
             writer.WriteBits(0xFF, 8); // sync code, first 8 bits
             writer.WriteBits(0xF8, 8); // sync code remainder + reserved(0) + fixed-blocking-strategy(0) -- every frame but the last uses the same block size
 
-            writer.WriteBits(7, 4); // block size code 7: explicit 16-bit value follows
-            writer.WriteBits(0, 4); // sample rate code 0: get it from STREAMINFO
+            var blockSizeCode = FlacFrameHeader.BlockSizeCode(sampleCount);
+            var sampleRateCode = FlacFrameHeader.SampleRateCode(sampleRate);
+            writer.WriteBits((uint)blockSizeCode, 4);
+            writer.WriteBits((uint)sampleRateCode, 4);
 
             writer.WriteBits((uint)channelAssignment, 4);
-            writer.WriteBits(0, 3); // bits-per-sample code 0: get it from STREAMINFO
-            writer.WriteBits(0, 1); // reserved
+            writer.WriteBits((uint)FlacFrameHeader.SampleSizeCode(bitsPerSample), 3);
+            writer.WriteBits(0, 1);
 
             WriteFrameNumber(writer, frameIndex);
-            writer.WriteBits((uint)(sampleCount - 1), 16); // explicit block size (code 7)
+            FlacFrameHeader.WriteBlockSizeTail(writer, blockSizeCode, sampleCount);
+            FlacFrameHeader.WriteSampleRateTail(writer, sampleRateCode, sampleRate);
 
             var headerBytes = writer.ToArray();
             writer.WriteBits(FlacCrc.Crc8(headerBytes, 0, headerBytes.Length), 8);
@@ -206,11 +209,12 @@ namespace EggEncoder.Codecs.Flac
         private enum SubframeKind
         {
             Constant,
+            Verbatim,
             Fixed,
             Lpc,
         }
 
-        private readonly record struct SubframePlan(SubframeKind Kind, int Order, long CostBits, int[]? Residual, int RiceParameter, bool UseEscape, int EscapeWidth, int[]? Coefficients, int Shift);
+        private readonly record struct SubframePlan(SubframeKind Kind, int Order, long CostBits, int[]? Residual, int RiceParameter, int[]? Coefficients, int Shift);
 
         private static SubframePlan AnalyzeSubframe(int[] samples, int bitsPerSample)
         {
@@ -227,7 +231,7 @@ namespace EggEncoder.Codecs.Flac
 
             if (isConstant)
             {
-                return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, false, 0, null, 0);
+                return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, null, 0);
             }
 
             SubframePlan? bestFixed = null;
@@ -235,18 +239,19 @@ namespace EggEncoder.Codecs.Flac
             for (var order = 0; order <= maxFixedOrder; order++)
             {
                 var residual = ComputeFixedResidual(samples, order);
-                var (residualCost, riceParameter, useEscape, escapeWidth) = ChooseResidualCoding(residual);
+                var (residualCost, riceParameter) = ChooseResidualCoding(residual);
                 var totalCost = 8L + ((long)order * bitsPerSample) + 6 /* residual method (2 bits) + partition order (4 bits) */ + residualCost;
 
                 if (bestFixed is null || totalCost < bestFixed.Value.CostBits)
                 {
-                    bestFixed = new SubframePlan(SubframeKind.Fixed, order, totalCost, residual, riceParameter, useEscape, escapeWidth, null, 0);
+                    bestFixed = new SubframePlan(SubframeKind.Fixed, order, totalCost, residual, riceParameter, null, 0);
                 }
             }
 
             var best = bestFixed!.Value;
             TryLpcOrders(samples, bitsPerSample, ref best);
-            return best;
+            var verbatimCost = 8L + ((long)sampleCount * bitsPerSample);
+            return verbatimCost < best.CostBits ? new SubframePlan(SubframeKind.Verbatim, 0, verbatimCost, null, 0, null, 0) : best;
         }
 
         // The k-th order FIXED predictor is, by RFC 9639's own definition, the k-th finite
@@ -359,7 +364,7 @@ namespace EggEncoder.Codecs.Flac
                 }
 
                 var residual = ComputeLpcResidual(samples, coefficients, shift, bitsPerSample);
-                var (residualCost, riceParameter, useEscape, escapeWidth) = ChooseResidualCoding(residual);
+                var (residualCost, riceParameter) = ChooseResidualCoding(residual);
 
                 // 8 (subframe header) + order*bitsPerSample (warmup) + 4 (precision code) + 5
                 // (shift) + order*LpcPrecision (coefficients) + 6 (residual method + partition
@@ -368,7 +373,7 @@ namespace EggEncoder.Codecs.Flac
 
                 if (totalCost < best.CostBits)
                 {
-                    best = new SubframePlan(SubframeKind.Lpc, order, totalCost, residual, riceParameter, useEscape, escapeWidth, coefficients, shift);
+                    best = new SubframePlan(SubframeKind.Lpc, order, totalCost, residual, riceParameter, coefficients, shift);
                 }
             }
         }
@@ -493,12 +498,12 @@ namespace EggEncoder.Codecs.Flac
         // n*(k+1) + sum(zigzag(r) >> k) -- the unary quotient plus its terminating 1, plus k
         // remainder bits, per value -- so a brute-force search over every valid k (0-30) finds the
         // true optimum directly, with no need to approximate it from the mean magnitude first.
-        private static (long Cost, int RiceParameter, bool UseEscape, int EscapeWidth) ChooseResidualCoding(int[] residual)
+        private static (long Cost, int RiceParameter) ChooseResidualCoding(int[] residual)
         {
             var n = residual.Length;
             if (n == 0)
             {
-                return (5, 0, false, 0);
+                return (FourBitRiceParameterBits, 0);
             }
 
             var zigzag = new uint[n];
@@ -525,35 +530,14 @@ namespace EggEncoder.Codecs.Flac
                 }
             }
 
-            var escapeWidth = RequiredSignedWidth(residual);
-            var escapeCost = 5L + ((long)n * escapeWidth);
-            var riceCost = 5L + bestRiceCost;
-
-            return escapeCost < riceCost ? (escapeCost, 0, true, escapeWidth) : (riceCost, bestParameter, false, 0);
+            return (RiceParameterBits(bestParameter) + bestRiceCost, bestParameter);
         }
 
-        // The minimal signed bit width every value in `residual` fits in -- 0 only when every value
-        // is exactly 0 (RFC 9639's own "raw width 0 -> every value is 0" escape convention, which
-        // FlacFrameDecoder's own escape-read path already relies on).
-        private static int RequiredSignedWidth(int[] residual)
-        {
-            var allZero = true;
-            var maxWidth = 0;
-            foreach (var v in residual)
-            {
-                if (v == 0)
-                {
-                    continue;
-                }
+        private const uint VerbatimSubframeHeader = 0b0000_0010;
+        private const int FourBitRiceParameterBits = 4;
+        private const int MaxFourBitRiceParameter = 14;
 
-                allZero = false;
-                var unsigned = v < 0 ? ~v : v;
-                var bits = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)unsigned);
-                maxWidth = Math.Max(maxWidth, bits + 1);
-            }
-
-            return allZero ? 0 : maxWidth;
-        }
+        private static int RiceParameterBits(int parameter) => parameter <= MaxFourBitRiceParameter ? FourBitRiceParameterBits : 5;
 
         // ---------------------------------------------------------------- subframe writing
 
@@ -563,6 +547,17 @@ namespace EggEncoder.Codecs.Flac
             {
                 writer.WriteBits(0, 8); // type 0 (CONSTANT), no wasted bits
                 writer.WriteSignedBits(samples[0], bitsPerSample);
+                return;
+            }
+
+            if (plan.Kind == SubframeKind.Verbatim)
+            {
+                writer.WriteBits(VerbatimSubframeHeader, 8);
+                foreach (var sample in samples)
+                {
+                    writer.WriteSignedBits(sample, bitsPerSample);
+                }
+
                 return;
             }
 
@@ -586,25 +581,11 @@ namespace EggEncoder.Codecs.Flac
                 }
             }
 
-            writer.WriteBits(1, 2); // residual coding method 1 (5-bit Rice parameters)
-            writer.WriteBits(0, 4); // partition order 0: a single partition
+            var parameterBits = RiceParameterBits(plan.RiceParameter);
+            writer.WriteBits(parameterBits == FourBitRiceParameterBits ? 0u : 1u, 2);
+            writer.WriteBits(0, 4);
 
-            if (plan.UseEscape)
-            {
-                writer.WriteBits(31, 5); // the method-1 escape code
-                writer.WriteBits((uint)plan.EscapeWidth, 5);
-                if (plan.EscapeWidth > 0)
-                {
-                    foreach (var r in plan.Residual!)
-                    {
-                        writer.WriteSignedBits(r, plan.EscapeWidth);
-                    }
-                }
-
-                return;
-            }
-
-            writer.WriteBits((uint)plan.RiceParameter, 5);
+            writer.WriteBits((uint)plan.RiceParameter, parameterBits);
             foreach (var r in plan.Residual!)
             {
                 var zigzag = (uint)((r << 1) ^ (r >> 31));

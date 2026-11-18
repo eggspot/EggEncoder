@@ -77,3 +77,28 @@ Reasons and edge cases behind code that keeps no comments. Each section names th
   drift apart.
 - A MOV/MP4 probe whose audio track is missing or can't be decoded (non-AAC-LC, more than two channels)
   still returns the video metadata with no audio fields, instead of failing the whole probe.
+
+## FLAC output that stores accept (`Codecs/Flac/FlacFrameEncoder.cs`, `FlacFrameHeader.cs`, `FlacEncoder.cs`)
+
+Files have to pass the stores' own validators, not just decode. Apple's FLAC validator (iTunes Transporter's
+mediatoolkit) rejected files from v4.36.0 to v4.114.1 ("Invalid use of a reserved value in frame 0", then a CRC
+failure on frame 1) because every frame header used sample rate code 0 and sample size code 0 ("take it from
+STREAMINFO"). RFC 9639 allows that, and libFLAC and ffmpeg decode it, so the round-trip tests passed. The native
+libFLAC encoder used up to v4.35 always wrote the explicit codes, and Spotify's ingestion failed on the same files.
+
+So the encoder follows what libFLAC 1.4.3 writes:
+- block size, sample rate and sample size codes as in libFLAC's `FLAC__frame_add_header`, with the 8-bit kHz,
+  16-bit Hz and 16-bit tens-of-Hz end-of-header forms for other rates; code 0 only when nothing else fits;
+- Rice method 0 (4-bit parameters) unless a parameter above 14 is needed, no escape partitions, and a VERBATIM
+  subframe for incompressible blocks (libFLAC's encoder never writes escapes by default);
+- STREAMINFO with the real smallest and largest frame sizes.
+
+`FlacFrameHeaderTest` checks the codes for every supported rate and bit depth. Its libFLAC comparison runs when
+`EGGENCODER_FLAC_PATH` points at a `flac` binary (1.4.x): `flac -t` must verify the MD5, and every frame's codes
+and block size must equal a `flac -8` encode of the same audio.
+
+Release check (manual, Apple's jars can't go in this public repo): run iTunes Transporter's FLAC validator
+(`com.apple.jingle.leghorn.audio.FlacDescriberApplication <file> false`, classpath = Transporter's `share/OSGi-Bundles`
+and `lib` jars plus Guava) on a 16-bit 44.1 kHz and a 24-bit 48 kHz encode after any change to the FLAC encoder. A
+file passes when no `AudioDescriptionException` is printed; the Transporter build used here then stops on a missing
+report-writer class, which happens for passing files only.
