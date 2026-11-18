@@ -35,7 +35,7 @@ namespace EggEncoder.Transform
             }
         }
 
-        public void WriteBits(ulong value, int bitCount)
+        internal void WriteBits(ulong value, int bitCount)
         {
             if (bitCount > 32)
             {
