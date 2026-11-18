@@ -42,7 +42,7 @@ namespace EggEncoder.Codecs.Mp3
         {
             var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
 
-            var destStream = File.Create(destMp3FilePath);
+            var destStream = new FileStream(destMp3FilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, OutputBufferBytes);
             if (tagBytes is not null)
             {
                 destStream.Write(tagBytes);
@@ -102,7 +102,7 @@ namespace EggEncoder.Codecs.Mp3
             ArgumentOutOfRangeException.ThrowIfLessThan(quality, 0);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(quality, Mp3FrameEncoder.VbrQualityCount - 1);
             var tagBytes = tags is { Count: > 0 } ? Id3v2Writer.BuildTagBytes(tags) : null;
-            var destStream = File.Create(destMp3FilePath);
+            var destStream = new FileStream(destMp3FilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, OutputBufferBytes);
             if (tagBytes is not null)
             {
                 destStream.Write(tagBytes);
@@ -118,6 +118,8 @@ namespace EggEncoder.Codecs.Mp3
                 throw;
             }
         }
+
+        private const int OutputBufferBytes = 64 * 1024;
 
         internal static int DefaultMaxDegreeOfParallelism => CodecParallelism.Current ?? Math.Clamp(Environment.ProcessorCount, 1, 4);
 

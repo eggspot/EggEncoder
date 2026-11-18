@@ -32,6 +32,9 @@ namespace EggEncoder.Codecs.Mp3
         [ThreadStatic]
         private static DivisionScratch? _divisionScratch;
 
+        [ThreadStatic]
+        private static int[]? _clampedMagnitudes;
+
         public readonly record struct Division(int Region0Count, int Region1Count, int Table0, int Table1, int Table2);
 
         public readonly record struct Plan(int GlobalGain, int BigValues, int BitCount, int[] Quantized, byte[] PairSymbols, Division Division, int Count1Table, int Count1End);
@@ -53,14 +56,15 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 var (code, length) = quads.GetCode(pattern);
-                writer.WriteBits(code, length);
                 for (var j = 0; j < 4; j++)
                 {
-                    if (plan.Quantized[i + j] != 0)
-                    {
-                        writer.WriteBits(plan.Quantized[i + j] < 0 ? 1u : 0u, 1);
-                    }
+                    var value = plan.Quantized[i + j];
+                    var nonZero = (int)((uint)(value | -value) >> 31);
+                    code = (code << nonZero) | (uint)((value >>> 31) & nonZero);
+                    length += nonZero;
                 }
+
+                writer.WriteBits(code, length);
             }
         }
 
@@ -131,10 +135,7 @@ namespace EggEncoder.Codecs.Mp3
                     _builtGainCount = 0;
                     _coefficients = xr;
                     Compand(xr, _companded);
-                    for (var i = 0; i < CoefficientCount; i++)
-                    {
-                        _signs[i] = xr[i] < 0 ? -1 : 0;
-                    }
+                    NegativeMask(xr, _signs);
 
                     var largest = 0.0;
                     for (var i = CoefficientCount - 1; i >= 0; i--)
@@ -252,14 +253,74 @@ namespace EggEncoder.Codecs.Mp3
         private static byte[] PairSymbols(int[] quantized, int bigEnd)
         {
             var symbols = new byte[bigEnd / 2];
+            var clamped = _clampedMagnitudes ??= new int[CoefficientCount];
+            var i = 0;
+            if (Vector.IsHardwareAccelerated)
+            {
+                var limit = new Vector<int>(SymbolMagnitudeLimit);
+                for (; i + Vector<int>.Count <= bigEnd; i += Vector<int>.Count)
+                {
+                    Vector.Min(Vector.Abs(new Vector<int>(quantized, i)), limit).CopyTo(clamped, i);
+                }
+            }
+
+            for (; i < bigEnd; i++)
+            {
+                clamped[i] = Math.Min(Math.Abs(quantized[i]), SymbolMagnitudeLimit);
+            }
+
             for (var pair = 0; pair < symbols.Length; pair++)
             {
-                var x = Math.Min(Math.Abs(quantized[pair * 2]), SymbolMagnitudeLimit);
-                var y = Math.Min(Math.Abs(quantized[(pair * 2) + 1]), SymbolMagnitudeLimit);
-                symbols[pair] = (byte)((x * (SymbolMagnitudeLimit + 1)) + y);
+                symbols[pair] = (byte)((clamped[pair * 2] * (SymbolMagnitudeLimit + 1)) + clamped[(pair * 2) + 1]);
             }
 
             return symbols;
+        }
+
+        private static int LargestMagnitude(int[] quantized, int start, int end)
+        {
+            var largest = 0;
+            var i = start;
+            if (Vector.IsHardwareAccelerated && end - start >= Vector<int>.Count)
+            {
+                var largestLanes = Vector<int>.Zero;
+                for (; i + Vector<int>.Count <= end; i += Vector<int>.Count)
+                {
+                    largestLanes = Vector.Max(largestLanes, Vector.Abs(new Vector<int>(quantized, i)));
+                }
+
+                for (var lane = 0; lane < Vector<int>.Count; lane++)
+                {
+                    largest = Math.Max(largest, largestLanes[lane]);
+                }
+            }
+
+            for (; i < end; i++)
+            {
+                largest = Math.Max(largest, Math.Abs(quantized[i]));
+            }
+
+            return largest;
+        }
+
+        private static void NegativeMask(double[] xr, int[] signs)
+        {
+            var i = 0;
+            if (Vector.IsHardwareAccelerated)
+            {
+                var lanes = Vector<double>.Count;
+                for (; i + (2 * lanes) <= CoefficientCount; i += 2 * lanes)
+                {
+                    var low = Vector.LessThan(new Vector<double>(xr, i), Vector<double>.Zero);
+                    var high = Vector.LessThan(new Vector<double>(xr, i + lanes), Vector<double>.Zero);
+                    Vector.Narrow(low, high).CopyTo(signs, i);
+                }
+            }
+
+            for (; i < CoefficientCount; i++)
+            {
+                signs[i] = xr[i] < 0 ? -1 : 0;
+            }
         }
 
         internal static Plan WithBestDivision(Plan plan, int[] bandStarts)
@@ -312,12 +373,7 @@ namespace EggEncoder.Codecs.Mp3
 
         private static (int Table, int Bits) CheapestRegion(int[] quantized, byte[] symbols, int start, int end, int bitLimit)
         {
-            var largest = 0;
-            for (var i = start; i < end; i++)
-            {
-                largest = Math.Max(largest, Math.Abs(quantized[i]));
-            }
-
+            var largest = LargestMagnitude(quantized, start, end);
             var best = (Table: 0, Bits: int.MaxValue);
             foreach (var table in Candidates(largest))
             {
@@ -467,13 +523,7 @@ namespace EggEncoder.Codecs.Mp3
 
                 for (var band = 0; band < bands; band++)
                 {
-                    var largest = 0;
-                    for (var i = _bandEnds[band]; i < _bandEnds[band + 1]; i++)
-                    {
-                        largest = Math.Max(largest, Math.Abs(quantized[i]));
-                    }
-
-                    _bandLargest[band] = largest;
+                    _bandLargest[band] = LargestMagnitude(quantized, _bandEnds[band], _bandEnds[band + 1]);
                 }
 
                 for (var first = 0; first < bands; first++)
@@ -532,10 +582,21 @@ namespace EggEncoder.Codecs.Mp3
                     return prefix;
                 }
 
+                var firstBand = 0;
+                if (_linbits[table] == 0)
+                {
+                    while (firstBand < Bands - 1 && _bandLargest[firstBand] >= _widths[table])
+                    {
+                        firstBand++;
+                    }
+                }
+
+                var firstPair = _bandEnds[firstBand] / 2;
                 var symbolBits = _pairSymbolBits[table];
                 var symbols = _symbols;
                 var bits = 0;
-                for (var pair = 0; pair < _pairs; pair++)
+                prefix[firstPair] = 0;
+                for (var pair = firstPair; pair < _pairs; pair++)
                 {
                     bits += symbolBits[symbols[pair]];
                     prefix[pair + 1] = bits;
@@ -641,31 +702,25 @@ namespace EggEncoder.Codecs.Mp3
         {
             var absX = Math.Abs(x);
             var absY = Math.Abs(y);
-            var codeX = Math.Min(absX, maxDirect);
-            var codeY = Math.Min(absY, maxDirect);
+            var (code, length) = table.GetCode((Math.Min(absX, maxDirect) * (maxDirect + 1)) + Math.Min(absY, maxDirect));
+            ulong bits = code;
+            var count = length;
+            AppendValueBits(ref bits, ref count, x, absX, maxDirect, linbits);
+            AppendValueBits(ref bits, ref count, y, absY, maxDirect, linbits);
+            writer.WriteBits(bits, count);
+        }
 
-            var (code, length) = table.GetCode((codeX * (maxDirect + 1)) + codeY);
-            writer.WriteBits(code, length);
-
-            if (absX >= maxDirect && linbits > 0)
+        private static void AppendValueBits(ref ulong bits, ref int count, int value, int magnitude, int maxDirect, int linbits)
+        {
+            if (linbits > 0 && magnitude >= maxDirect)
             {
-                writer.WriteBits((uint)(absX - maxDirect), linbits);
+                bits = (bits << linbits) | (uint)(magnitude - maxDirect);
+                count += linbits;
             }
 
-            if (x != 0)
-            {
-                writer.WriteBits(x < 0 ? 1u : 0u, 1);
-            }
-
-            if (absY >= maxDirect && linbits > 0)
-            {
-                writer.WriteBits((uint)(absY - maxDirect), linbits);
-            }
-
-            if (y != 0)
-            {
-                writer.WriteBits(y < 0 ? 1u : 0u, 1);
-            }
+            var nonZero = (int)((uint)(value | -value) >> 31);
+            bits = (bits << nonZero) | (uint)((value >>> 31) & nonZero);
+            count += nonZero;
         }
     }
 }

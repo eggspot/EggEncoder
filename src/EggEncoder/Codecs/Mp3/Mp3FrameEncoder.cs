@@ -1,3 +1,4 @@
+using System.Numerics;
 using EggEncoder.Transform;
 
 namespace EggEncoder.Codecs.Mp3
@@ -597,10 +598,24 @@ namespace EggEncoder.Codecs.Mp3
                 var right = granuleXr[gr][1];
                 var mid = new double[left.Length];
                 var side = new double[left.Length];
-                for (var i = 0; i < left.Length; i++)
+                var scale = Math.Sqrt(0.5);
+                var i = 0;
+                if (Vector.IsHardwareAccelerated)
                 {
-                    mid[i] = (left[i] + right[i]) * Math.Sqrt(0.5);
-                    side[i] = (left[i] - right[i]) * Math.Sqrt(0.5);
+                    var scales = new Vector<double>(scale);
+                    for (; i + Vector<double>.Count <= left.Length; i += Vector<double>.Count)
+                    {
+                        var l = new Vector<double>(left, i);
+                        var r = new Vector<double>(right, i);
+                        ((l + r) * scales).CopyTo(mid, i);
+                        ((l - r) * scales).CopyTo(side, i);
+                    }
+                }
+
+                for (; i < left.Length; i++)
+                {
+                    mid[i] = (left[i] + right[i]) * scale;
+                    side[i] = (left[i] - right[i]) * scale;
                 }
 
                 result[gr] = [mid, side];

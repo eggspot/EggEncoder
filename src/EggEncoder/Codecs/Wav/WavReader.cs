@@ -1,3 +1,5 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace EggEncoder.Codecs.Wav
@@ -544,6 +546,12 @@ namespace EggEncoder.Codecs.Wav
             _bytesRead += bytesActuallyRead;
 
             var sampleCount = bytesActuallyRead / bytesPerSample;
+            if (bytesPerSample == 2 && BitConverter.IsLittleEndian)
+            {
+                WidenPcm16(_rawBytes.AsSpan(0, sampleCount * 2), buffer);
+                return sampleCount / Channels;
+            }
+
             for (var i = 0; i < sampleCount; i++)
             {
                 var byteOffset = i * bytesPerSample;
@@ -578,6 +586,27 @@ namespace EggEncoder.Codecs.Wav
                 }
 
                 return totalBytesRead;
+            }
+        }
+
+        private static void WidenPcm16(ReadOnlySpan<byte> bytes, int[] buffer)
+        {
+            var samples = MemoryMarshal.Cast<byte, short>(bytes);
+            var i = 0;
+            if (Vector.IsHardwareAccelerated)
+            {
+                var lanes = Vector<short>.Count;
+                for (; i + lanes <= samples.Length; i += lanes)
+                {
+                    Vector.Widen(new Vector<short>(samples[i..]), out var low, out var high);
+                    low.CopyTo(buffer, i);
+                    high.CopyTo(buffer, i + Vector<int>.Count);
+                }
+            }
+
+            for (; i < samples.Length; i++)
+            {
+                buffer[i] = samples[i];
             }
         }
 

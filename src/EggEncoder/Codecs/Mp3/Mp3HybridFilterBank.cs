@@ -1,4 +1,6 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.Mp3
 {
@@ -88,6 +90,12 @@ namespace EggEncoder.Codecs.Mp3
         internal static void Dct4(ReadOnlySpan<float> folded, Span<float> coefficients)
         {
             var lanes = Vector<float>.Count;
+            if (lanes == 8)
+            {
+                Dct4EightLanes(folded, coefficients);
+                return;
+            }
+
             for (var sb = 0; sb < SubbandCount; sb += lanes)
             {
                 for (var k = 0; k < CoefficientsPerSubband; k += 2)
@@ -104,6 +112,35 @@ namespace EggEncoder.Codecs.Mp3
                     even.CopyTo(coefficients[((k * SubbandCount) + sb)..]);
                     odd.CopyTo(coefficients[(((k + 1) * SubbandCount) + sb)..]);
                 }
+            }
+        }
+
+        private static void Dct4EightLanes(ReadOnlySpan<float> folded, Span<float> coefficients)
+        {
+            ref var input = ref MemoryMarshal.GetReference(folded);
+            ref var output = ref MemoryMarshal.GetReference(coefficients);
+            ref var table = ref MemoryMarshal.GetArrayDataReference(Dct4Table);
+            for (nuint k = 0; k < CoefficientsPerSubband; k++)
+            {
+                var sum0 = Vector<float>.Zero;
+                var sum1 = Vector<float>.Zero;
+                var sum2 = Vector<float>.Zero;
+                var sum3 = Vector<float>.Zero;
+                for (nuint m = 0; m < CoefficientsPerSubband; m++)
+                {
+                    var weight = new Vector<float>(Unsafe.Add(ref table, (nint)((m * CoefficientsPerSubband) + k)));
+                    var row = m * SubbandCount;
+                    sum0 += Vector.LoadUnsafe(ref input, row) * weight;
+                    sum1 += Vector.LoadUnsafe(ref input, row + 8) * weight;
+                    sum2 += Vector.LoadUnsafe(ref input, row + 16) * weight;
+                    sum3 += Vector.LoadUnsafe(ref input, row + 24) * weight;
+                }
+
+                var outputRow = k * SubbandCount;
+                sum0.StoreUnsafe(ref output, outputRow);
+                sum1.StoreUnsafe(ref output, outputRow + 8);
+                sum2.StoreUnsafe(ref output, outputRow + 16);
+                sum3.StoreUnsafe(ref output, outputRow + 24);
             }
         }
 
