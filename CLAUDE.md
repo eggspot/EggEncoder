@@ -10,6 +10,27 @@ It also renders video (Phase 5 of `docs/video-support-backlog.md`): H.264 decode
 editing, text and subtitles, JPEG frame grabs, MP4 reading and writing, and `VideoComposition`, which
 builds a short H.264 + AAC MP4 from clips, music and text with no ffmpeg.
 
+## Performance goal
+
+The owner's goal (2026-11-18): EggEncoder must be faster than ffmpeg and the reference libraries (libFLAC, LAME,
+x264, libopus and the rest) on every point of performance: every format, encode and decode, one thread and default
+threads. Treat a measured gap as a bug to fix, not a known limitation.
+
+- **Correct output first.** Speed never buys broken or store-rejected files. Lossless codecs stay bit-exact, and
+  every change keeps the checks that apply: byte-identical output where the change is only speed, else SNR and
+  level tests, the `EGGENCODER_FFMPEG_ORACLE=1` tests, libFLAC (`EGGENCODER_FLAC_PATH`) and the manual store
+  validator checks in `docs/implementation-notes.md`.
+- **Measure, don't assume.** Same machine, same input, the reference tool on the same command line, fastest of
+  several alternating rounds (this laptop is noisy), on one thread and on default threads. Time the whole call a user
+  makes (`ConvertFile`, reading and writing included), not only the codec core.
+- **Write it down.** Each performance PR states its before/after numbers and the reference's, and adds them to
+  `docs/benchmarks.md`.
+- **Known gaps** (update this list as they close; details in `docs/benchmarks.md` and
+  `docs/video-support-backlog.md`):
+  - FLAC encode on one thread: 5.3 s vs libFLAC `flac -8` 1.1 s on 5 min of 16-bit stereo, and 6.6 s vs 2.1 s on
+    a 232 s 24-bit file (default threads: 3.1 s and 3.2 s).
+  - H.264 decode on one core: about 45 fps vs ffmpeg's 180 fps on the backlog's x264 test stream.
+
 ## Commands
 
 ```bash
