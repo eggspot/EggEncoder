@@ -112,10 +112,10 @@ namespace EggEncoder.Codecs.Flac
                 side[i] = left[i] - right[i];
             }
 
-            var leftBits = EstimatedFixedBits(left);
-            var rightBits = EstimatedFixedBits(right);
-            var midBits = EstimatedFixedBits(mid);
-            var sideBits = EstimatedFixedBits(side);
+            var (leftBits, leftSums) = EstimatedFixedBits(left);
+            var (rightBits, rightSums) = EstimatedFixedBits(right);
+            var (midBits, midSums) = EstimatedFixedBits(mid);
+            var (sideBits, sideSums) = EstimatedFixedBits(side);
 
             var independentCost = leftBits + rightBits;
             var leftSideCost = leftBits + sideBits;
@@ -126,20 +126,20 @@ namespace EggEncoder.Codecs.Flac
 
             if (cheapest == midSideCost)
             {
-                return (ChannelAssignmentMidSide, [mid, side], [AnalyzeSubframe(mid, bitsPerSample), AnalyzeSubframe(side, bitsPerSample + 1)]);
+                return (ChannelAssignmentMidSide, [mid, side], [AnalyzeSubframe(mid, bitsPerSample, midSums), AnalyzeSubframe(side, bitsPerSample + 1, sideSums)]);
             }
 
             if (cheapest == leftSideCost)
             {
-                return (ChannelAssignmentLeftSide, [left, side], [AnalyzeSubframe(left, bitsPerSample), AnalyzeSubframe(side, bitsPerSample + 1)]);
+                return (ChannelAssignmentLeftSide, [left, side], [AnalyzeSubframe(left, bitsPerSample, leftSums), AnalyzeSubframe(side, bitsPerSample + 1, sideSums)]);
             }
 
             if (cheapest == rightSideCost)
             {
-                return (ChannelAssignmentRightSide, [side, right], [AnalyzeSubframe(side, bitsPerSample + 1), AnalyzeSubframe(right, bitsPerSample)]);
+                return (ChannelAssignmentRightSide, [side, right], [AnalyzeSubframe(side, bitsPerSample + 1, sideSums), AnalyzeSubframe(right, bitsPerSample, rightSums)]);
             }
 
-            return (1, [left, right], [AnalyzeSubframe(left, bitsPerSample), AnalyzeSubframe(right, bitsPerSample)]);
+            return (1, [left, right], [AnalyzeSubframe(left, bitsPerSample, leftSums), AnalyzeSubframe(right, bitsPerSample, rightSums)]);
         }
 
         // ---------------------------------------------------------------- frame number (RFC 9639 section 9.1.5)
@@ -212,7 +212,7 @@ namespace EggEncoder.Codecs.Flac
 
         private readonly record struct SubframePlan(SubframeKind Kind, int Order, long CostBits, int[]? Residual, int RiceParameter, int[]? Coefficients, int Shift);
 
-        private static SubframePlan AnalyzeSubframe(int[] samples, int bitsPerSample)
+        private static SubframePlan AnalyzeSubframe(int[] samples, int bitsPerSample, long[]? fixedSums = null)
         {
             var sampleCount = samples.Length;
             var isConstant = true;
@@ -230,7 +230,7 @@ namespace EggEncoder.Codecs.Flac
                 return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, null, 0);
             }
 
-            var fixedOrder = BestFixedOrderBySum(samples, Math.Min(MaxFixedOrder, sampleCount - 1));
+            var fixedOrder = BestFixedOrderBySum(samples, Math.Min(MaxFixedOrder, sampleCount - 1), fixedSums);
             var fixedResidual = ComputeFixedResidual(samples, fixedOrder);
             var (fixedResidualCost, fixedRiceParameter) = ChooseResidualCoding(fixedResidual);
             var best = new SubframePlan(SubframeKind.Fixed, fixedOrder, 8L + ((long)fixedOrder * bitsPerSample) + 6 + fixedResidualCost, fixedResidual, fixedRiceParameter, null, 0);
@@ -519,27 +519,27 @@ namespace EggEncoder.Codecs.Flac
             return largestDifference == 0 ? 1 << 20 : (int)Math.Max(1, uint.MaxValue / 2 / largestDifference);
         }
 
-        private static double EstimatedFixedBits(int[] samples)
+        private static (double Bits, long[]? Sums) EstimatedFixedBits(int[] samples)
         {
             if (samples.Length <= MaxFixedOrder)
             {
-                return samples.Length * 32.0;
+                return (samples.Length * 32.0, null);
             }
 
             var sums = FixedOrderSums(samples);
             var smallest = Math.Min(Math.Min(Math.Min(sums[0], sums[1]), Math.Min(sums[2], sums[3])), sums[4]);
             var count = samples.Length - MaxFixedOrder;
-            return smallest == 0 ? 0 : count * Math.Max(0, Math.Log2(Math.Log(2) * smallest / count));
+            return (smallest == 0 ? 0 : count * Math.Max(0, Math.Log2(Math.Log(2) * smallest / count)), sums);
         }
 
-        private static int BestFixedOrderBySum(int[] samples, int maxOrder)
+        private static int BestFixedOrderBySum(int[] samples, int maxOrder, long[]? knownSums)
         {
             if (samples.Length <= MaxFixedOrder)
             {
                 return 0;
             }
 
-            var sums = FixedOrderSums(samples);
+            var sums = knownSums ?? FixedOrderSums(samples);
             var best = 0;
             for (var order = 1; order <= maxOrder; order++)
             {
@@ -634,8 +634,6 @@ namespace EggEncoder.Codecs.Flac
         [ThreadStatic]
         private static double[]? _welchWindow;
 
-        [ThreadStatic]
-        private static uint[]? _zigzagBuffer;
 
         private static double[] ApplyWelchWindow(int[] samples)
         {
@@ -785,78 +783,59 @@ namespace EggEncoder.Codecs.Flac
                 return (FourBitRiceParameterBits, 0);
             }
 
-            var zigzag = _zigzagBuffer is { } buffer && buffer.Length >= n ? buffer : (_zigzagBuffer = new uint[n]);
-            var total = 0L;
-            var z0 = 0;
+            long magnitudes = 0;
+            long negatives = 0;
+            var i = 0;
             if (System.Numerics.Vector.IsHardwareAccelerated)
             {
                 var lanes = System.Numerics.Vector<int>.Count;
-                var sums = System.Numerics.Vector<ulong>.Zero;
-                for (; z0 + lanes <= n; z0 += lanes)
+                var magnitudeLanes = System.Numerics.Vector<long>.Zero;
+                var negativeLanes = System.Numerics.Vector<int>.Zero;
+                while (i + lanes <= n)
                 {
-                    var v = new System.Numerics.Vector<int>(residual, z0);
-                    var z = System.Numerics.Vector.AsVectorUInt32((v << 1) ^ System.Numerics.Vector.ShiftRightArithmetic(v, 31));
-                    z.CopyTo(zigzag, z0);
-                    System.Numerics.Vector.Widen(z, out var low, out var high);
-                    sums += low + high;
-                }
-
-                total = (long)System.Numerics.Vector.Sum(sums);
-            }
-
-            for (var i = z0; i < n; i++)
-            {
-                var v = residual[i];
-                zigzag[i] = (uint)((v << 1) ^ (v >> 31));
-                total += zigzag[i];
-            }
-
-            var mean = total / n;
-            var start = mean == 0 ? 0 : Math.Min(MaxRiceParameter, System.Numerics.BitOperations.Log2((ulong)mean));
-            var (atLower, atStart, atHigher) = RiceDataBitsAround(zigzag, n, start);
-            var bestParameter = start;
-            var bestRiceCost = atStart;
-            if (start > 0 && atLower <= atStart)
-            {
-                bestParameter = start - 1;
-                bestRiceCost = atLower;
-            }
-            else if (start < MaxRiceParameter && atHigher < atStart)
-            {
-                bestParameter = start + 1;
-                bestRiceCost = atHigher;
-            }
-
-            var walkedDown = bestParameter < start;
-            while (walkedDown && bestParameter > 0)
-            {
-                var lower = RiceDataBits(zigzag, n, bestParameter - 1);
-                if (lower > bestRiceCost)
-                {
-                    break;
-                }
-
-                bestParameter--;
-                bestRiceCost = lower;
-            }
-
-            if (bestParameter > start)
-            {
-                while (bestParameter < MaxRiceParameter)
-                {
-                    var higher = RiceDataBits(zigzag, n, bestParameter + 1);
-                    if (higher >= bestRiceCost)
+                    var run = System.Numerics.Vector<uint>.Zero;
+                    var end = Math.Min(n - lanes, i + ((RiceRunSteps - 1) * lanes));
+                    for (; i <= end; i += lanes)
                     {
-                        break;
+                        var values = new System.Numerics.Vector<int>(residual, i);
+                        run += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(values));
+                        negativeLanes += System.Numerics.Vector.ShiftRightLogical(values, 31);
                     }
 
-                    bestParameter++;
-                    bestRiceCost = higher;
+                    magnitudeLanes += System.Numerics.Vector.AsVectorInt64(WidenedSum(run));
                 }
+
+                magnitudes = System.Numerics.Vector.Sum(magnitudeLanes);
+                negatives = System.Numerics.Vector.Sum(negativeLanes);
+            }
+
+            for (; i < n; i++)
+            {
+                magnitudes += Math.Abs((long)residual[i]);
+                negatives += residual[i] < 0 ? 1 : 0;
+            }
+
+            var total = (2 * magnitudes) - negatives;
+            var mean = total / n;
+            var start = mean == 0 ? 0 : Math.Min(MaxRiceParameter, System.Numerics.BitOperations.Log2((ulong)mean));
+            var bestParameter = start;
+            var bestRiceCost = EstimatedRiceBits(total, n, start);
+            if (start > 0 && EstimatedRiceBits(total, n, start - 1) is var lower && lower <= bestRiceCost)
+            {
+                bestParameter = start - 1;
+                bestRiceCost = lower;
+            }
+            else if (start < MaxRiceParameter && EstimatedRiceBits(total, n, start + 1) is var higher && higher < bestRiceCost)
+            {
+                bestParameter = start + 1;
+                bestRiceCost = higher;
             }
 
             return (RiceParameterBits(bestParameter) + bestRiceCost, bestParameter);
         }
+
+        private static long EstimatedRiceBits(long total, int count, int parameter) =>
+            ((long)count * (parameter + 1)) + (Math.Max(0, total - (count >> 1)) >> parameter);
 
         private const int MaxExactDoubleLpcBits = 25;
         private const double ExactIntegerBias = 6755399441055744.0;
@@ -965,83 +944,11 @@ namespace EggEncoder.Codecs.Flac
             return i;
         }
 
-        private static (long Lower, long Middle, long Higher) RiceDataBitsAround(uint[] zigzag, int count, int parameter)
-        {
-            var lowerParameter = Math.Max(parameter - 1, 0);
-            var higherParameter = Math.Min(parameter + 1, MaxRiceParameter);
-            long lower = 0, middle = 0, higher = 0;
-            var i = 0;
-            if (System.Numerics.Vector.IsHardwareAccelerated)
-            {
-                var lanes = System.Numerics.Vector<uint>.Count;
-                var lowerSums = System.Numerics.Vector<ulong>.Zero;
-                var middleSums = System.Numerics.Vector<ulong>.Zero;
-                var higherSums = System.Numerics.Vector<ulong>.Zero;
-                while (i + lanes <= count)
-                {
-                    var lowerRun = System.Numerics.Vector<uint>.Zero;
-                    var middleRun = System.Numerics.Vector<uint>.Zero;
-                    var higherRun = System.Numerics.Vector<uint>.Zero;
-                    var end = Math.Min(count - lanes, i + ((RiceRunSteps - 1) * lanes));
-                    for (; i <= end; i += lanes)
-                    {
-                        var values = new System.Numerics.Vector<uint>(zigzag, i);
-                        lowerRun += System.Numerics.Vector.ShiftRightLogical(values, lowerParameter);
-                        middleRun += System.Numerics.Vector.ShiftRightLogical(values, parameter);
-                        higherRun += System.Numerics.Vector.ShiftRightLogical(values, higherParameter);
-                    }
-
-                    lowerSums += WidenedSum(lowerRun);
-                    middleSums += WidenedSum(middleRun);
-                    higherSums += WidenedSum(higherRun);
-                }
-
-                lower = (long)System.Numerics.Vector.Sum(lowerSums);
-                middle = (long)System.Numerics.Vector.Sum(middleSums);
-                higher = (long)System.Numerics.Vector.Sum(higherSums);
-            }
-
-            for (; i < count; i++)
-            {
-                lower += zigzag[i] >> lowerParameter;
-                middle += zigzag[i] >> parameter;
-                higher += zigzag[i] >> higherParameter;
-            }
-
-            return (lower + ((long)count * (lowerParameter + 1)), middle + ((long)count * (parameter + 1)), higher + ((long)count * (higherParameter + 1)));
-        }
-
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private static System.Numerics.Vector<ulong> WidenedSum(System.Numerics.Vector<uint> values)
         {
             System.Numerics.Vector.Widen(values, out var low, out var high);
             return low + high;
-        }
-
-        private static long RiceDataBits(uint[] zigzag, int count, int parameter)
-        {
-            var bits = (long)count * (parameter + 1);
-            var i = 0;
-            if (System.Numerics.Vector.IsHardwareAccelerated)
-            {
-                var lanes = System.Numerics.Vector<uint>.Count;
-                var sums = System.Numerics.Vector<ulong>.Zero;
-                for (; i + lanes <= count; i += lanes)
-                {
-                    var shifted = System.Numerics.Vector.ShiftRightLogical(new System.Numerics.Vector<uint>(zigzag, i), parameter);
-                    System.Numerics.Vector.Widen(shifted, out var low, out var high);
-                    sums += low + high;
-                }
-
-                bits += (long)System.Numerics.Vector.Sum(sums);
-            }
-
-            for (; i < count; i++)
-            {
-                bits += zigzag[i] >> parameter;
-            }
-
-            return bits;
         }
 
         private const uint VerbatimSubframeHeader = 0b0000_0010;
