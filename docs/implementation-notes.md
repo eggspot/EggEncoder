@@ -102,3 +102,22 @@ Release check (manual, Apple's jars can't go in this public repo): run iTunes Tr
 and `lib` jars plus Guava) on a 16-bit 44.1 kHz and a 24-bit 48 kHz encode after any change to the FLAC encoder. A
 file passes when no `AudioDescriptionException` is printed; the Transporter build used here then stops on a missing
 report-writer class, which happens for passing files only.
+
+## FLAC encoder choices (`Codecs/Flac/FlacFrameEncoder.cs`)
+
+Since v4.115.0 the encoder decides by estimates and computes exact residuals only for what it chose, the way libFLAC
+and ffmpeg do:
+- **Fixed order:** the smallest sum of |residual| over orders 0-4, all computed in one pass from sample 4 (libFLAC's
+  `compute_best_predictor`). The sums add in 32-bit lanes for as many steps as the bit depth allows without overflow,
+  then widen.
+- **LPC order:** the smallest `bits(error) x (n - order) + order x (precision + bits per sample)`, with
+  `bits = max(0, 0.5 log2(error / 2n))` from the Levinson error (libFLAC's `compute_best_order`).
+- **Stereo:** estimated bits per channel from the best fixed sum, using the Rice estimate below capped at the raw
+  sample size. The log formula alone assumes Laplacian residuals and underestimates noise by about 1.5 bits per
+  sample, which picked mid/side for uncorrelated noise.
+- **Rice parameter:** from the zigzag total `2 sum|r| - negatives`, the best of log2(mean) and its neighbours
+  under `n(k+1) + ((total - n/2) >> k)` (ffmpeg's estimate). The written bits are exact either way.
+
+Wide LPC sums (24-bit and the 25-bit side channel) run in `double` lanes: products stay below 2^39 and sums below
+2^42, so every value is exact, and the floor-shift becomes `floor(sum / 2^shift)`. Converting back adds 1.5 x 2^52,
+not 2^52: a negative value below 2^52 changes the exponent and the bits stop being the integer.
