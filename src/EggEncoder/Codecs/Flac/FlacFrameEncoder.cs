@@ -27,6 +27,12 @@ namespace EggEncoder.Codecs.Flac
 
         public static byte[] EncodeFrame(int[][] channelSamples, int sampleCount, int bitsPerSample, int sampleRate, long frameIndex)
         {
+            var frame = EncodeFrameBytes(channelSamples, sampleCount, bitsPerSample, sampleRate, frameIndex);
+            return frame.AsSpan().ToArray();
+        }
+
+        internal static ArraySegment<byte> EncodeFrameBytes(int[][] channelSamples, int sampleCount, int bitsPerSample, int sampleRate, long frameIndex)
+        {
             var channels = channelSamples.Length;
             int channelAssignment;
             int[][] codingSamples;
@@ -94,7 +100,8 @@ namespace EggEncoder.Codecs.Flac
             var (frameBytes, frameLength) = writer.AlignedBytes();
             writer.WriteBits(FlacCrc.Crc16(frameBytes, 0, frameLength), 16);
 
-            return writer.ToArray();
+            var (buffer, length) = writer.AlignedBytes();
+            return new ArraySegment<byte>(buffer, 0, length);
         }
 
         // Tries every one of RFC 9639's four stereo modes (independent, left/side, right/side,
@@ -112,10 +119,10 @@ namespace EggEncoder.Codecs.Flac
                 side[i] = left[i] - right[i];
             }
 
-            var (leftBits, leftSums) = EstimatedFixedBits(left);
-            var (rightBits, rightSums) = EstimatedFixedBits(right);
-            var (midBits, midSums) = EstimatedFixedBits(mid);
-            var (sideBits, sideSums) = EstimatedFixedBits(side);
+            var (leftBits, leftSums) = EstimatedFixedBits(left, bitsPerSample);
+            var (rightBits, rightSums) = EstimatedFixedBits(right, bitsPerSample);
+            var (midBits, midSums) = EstimatedFixedBits(mid, bitsPerSample);
+            var (sideBits, sideSums) = EstimatedFixedBits(side, bitsPerSample + 1);
 
             var independentCost = leftBits + rightBits;
             var leftSideCost = leftBits + sideBits;
@@ -230,7 +237,7 @@ namespace EggEncoder.Codecs.Flac
                 return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, null, 0);
             }
 
-            var fixedOrder = BestFixedOrderBySum(samples, Math.Min(MaxFixedOrder, sampleCount - 1), fixedSums);
+            var fixedOrder = BestFixedOrderBySum(samples, Math.Min(MaxFixedOrder, sampleCount - 1), fixedSums, bitsPerSample);
             var fixedResidual = ComputeFixedResidual(samples, fixedOrder);
             var (fixedResidualCost, fixedRiceParameter) = ChooseResidualCoding(fixedResidual);
             var best = new SubframePlan(SubframeKind.Fixed, fixedOrder, 8L + ((long)fixedOrder * bitsPerSample) + 6 + fixedResidualCost, fixedResidual, fixedRiceParameter, null, 0);
@@ -491,55 +498,33 @@ namespace EggEncoder.Codecs.Flac
 
         private const int RiceRunSteps = 16;
 
-        private static int FixedSumRunSteps(int[] samples)
+        private static int FixedSumRunSteps(int bitsPerSample)
         {
-            var largest = 0;
-            var i = 0;
-            if (System.Numerics.Vector.IsHardwareAccelerated)
-            {
-                var lanes = System.Numerics.Vector<int>.Count;
-                var largestLanes = System.Numerics.Vector<int>.Zero;
-                for (; i + lanes <= samples.Length; i += lanes)
-                {
-                    largestLanes = System.Numerics.Vector.Max(largestLanes, System.Numerics.Vector.Abs(new System.Numerics.Vector<int>(samples, i)));
-                }
-
-                for (var lane = 0; lane < lanes; lane++)
-                {
-                    largest = Math.Max(largest, largestLanes[lane]);
-                }
-            }
-
-            for (; i < samples.Length; i++)
-            {
-                largest = Math.Max(largest, Math.Abs(samples[i]));
-            }
-
-            var largestDifference = 16L * largest;
-            return largestDifference == 0 ? 1 << 20 : (int)Math.Max(1, uint.MaxValue / 2 / largestDifference);
+            var largestDifference = 16L << Math.Min(bitsPerSample, 32);
+            return (int)Math.Clamp(uint.MaxValue / 2 / largestDifference, 1, 1 << 20);
         }
 
-        private static (double Bits, long[]? Sums) EstimatedFixedBits(int[] samples)
+        private static (double Bits, long[]? Sums) EstimatedFixedBits(int[] samples, int bitsPerSample)
         {
             if (samples.Length <= MaxFixedOrder)
             {
                 return (samples.Length * 32.0, null);
             }
 
-            var sums = FixedOrderSums(samples);
+            var sums = FixedOrderSums(samples, bitsPerSample);
             var smallest = Math.Min(Math.Min(Math.Min(sums[0], sums[1]), Math.Min(sums[2], sums[3])), sums[4]);
             var count = samples.Length - MaxFixedOrder;
             return (smallest == 0 ? 0 : count * Math.Max(0, Math.Log2(Math.Log(2) * smallest / count)), sums);
         }
 
-        private static int BestFixedOrderBySum(int[] samples, int maxOrder, long[]? knownSums)
+        private static int BestFixedOrderBySum(int[] samples, int maxOrder, long[]? knownSums, int bitsPerSample)
         {
             if (samples.Length <= MaxFixedOrder)
             {
                 return 0;
             }
 
-            var sums = knownSums ?? FixedOrderSums(samples);
+            var sums = knownSums ?? FixedOrderSums(samples, bitsPerSample);
             var best = 0;
             for (var order = 1; order <= maxOrder; order++)
             {
@@ -552,7 +537,7 @@ namespace EggEncoder.Codecs.Flac
             return best;
         }
 
-        private static long[] FixedOrderSums(int[] samples)
+        private static long[] FixedOrderSums(int[] samples, int bitsPerSample)
         {
 
             long sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0, sum4 = 0;
@@ -565,7 +550,7 @@ namespace EggEncoder.Codecs.Flac
                 var lanes2 = System.Numerics.Vector<long>.Zero;
                 var lanes3 = System.Numerics.Vector<long>.Zero;
                 var lanes4 = System.Numerics.Vector<long>.Zero;
-                var runSteps = FixedSumRunSteps(samples);
+                var runSteps = FixedSumRunSteps(bitsPerSample);
                 while (start + lanes <= samples.Length)
                 {
                     var run0 = System.Numerics.Vector<uint>.Zero;
