@@ -9,6 +9,15 @@ namespace EggEncoder.Transform
         private ulong _pending;
         private int _pendingBits;
 
+        public BitWriter()
+        {
+        }
+
+        internal BitWriter(int initialCapacityBytes)
+        {
+            _buffer = new byte[Math.Max(64, initialCapacityBytes)];
+        }
+
         public int BitPosition => (_byteLength * 8) + _pendingBits;
 
         public void WriteBits(uint value, int bitCount)

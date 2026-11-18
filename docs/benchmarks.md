@@ -362,3 +362,18 @@ WMA and AAC decode are dominated by `Transform.Mdct.Inverse`, a direct O(N^2) tr
 `Math.Cos` in its inner loop (slower than real time for WMA); a fast MDCT is the next perf item.
 TTA didn't move: its decode time isn't in bit reads.
 
+
+### FLAC encode speed (v4.114.3+, i7-8850H, `ConvertFile` WAV to FLAC, fastest of 3)
+
+| Source | v4.114.2, one thread | now, one thread | now, default threads (4) |
+|---|---:|---:|---:|
+| 5 min, 44.1 kHz/16-bit stereo | 18,121 ms | 5,257 ms | 3,105 ms |
+| 232 s, 48 kHz/24-bit stereo (a label master) | 23,388 ms | 6,587 ms | 3,177 ms |
+
+Same bytes as v4.114.2. The Rice parameter search walks its convex cost from log2 of the mean (it scanned all 31
+parameters with a full pass each); LPC residuals use vector lanes (16-bit in `int` lanes with the same wraparound,
+wider samples in `double` lanes, exact because every product and sum stays below 2^53, rounded back with a
+1.5 x 2^52 bias so negative values keep their bits); fixed residuals and zigzags use vector lanes; the
+autocorrelation runs its nine lags in one pass in the same order; samples convert to double once per channel; frames
+encode on up to `MaxDegreeOfParallelism` threads (processor count, at most 4, or `EggEncoderOptions`) and are
+written in order. libFLAC 1.4.3 `flac -8` takes 1,119 ms and 2,130 ms on the same files on one thread.

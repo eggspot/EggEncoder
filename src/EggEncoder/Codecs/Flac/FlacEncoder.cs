@@ -161,6 +161,9 @@ namespace EggEncoder.Codecs.Flac
         private int _minFrameBytes = int.MaxValue;
         private int _maxFrameBytes;
         private bool _disposed;
+        private readonly Queue<Task<byte[]>> _frames = new();
+        private readonly int _maxDegreeOfParallelism = CodecParallelism.Current ?? Math.Clamp(Environment.ProcessorCount, 1, 4);
+        private SemaphoreSlim? _frameSlots;
 
         private FlacEncoderSession(Stream destStream, bool leaveOpen, int channels, int bitsPerSample, int sampleRate)
         {
@@ -240,6 +243,7 @@ namespace EggEncoder.Codecs.Flac
                 FlushPendingBlock();
             }
 
+            WriteFinishedFrames(all: true);
             var md5 = _md5.GetHashAndReset();
 
             // RFC 9639 section 4.1/8.2: every frame but the last MUST use exactly the nominal block
@@ -302,10 +306,31 @@ namespace EggEncoder.Codecs.Flac
                 }
             }
 
-            var frameBytes = FlacFrameEncoder.EncodeFrame(channelSamples, _pendingFrameCount, _bitsPerSample, _sampleRate, _frameIndex);
-            _destStream.Write(frameBytes);
-            _minFrameBytes = Math.Min(_minFrameBytes, frameBytes.Length);
-            _maxFrameBytes = Math.Max(_maxFrameBytes, frameBytes.Length);
+            var sampleCount = _pendingFrameCount;
+            var frameIndex = _frameIndex;
+            if (_maxDegreeOfParallelism == 1)
+            {
+                WriteFrame(FlacFrameEncoder.EncodeFrame(channelSamples, sampleCount, _bitsPerSample, _sampleRate, frameIndex));
+            }
+            else
+            {
+                var slots = _frameSlots ??= new SemaphoreSlim(_maxDegreeOfParallelism, _maxDegreeOfParallelism);
+                var bitsPerSample = _bitsPerSample;
+                var sampleRate = _sampleRate;
+                _frames.Enqueue(Task.Run(async () =>
+                {
+                    await slots.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        return FlacFrameEncoder.EncodeFrame(channelSamples, sampleCount, bitsPerSample, sampleRate, frameIndex);
+                    }
+                    finally
+                    {
+                        slots.Release();
+                    }
+                }));
+                WriteFinishedFrames(all: false);
+            }
 
             _frameIndex++;
             _lastBlockSize = _pendingFrameCount;
@@ -316,6 +341,22 @@ namespace EggEncoder.Codecs.Flac
         // conformance tests specifically, which must build a real STREAMINFO out-of-band to make
         // its own raw frames decodable at all -- see that type's own doc comment) can reuse this
         // exact bit layout rather than duplicating it.
+        private void WriteFinishedFrames(bool all)
+        {
+            var maxPending = _maxDegreeOfParallelism * 2;
+            while (_frames.Count > 0 && (all || _frames.Count > maxPending || _frames.Peek().IsCompleted))
+            {
+                WriteFrame(_frames.Dequeue().GetAwaiter().GetResult());
+            }
+        }
+
+        private void WriteFrame(byte[] frameBytes)
+        {
+            _destStream.Write(frameBytes);
+            _minFrameBytes = Math.Min(_minFrameBytes, frameBytes.Length);
+            _maxFrameBytes = Math.Max(_maxFrameBytes, frameBytes.Length);
+        }
+
         internal static void WriteStreamInfoPayload(BitWriter writer, int channels, int bitsPerSample, int sampleRate, int minBlockSize, int maxBlockSize, long totalSamples, byte[] md5, int minFrameBytes = 0, int maxFrameBytes = 0)
         {
             writer.WriteBits((uint)minBlockSize, 16);
