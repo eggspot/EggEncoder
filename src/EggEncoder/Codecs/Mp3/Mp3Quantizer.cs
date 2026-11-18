@@ -58,11 +58,10 @@ namespace EggEncoder.Codecs.Mp3
                 var (code, length) = quads.GetCode(pattern);
                 for (var j = 0; j < 4; j++)
                 {
-                    if (plan.Quantized[i + j] != 0)
-                    {
-                        code = (code << 1) | (plan.Quantized[i + j] < 0 ? 1u : 0u);
-                        length++;
-                    }
+                    var value = plan.Quantized[i + j];
+                    var nonZero = (int)((uint)(value | -value) >> 31);
+                    code = (code << nonZero) | (uint)((value >>> 31) & nonZero);
+                    length += nonZero;
                 }
 
                 writer.WriteBits(code, length);
@@ -708,11 +707,9 @@ namespace EggEncoder.Codecs.Mp3
                 count += linbits;
             }
 
-            if (value != 0)
-            {
-                bits = (bits << 1) | (value < 0 ? 1u : 0u);
-                count++;
-            }
+            var nonZero = (int)((uint)(value | -value) >> 31);
+            bits = (bits << nonZero) | (uint)((value >>> 31) & nonZero);
+            count += nonZero;
         }
     }
 }
