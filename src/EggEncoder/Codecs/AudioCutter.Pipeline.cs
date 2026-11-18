@@ -149,9 +149,6 @@ namespace EggEncoder.Codecs
                     var (outBuffer, outFrameCount, outChannels, outSampleRate, outBitsPerSample) =
                         pipeline.Apply(scratchBuffer, block.Length / channels, channels, sampleRate, bitsPerSample);
 
-                    // Opened only after the first successful Apply() call: if the pipeline rejects the
-                    // source format (e.g. a mismatched ChannelRemixTransform), no destination file is
-                    // ever created, instead of leaving a truncated header-only file behind.
                     destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples, destinationWavFormat, destinationAiffFormat, destinationAuFormat);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
@@ -247,8 +244,6 @@ namespace EggEncoder.Codecs
                         var (outBuffer, outFrameCount, outChannels, outSampleRate, outBitsPerSample) =
                             effectivePipeline!.Apply(trimmedBuffer, trimmedFrameCount, channels, sampleRate, bitsPerSample);
 
-                        // Opened only after the first successful Apply() call -- see the Convert(pipeline)
-                        // overload's matching comment.
                         destSink ??= OpenSinkForPipeline(destExtension, destFilePath, outChannels, outSampleRate, outBitsPerSample, effectivePipeline.CanChangeFrameCount ? null : retainedFrames, options.DestinationWavFormat, options.DestinationAiffFormat, options.DestinationAuFormat);
                         destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                     });
@@ -306,17 +301,6 @@ namespace EggEncoder.Codecs
 
             var destExtension = Path.GetExtension(destFilePath).ToLowerInvariant();
 
-            // Each input is decoded independently (own reader, own local state), so this is safe to run
-            // concurrently -- decoding N clip-length files one at a time paid for N files' worth of I/O
-            // and CPU serially for no reason. Parallel.For bounds concurrency to a sane degree (unlike
-            // firing one unbounded Task.Run per input) and still keeps every input fully in memory at
-            // once, same as the old sequential version's memory profile once all N are decoded.
-            //
-            // A per-index failure array (rather than letting an exception escape the loop body, which
-            // Parallel.For would wrap in AggregateException) lets the first *input-order* failure be
-            // re-thrown afterward with its original type and stack trace intact -- matching the
-            // sequential behavior this replaces (which always failed on the first bad input by index,
-            // not whichever one happened to fault first under concurrent execution).
             var decoded = new (int[] Samples, int Channels, int SampleRate, int BitsPerSample)[inputs.Count];
             var failures = new Exception?[inputs.Count];
 
@@ -360,8 +344,6 @@ namespace EggEncoder.Codecs
                 maxSampleCount = Math.Max(maxSampleCount, source.Samples.Length);
             }
 
-            // Accumulate in double so a run of loud, positively-correlated sources doesn't clip mid-sum;
-            // only the final mixed value is clamped to the destination bit depth's native range.
             var accumulator = new double[maxSampleCount];
             for (var i = 0; i < decoded.Length; i++)
             {
@@ -446,10 +428,6 @@ namespace EggEncoder.Codecs
                             expectedChannels = channels;
                             expectedSampleRate = sampleRate;
                             expectedBitsPerSample = bitsPerSample;
-                            // Unlike Convert/Cut, there's no cheap way to know the combined total frame
-                            // count before every source has been decoded, so a WAV destination always
-                            // defers (see OpenSinkForPipeline) -- Concatenate is fully streaming only for
-                            // non-WAV destinations, whose encoder sessions don't need a frame count at all.
                             destSink = OpenSinkForPipeline(destExtension, destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames: null, destinationWavFormat);
                         }
                         else if (channels != expectedChannels || sampleRate != expectedSampleRate || bitsPerSample != expectedBitsPerSample)
@@ -501,13 +479,6 @@ namespace EggEncoder.Codecs
             return transforms is null ? new PcmTransformPipeline() : new PcmTransformPipeline([.. transforms]);
         }
 
-        // WavWriter and AiffWriter both need an exact frame count up front (each writes a fixed-size
-        // header -- RIFF for WAV, FORM/COMM/SSND for AIFF -- at Create time with no patch-up on Finish).
-        // Every other sink format ignores the count, so it always streams straight through regardless of
-        // exactTotalFrames. For either of those two: if the caller already knows the exact output frame
-        // count (exactTotalFrames has a value -- true whenever nothing in play can change frame count,
-        // e.g. a pipeline with no resampling, or no pipeline at all), open the real writer directly
-        // instead of paying for the deferred sink's whole-file in-memory buffering.
         private static IAudioSink OpenSinkForPipeline(string destExtension, string destFilePath, int channels, int sampleRate, int bitsPerSample, long? exactTotalFrames, WavSampleFormat destinationWavFormat = WavSampleFormat.Integer, AiffSampleFormat destinationAiffFormat = AiffSampleFormat.Integer, AuSampleFormat destinationAuFormat = AuSampleFormat.Integer)
         {
             if (destExtension == ".wav")
@@ -526,11 +497,6 @@ namespace EggEncoder.Codecs
 
             if (destExtension == ".au")
             {
-                // Sun AU does have its own "unknown size" sentinel (0xFFFFFFFF, see AuReader) a real
-                // streaming encoder could use instead -- but requiring an exact count up front here
-                // reuses this already-proven deferred-sink machinery instead of a second, bespoke
-                // "patch the header on Finish" path, the same call WAV/AIFF already made despite each
-                // having no equivalent sentinel at all.
                 return exactTotalFrames.HasValue
                     ? AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, exactTotalFrames.Value, destinationAuFormat)
                     : new DeferredFixedHeaderSink(channels, totalFrames => AuWriter.Create(destFilePath, channels, sampleRate, bitsPerSample, totalFrames, destinationAuFormat));
@@ -538,11 +504,6 @@ namespace EggEncoder.Codecs
 
             if (destExtension == ".wv")
             {
-                // Unlike WAV/AIFF, WavpackSetConfiguration64 could instead take total_samples == -1
-                // ("unknown") and have the real count patched into the file's first block after the
-                // fact -- but requiring an exact count up front here reuses this already-proven
-                // deferred-sink machinery instead of this project needing to implement that native
-                // seek-and-patch sequence itself.
                 return exactTotalFrames.HasValue
                     ? WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, exactTotalFrames.Value)
                     : new DeferredFixedHeaderSink(channels, totalFrames => WavPackEncoderSession.OpenSession(destFilePath, channels, bitsPerSample, sampleRate, totalFrames));
@@ -674,11 +635,6 @@ namespace EggEncoder.Codecs
             writer.Finish();
         }
 
-        // Buffers written samples in memory and only opens the real sink -- for any format whose writer
-        // needs an exact frame count up front (WAV, AIFF) -- once Finish() reports the true total. See
-        // OpenSinkForPipeline. Parameterized by an "open the real writer" callback rather than one of
-        // these per format (there were briefly two, nearly identical save for which Create method they
-        // called) so a future third fixed-header format doesn't mean a third near-duplicate class.
         private sealed class DeferredFixedHeaderSink : IAudioSink
         {
             private readonly int _channels;

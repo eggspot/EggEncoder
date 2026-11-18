@@ -31,11 +31,6 @@ namespace EggEncoder.Codecs.Wav
         private readonly short[] _msAdpcmCoeff2 = [];
         private readonly MsAdpcmDecoder.ChannelState[] _msAdpcmChannelStates = [];
 
-        // Yamaha ADPCM has no block structure at all (see YamahaAdpcmDecoder's own doc comment), so
-        // there's no block-align/samples-per-block pair or pending-block buffer to track here, unlike
-        // IMA/MS ADPCM above -- just per-channel state that carries continuously for the whole stream,
-        // plus the one nibble left over whenever an odd number of nibbles has been consumed so far
-        // (only possible for mono, since stereo always consumes nibbles in complete pairs per frame).
         private readonly bool _isYamahaAdpcm;
         private readonly YamahaAdpcmDecoder.ChannelState[] _yamahaChannelStates = [];
         private int _yamahaPendingByte;
@@ -45,18 +40,11 @@ namespace EggEncoder.Codecs.Wav
         private long _bytesRead;
         private byte[] _rawBytes = [];
 
-        // ADPCM decodes in whole-block units (the real block is almost never an exact multiple of the
-        // caller's requested frame count), so decoded-but-not-yet-returned samples are buffered here;
-        // PCM/float never populate this since they decode exactly what's requested, byte-for-byte.
         private int[] _adpcmPendingSamples = [];
         private int _adpcmPendingOffset;
         private int _adpcmPendingCount;
         private long _adpcmFramesProduced;
 
-        // Same pending-buffer pattern as IMA ADPCM's own fields above, but kept fully separate rather
-        // than shared -- the two formats' block layouts, channel-state shapes, and even coefficient
-        // handling are different enough (MS ADPCM carries its own per-file coefficient table; IMA
-        // ADPCM has none) that sharing fields would need a union-like abstraction for no real benefit.
         private int[] _msAdpcmPendingSamples = [];
         private int _msAdpcmPendingOffset;
         private int _msAdpcmPendingCount;
@@ -308,10 +296,6 @@ namespace EggEncoder.Codecs.Wav
                     }
                     else if (chunkId == "LIST")
                     {
-                        // A real file can have more than one 'LIST' chunk (e.g. 'INFO' alongside
-                        // 'adtl' cue-point labels) -- only overwrite `tags` when this particular one
-                        // actually parsed as INFO-style tags, so a later non-INFO 'LIST' chunk can't
-                        // wipe out tags an earlier 'INFO' one already found.
                         var parsedTags = TryParseListInfoTags(reader, chunkDataStart, chunkSize);
                         if (parsedTags is not null)
                         {
@@ -319,9 +303,6 @@ namespace EggEncoder.Codecs.Wav
                         }
                     }
 
-                    // Clamped to the stream's length: a corrupted chunk size can point far past EOF,
-                    // which a FileStream accepts (ending the walk) but a MemoryStream rejects with a
-                    // raw ArgumentOutOfRangeException once the offset passes int.MaxValue.
                     var paddedChunkSize = chunkSize + (chunkSize % 2);
                     stream.Position = Math.Min(chunkDataStart + paddedChunkSize, stream.Length);
                 }
@@ -359,20 +340,12 @@ namespace EggEncoder.Codecs.Wav
                         throw new InvalidDataException($"'{filePath}' declares a block align of {adpcmBlockAlign} bytes, too small to hold the {headerBytes}-byte per-channel ADPCM block header");
                     }
 
-                    // The standard IMA ADPCM relationship between block align and samples per block --
-                    // a wSamplesPerBlock claiming more samples than the block's own data bytes can
-                    // actually hold would run DecodeBlock's data loop past the end of its own block
-                    // buffer (IndexOutOfRangeException) rather than failing cleanly here.
                     var maxSamplesPerBlock = ((adpcmBlockAlign - headerBytes) * 8 / headerBytes) + 1;
                     if (adpcmSamplesPerBlock > maxSamplesPerBlock)
                     {
                         throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={adpcmSamplesPerBlock}, but its block align of {adpcmBlockAlign} bytes can only hold {maxSamplesPerBlock}");
                     }
 
-                    // The 'fact' chunk's own total is the authoritative sample count (the standard,
-                    // recommended WAV convention for any non-PCM format) -- it's what lets a decoder
-                    // trim trailing padding from the last block without guessing. Fall back to deriving
-                    // it from the data chunk's own block count only if 'fact' is missing entirely.
                     var totalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * adpcmSamplesPerBlock;
 
                     return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, totalSamples, isAdpcm: true, adpcmBlockAlign, adpcmSamplesPerBlock, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
@@ -396,10 +369,6 @@ namespace EggEncoder.Codecs.Wav
                         throw new InvalidDataException($"'{filePath}' declares a block align of {adpcmBlockAlign} bytes, too small to hold the {msAdpcmHeaderBytes}-byte MS ADPCM block header");
                     }
 
-                    // Mono wastes the last nibble of its final data byte when the remaining sample
-                    // count is odd (the same "wasted trailing nibble" pattern IMA ADPCM has), so the
-                    // safe upper bound doubles the remaining bytes; stereo always uses both nibbles of
-                    // every byte (one per channel), so the bound is exact with no slack.
                     var msAdpcmRemainingBytes = adpcmBlockAlign - msAdpcmHeaderBytes;
                     var msAdpcmMaxSamplesPerBlock = channels.Value == 1 ? 2 + (msAdpcmRemainingBytes * 2) : 2 + msAdpcmRemainingBytes;
                     if (msAdpcmSamplesPerBlock > msAdpcmMaxSamplesPerBlock)
@@ -407,8 +376,6 @@ namespace EggEncoder.Codecs.Wav
                         throw new InvalidDataException($"'{filePath}' declares wSamplesPerBlock={msAdpcmSamplesPerBlock}, but its block align of {adpcmBlockAlign} bytes can only hold {msAdpcmMaxSamplesPerBlock}");
                     }
 
-                    // Same 'fact' chunk convention as IMA ADPCM -- authoritative when present, falling
-                    // back to the data chunk's own block count only if it's missing entirely.
                     var msAdpcmTotalSamples = factChunkTotalSamples ?? dataChunkLength / adpcmBlockAlign * msAdpcmSamplesPerBlock;
 
                     return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, msAdpcmTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: true, msAdpcmBlockAlign: adpcmBlockAlign, msAdpcmSamplesPerBlock, msAdpcmCoeff1, msAdpcmCoeff2, isYamahaAdpcm: false, tags, leaveOpen);
@@ -421,16 +388,6 @@ namespace EggEncoder.Codecs.Wav
                         throw new NotSupportedException($"'{filePath}' has {channels} channels; only mono and stereo Yamaha ADPCM are supported");
                     }
 
-                    // No block structure, so no block-align-derived bound to check here (unlike IMA/MS
-                    // ADPCM above) -- every nibble in the data chunk is real audio data (or, for mono
-                    // with an odd total frame count, one trailing zero-pad nibble YamahaAdpcmEncoder's
-                    // own Finish() path writes) with no larger block padding to reason about.
-                    //
-                    // Same 'fact' chunk convention as every other non-PCM format here -- authoritative
-                    // when present; the fallback derives frames from the raw nibble count (two nibbles
-                    // per byte) divided across channels, which undercounts by at most the one trailing
-                    // pad nibble mono can have, matching the real on-disk data exactly whenever 'fact'
-                    // is absent.
                     var yamahaTotalSamples = factChunkTotalSamples ?? (dataChunkLength * 2) / channels.Value;
 
                     return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, yamahaTotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw: false, isMuLaw: false, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: true, tags, leaveOpen);
@@ -438,17 +395,6 @@ namespace EggEncoder.Codecs.Wav
 
                 if (isALaw || isMuLaw)
                 {
-                    // Unlike every other codec here, G.711 has no structural reason to limit channel
-                    // count -- it's a per-sample, per-channel companding formula with no block/frame
-                    // structure at all, so any channel count decodes/encodes correctly; the mono/
-                    // stereo-only limits elsewhere in this project come from the underlying native
-                    // library or bitstream structure each of those codecs actually has, not from a
-                    // project-wide rule.
-                    //
-                    // The 'fact' chunk's total is preferred when present (the standard WAV convention
-                    // for a non-PCM format), but unlike IMA ADPCM there's no block padding to trim --
-                    // each byte is exactly one sample, so the fallback is just the data chunk's own
-                    // byte count divided evenly across channels.
                     var g711TotalSamples = factChunkTotalSamples ?? dataChunkLength / channels.Value;
 
                     return new WavReader(stream, channels.Value, sampleRate.Value, bitsPerSample: 16, isFloatFormat: false, dataChunkStart, dataChunkLength, g711TotalSamples, isAdpcm: false, adpcmBlockAlign: 0, adpcmSamplesPerBlock: 0, isALaw, isMuLaw, isMsAdpcm: false, msAdpcmBlockAlign: 0, msAdpcmSamplesPerBlock: 0, msAdpcmCoeff1: [], msAdpcmCoeff2: [], isYamahaAdpcm: false, tags, leaveOpen);
@@ -478,15 +424,6 @@ namespace EggEncoder.Codecs.Wav
             }
             catch (EndOfStreamException e)
             {
-                // The chunk-walk loop above only checks `stream.Position < stream.Length` BETWEEN
-                // chunks; a chunk whose own declared size claims more bytes than the file actually
-                // has (e.g. a truncated 'fmt ' chunk) runs the raw BinaryReader.ReadInt16/
-                // ReadUInt32 calls reading that chunk's own fields past EOF, throwing the BCL's
-                // own EndOfStreamException rather than the InvalidDataException every other
-                // malformed-input case in this codebase throws (see AiffReader/AuReader's own
-                // identical fix). Only disposes a stream this method itself owns -- the
-                // Stream-based Open(Stream) overload above never does, leaving the caller's own
-                // stream exactly as they gave it.
                 if (!leaveOpen)
                 {
                     stream.Dispose();
@@ -505,17 +442,6 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
-        // RIFF's standard metadata convention: a 'LIST' chunk whose own first 4 bytes are a
-        // sub-type FourCC. 'INFO' is the one that carries metadata sub-chunks (title, artist, etc.);
-        // 'adtl' (cue-point labels/notes) and any other sub-type are out of scope here, so this
-        // returns null for them rather than misreading their own, differently-shaped payload as
-        // INFO-style tag sub-chunks.
-        //
-        // Unlike the mandatory-for-decode truncation checks elsewhere in this codebase (e.g.
-        // Mp4EsdsParser, AsfContainerReader), a malformed 'LIST'/'INFO' chunk doesn't throw: this is
-        // optional, decorative metadata, not something the audio decode itself depends on, so a
-        // truncated or malformed tag list degrades to "parse whatever tags came before the
-        // inconsistency, then stop" rather than failing the whole file open.
         private const uint UnknownDataChunkSize = 0xFFFFFFFF;
 
         private static bool IsUnsizedDataChunk(BinaryReader reader, long chunkDataStart, uint chunkSize)
@@ -551,9 +477,6 @@ namespace EggEncoder.Codecs.Wav
                 return null;
             }
 
-            // Bounded by the stream's real length too: a corrupted LIST size would otherwise let a
-            // sub-chunk's own (equally corrupted) size pass the bounds check below, allocating a
-            // buffer that large and then reading past EOF.
             var listEnd = Math.Min(chunkDataStart + chunkSize, reader.BaseStream.Length);
             if (new string(reader.ReadChars(4)) != "INFO")
             {
@@ -571,17 +494,10 @@ namespace EggEncoder.Codecs.Wav
 
                 if (subSize > int.MaxValue || subDataStart + subSize > listEnd)
                 {
-                    // Either the sub-chunk's own declared size can't even be passed to ReadBytes
-                    // (int-sized), or it would run past the LIST chunk's own declared bound -- stop
-                    // parsing further sub-chunks rather than reading into whatever comes after this
-                    // chunk on disk (or throwing on a cast that should degrade gracefully instead).
                     break;
                 }
 
                 var bytes = reader.ReadBytes((int)subSize);
-                // RIFF INFO strings are conventionally ANSI and null-terminated, but UTF-8 is a
-                // superset of 7-bit ASCII and handles the many real-world files that use it instead
-                // -- TrimEnd strips the null terminator (and any further null padding).
                 tags[subId] = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
 
                 var paddedSubSize = subSize + (subSize % 2);
@@ -608,10 +524,6 @@ namespace EggEncoder.Codecs.Wav
                 return ReadYamahaAdpcmInterleavedSamples(buffer, maxSamplesPerChannel);
             }
 
-            // G.711 always decodes to 16-bit resolution (BitsPerSample) but is only ever 1 coded byte
-            // per sample on disk, regardless of that reported resolution -- the same "reported
-            // decoded width != actual coded width" gap IMA ADPCM has, just without IMA ADPCM's block
-            // structure requiring a whole separate buffered-decode path to bridge it.
             var bytesPerSample = _isALaw || _isMuLaw ? 1 : BitsPerSample / 8;
             var bytesPerFrame = bytesPerSample * Channels;
             var remainingBytes = _dataChunkLength - _bytesRead;
@@ -669,8 +581,6 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
-        // Delegates to FloatSampleConverter's shared conversion so a float WAV's NaN/Infinity/
-        // out-of-range samples are handled identically regardless of entry point -- see its doc comment.
         private static int Float32ToInt32(float sample) => Pcm.FloatSampleConverter.ClampToNativeInt32(sample);
 
         private int ReadAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
@@ -696,13 +606,6 @@ namespace EggEncoder.Codecs.Wav
             return framesWritten;
         }
 
-        // Decodes exactly one more whole block from the stream into _adpcmPendingSamples, returning
-        // false once there's nothing left to decode (end of data chunk, the authoritative TotalSamples
-        // has already been reached, or the remaining bytes don't even add up to one complete block --
-        // the last of which only protects against a malformed/truncated file: every real encoder pads
-        // its own final block to the full block size and relies on TotalSamples, not a short read, to
-        // signal where the real audio ends -- confirmed against a real ffmpeg-produced file, whose
-        // final block is fully present but mostly trailing padding beyond its own 'fact' chunk total).
         private bool DecodeNextAdpcmBlock()
         {
             if (_adpcmFramesProduced >= TotalSamples)
@@ -757,7 +660,6 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
-        // Mirrors ReadAdpcmInterleavedSamples exactly, just driving the MS ADPCM pending buffer instead.
         private int ReadMsAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
         {
             var framesWritten = 0;
@@ -781,9 +683,6 @@ namespace EggEncoder.Codecs.Wav
             return framesWritten;
         }
 
-        // Mirrors DecodeNextAdpcmBlock exactly (same stop conditions: TotalSamples already reached,
-        // or not enough bytes left for one whole block), just calling MsAdpcmDecoder.DecodeBlock with
-        // its own coefficient table instead.
         private bool DecodeNextMsAdpcmBlock()
         {
             if (_msAdpcmFramesProduced >= TotalSamples)
@@ -838,14 +737,6 @@ namespace EggEncoder.Codecs.Wav
             }
         }
 
-        // Yamaha ADPCM has no block structure (see YamahaAdpcmDecoder's own doc comment), so unlike
-        // ReadAdpcmInterleavedSamples/ReadMsAdpcmInterleavedSamples there's no pending-block buffer
-        // here -- just the one leftover high nibble carried across calls whenever an odd number of
-        // nibbles has been consumed so far (only possible for mono; stereo always consumes nibbles in
-        // complete pairs per frame). Bounds the frame count to decode by both the 'fact'-chunk-
-        // authoritative remaining total AND the bytes actually left in the data chunk (plus any
-        // already-buffered pending nibble), so a truncated/malformed file degrades to returning fewer
-        // frames rather than reading past the data chunk.
         private int ReadYamahaAdpcmInterleavedSamples(int[] buffer, int maxSamplesPerChannel)
         {
             var remainingBytes = _dataChunkLength - _bytesRead;
@@ -875,19 +766,6 @@ namespace EggEncoder.Codecs.Wav
                         var b = _stream.ReadByte();
                         if (b < 0)
                         {
-                            // Genuinely truncated file -- the data chunk's own declared size (what
-                            // the framesAvailable bound above was computed from) claimed more bytes
-                            // than are actually present on disk. Stop cleanly at the last complete
-                            // frame rather than storing ReadByte's -1 EOF sentinel into
-                            // _yamahaPendingByte: confirmed by mutation testing that doing so doesn't
-                            // just decode a wrong-but-harmless nibble -- `(-1) & 0x0F` masks fine to
-                            // 15 for a LOW nibble, but a later `(-1) >> 4` for the matching HIGH
-                            // nibble is a signed arithmetic shift that stays -1, indexing
-                            // DiffLookup/IndexScale with a negative index and throwing
-                            // IndexOutOfRangeException. Mirrors the same "stop at a whole unit
-                            // boundary, never emit a partial one" contract
-                            // ReadFullyAdpcmBlock/ReadFullyMsAdpcmBlock already establish for IMA/MS
-                            // ADPCM's own block-level short reads.
                             _bytesRead += bytesConsumedThisCall;
                             _yamahaFramesProduced += frame;
                             return frame;
