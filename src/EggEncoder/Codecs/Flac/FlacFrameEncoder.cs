@@ -112,38 +112,34 @@ namespace EggEncoder.Codecs.Flac
                 side[i] = left[i] - right[i];
             }
 
-            var leftPlan = AnalyzeSubframe(left, bitsPerSample);
-            var rightPlan = AnalyzeSubframe(right, bitsPerSample);
-            var midPlan = AnalyzeSubframe(mid, bitsPerSample);
-            var sidePlan = AnalyzeSubframe(side, bitsPerSample + 1);
+            var leftBits = EstimatedFixedBits(left);
+            var rightBits = EstimatedFixedBits(right);
+            var midBits = EstimatedFixedBits(mid);
+            var sideBits = EstimatedFixedBits(side);
 
-            var independentCost = leftPlan.CostBits + rightPlan.CostBits;
-            var leftSideCost = leftPlan.CostBits + sidePlan.CostBits;
-            var rightSideCost = rightPlan.CostBits + sidePlan.CostBits;
-            var midSideCost = midPlan.CostBits + sidePlan.CostBits;
+            var independentCost = leftBits + rightBits;
+            var leftSideCost = leftBits + sideBits;
+            var rightSideCost = rightBits + sideBits;
+            var midSideCost = midBits + sideBits;
 
             var cheapest = Math.Min(Math.Min(independentCost, leftSideCost), Math.Min(rightSideCost, midSideCost));
 
             if (cheapest == midSideCost)
             {
-                return (ChannelAssignmentMidSide, [mid, side], [midPlan, sidePlan]);
+                return (ChannelAssignmentMidSide, [mid, side], [AnalyzeSubframe(mid, bitsPerSample), AnalyzeSubframe(side, bitsPerSample + 1)]);
             }
 
             if (cheapest == leftSideCost)
             {
-                return (ChannelAssignmentLeftSide, [left, side], [leftPlan, sidePlan]);
+                return (ChannelAssignmentLeftSide, [left, side], [AnalyzeSubframe(left, bitsPerSample), AnalyzeSubframe(side, bitsPerSample + 1)]);
             }
 
             if (cheapest == rightSideCost)
             {
-                // Unlike left/side (where channel 0 is the un-flagged "left" and channel 1 is the
-                // side, matching FlacFrameDecoder's own isSide/Decorrelate convention exactly),
-                // right/side is the other way around: FlacFrameDecoder treats channel 0 as the side
-                // and channel 1 as the un-flagged "right" for this specific assignment code.
-                return (ChannelAssignmentRightSide, [side, right], [sidePlan, rightPlan]);
+                return (ChannelAssignmentRightSide, [side, right], [AnalyzeSubframe(side, bitsPerSample + 1), AnalyzeSubframe(right, bitsPerSample)]);
             }
 
-            return (1, [left, right], [leftPlan, rightPlan]);
+            return (1, [left, right], [AnalyzeSubframe(left, bitsPerSample), AnalyzeSubframe(right, bitsPerSample)]);
         }
 
         // ---------------------------------------------------------------- frame number (RFC 9639 section 9.1.5)
@@ -523,12 +519,41 @@ namespace EggEncoder.Codecs.Flac
             return largestDifference == 0 ? 1 << 20 : (int)Math.Max(1, uint.MaxValue / 2 / largestDifference);
         }
 
+        private static double EstimatedFixedBits(int[] samples)
+        {
+            if (samples.Length <= MaxFixedOrder)
+            {
+                return samples.Length * 32.0;
+            }
+
+            var sums = FixedOrderSums(samples);
+            var smallest = Math.Min(Math.Min(Math.Min(sums[0], sums[1]), Math.Min(sums[2], sums[3])), sums[4]);
+            var count = samples.Length - MaxFixedOrder;
+            return smallest == 0 ? 0 : count * Math.Max(0, Math.Log2(Math.Log(2) * smallest / count));
+        }
+
         private static int BestFixedOrderBySum(int[] samples, int maxOrder)
         {
             if (samples.Length <= MaxFixedOrder)
             {
                 return 0;
             }
+
+            var sums = FixedOrderSums(samples);
+            var best = 0;
+            for (var order = 1; order <= maxOrder; order++)
+            {
+                if (sums[order] < sums[best])
+                {
+                    best = order;
+                }
+            }
+
+            return best;
+        }
+
+        private static long[] FixedOrderSums(int[] samples)
+        {
 
             long sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0, sum4 = 0;
             var start = MaxFixedOrder;
@@ -603,17 +628,7 @@ namespace EggEncoder.Codecs.Flac
                 e3Previous = e3;
             }
 
-            long[] sums = [sum0, sum1, sum2, sum3, sum4];
-            var best = 0;
-            for (var order = 1; order <= maxOrder; order++)
-            {
-                if (sums[order] < sums[best])
-                {
-                    best = order;
-                }
-            }
-
-            return best;
+            return [sum0, sum1, sum2, sum3, sum4];
         }
 
         [ThreadStatic]

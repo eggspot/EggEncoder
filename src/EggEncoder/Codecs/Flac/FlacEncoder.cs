@@ -164,6 +164,7 @@ namespace EggEncoder.Codecs.Flac
         private readonly Queue<Task<byte[]>> _frames = new();
         private readonly int _maxDegreeOfParallelism = CodecParallelism.Current ?? Math.Clamp(Environment.ProcessorCount, 1, 4);
         private SemaphoreSlim? _frameSlots;
+        private Task _md5Pending = Task.CompletedTask;
 
         private FlacEncoderSession(Stream destStream, bool leaveOpen, int channels, int bitsPerSample, int sampleRate)
         {
@@ -223,7 +224,7 @@ namespace EggEncoder.Codecs.Flac
                 var sourceSpan = buffer.AsSpan(offset * _channels, take * _channels);
                 sourceSpan.CopyTo(_pendingInterleaved.AsSpan(_pendingFrameCount * _channels, take * _channels));
 
-                FlacPcmMd5.Append(_md5, sourceSpan, _bitsPerSample);
+                AppendToMd5(sourceSpan);
 
                 _pendingFrameCount += take;
                 _totalSamples += take;
@@ -244,6 +245,7 @@ namespace EggEncoder.Codecs.Flac
             }
 
             WriteFinishedFrames(all: true);
+            _md5Pending.GetAwaiter().GetResult();
             var md5 = _md5.GetHashAndReset();
 
             // RFC 9639 section 4.1/8.2: every frame but the last MUST use exactly the nominal block
@@ -341,6 +343,20 @@ namespace EggEncoder.Codecs.Flac
         // conformance tests specifically, which must build a real STREAMINFO out-of-band to make
         // its own raw frames decodable at all -- see that type's own doc comment) can reuse this
         // exact bit layout rather than duplicating it.
+        private void AppendToMd5(ReadOnlySpan<int> samples)
+        {
+            if (_maxDegreeOfParallelism == 1)
+            {
+                FlacPcmMd5.Append(_md5, samples, _bitsPerSample);
+                return;
+            }
+
+            var copy = samples.ToArray();
+            var bitsPerSample = _bitsPerSample;
+            var md5 = _md5;
+            _md5Pending = _md5Pending.ContinueWith(_ => FlacPcmMd5.Append(md5, copy, bitsPerSample), TaskScheduler.Default);
+        }
+
         private void WriteFinishedFrames(bool all)
         {
             var maxPending = _maxDegreeOfParallelism * 2;
