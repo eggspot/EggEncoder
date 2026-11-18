@@ -1,4 +1,6 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace EggEncoder.Codecs.Mp3
 {
@@ -33,9 +35,11 @@ namespace EggEncoder.Codecs.Mp3
             }
 
             _newest -= SubbandCount;
+            ref var newest = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_samples), _newest + SubbandCount - 1);
+            ref var pcm = ref MemoryMarshal.GetReference(pcmSamples);
             for (var i = 0; i < SubbandCount; i++)
             {
-                _samples[_newest + SubbandCount - 1 - i] = pcmSamples[i * stride];
+                Unsafe.Subtract(ref newest, i) = Unsafe.Add(ref pcm, i * stride);
             }
 
             PartialSums(_samples.AsSpan(_newest, HistoryLength), _partialSums);
@@ -46,45 +50,53 @@ namespace EggEncoder.Codecs.Mp3
         private static void PartialSums(ReadOnlySpan<float> history, Span<float> partialSums)
         {
             var lanes = Vector<float>.Count;
+            ref var historyStart = ref MemoryMarshal.GetReference(history);
+            ref var windowStart = ref MemoryMarshal.GetArrayDataReference(Window);
+            ref var output = ref MemoryMarshal.GetReference(partialSums);
             for (var i = 0; i < PartialSumCount; i += lanes)
             {
                 var sum = Vector<float>.Zero;
-                for (var j = 0; j < 8; j++)
+                for (nuint j = 0; j < 8; j++)
                 {
-                    var index = i + (PartialSumCount * j);
-                    sum += new Vector<float>(history[index..]) * new Vector<float>(Window.AsSpan(index));
+                    var index = (nuint)i + (PartialSumCount * j);
+                    sum += Vector.LoadUnsafe(ref historyStart, index) * Vector.LoadUnsafe(ref windowStart, index);
                 }
 
-                sum.CopyTo(partialSums[i..]);
+                sum.StoreUnsafe(ref output, (nuint)i);
             }
         }
 
         private static void Fold(ReadOnlySpan<float> partialSums, Span<float> folded)
         {
-            folded[0] = partialSums[16];
+            ref var sums = ref MemoryMarshal.GetReference(partialSums);
+            ref var output = ref MemoryMarshal.GetReference(folded);
+            output = Unsafe.Add(ref sums, 16);
             for (var j = 1; j <= 16; j++)
             {
-                folded[j] = partialSums[16 + j] + partialSums[16 - j];
+                Unsafe.Add(ref output, j) = Unsafe.Add(ref sums, 16 + j) + Unsafe.Add(ref sums, 16 - j);
             }
 
             for (var j = 17; j < FoldedCount; j++)
             {
-                folded[j] = partialSums[16 + j] - partialSums[80 - j];
+                Unsafe.Add(ref output, j) = Unsafe.Add(ref sums, 16 + j) - Unsafe.Add(ref sums, 80 - j);
             }
         }
 
         private static void Matrix(ReadOnlySpan<float> folded, Span<float> subbandSamples)
         {
             var lanes = Vector<float>.Count;
+            ref var input = ref MemoryMarshal.GetReference(folded);
+            ref var matrix = ref MemoryMarshal.GetArrayDataReference(TransposedMatrix);
+            ref var output = ref MemoryMarshal.GetReference(subbandSamples);
             for (var k = 0; k < SubbandCount; k += lanes)
             {
                 var sum = Vector<float>.Zero;
                 for (var j = 0; j < FoldedCount; j++)
                 {
-                    sum += new Vector<float>(TransposedMatrix.AsSpan((j * SubbandCount) + k)) * new Vector<float>(folded[j]);
+                    sum += Vector.LoadUnsafe(ref matrix, (nuint)((j * SubbandCount) + k)) * new Vector<float>(Unsafe.Add(ref input, j));
                 }
 
-                sum.CopyTo(subbandSamples[k..]);
+                sum.StoreUnsafe(ref output, (nuint)k);
             }
         }
 
