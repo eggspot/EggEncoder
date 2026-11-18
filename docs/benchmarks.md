@@ -167,6 +167,30 @@ change is within noise on this laptop: 4 threads give about 2x one thread becaus
 because of serial code (the copies between reader and encoder measured nothing: `ConvertFile` and a direct
 `Mp3Encoder.Encode` take the same time). `EggEncoderOptions.MaxDegreeOfParallelism` caps the threads one call uses.
 
+One-thread speed, round three (v4.114.1+, same 5-min file, `ConvertFile` to CBR 320, fastest of 5 alternating rounds).
+Where one thread's time went before, from per-stage stopwatches in a local build (2,283 ms): PCM read 4%, copies 1.5%,
+polyphase filterbank 16%, MDCT and alias reduction 9%, mid/side decision 3%, quantisation and rate loop 52% (gain
+probes 28%, leftover spending 23% of which the exact region-split search 11%), Huffman and bitstream 11%, file
+writes 2%. There is no psychoacoustic model to cost.
+
+| | v4.114.0 | now |
+|---|---:|---:|
+| WAV, one thread | 2,265 ms (132x real time) | 1,086 ms (276x) |
+| WAV, default threads (4) | 1,032 ms | 615 ms (488x) |
+| FLAC source, one thread | 2,653 ms | 1,499 ms |
+
+Every output byte is unchanged. What changed, stage by stage (each ratio is the stage's own time, now / before):
+- Polyphase filter (0.38): buffers read through refs instead of span slices, and with 8 float lanes the eight
+  window accumulators and the four matrix accumulators run side by side instead of one dependent chain at a time
+  (each lane still adds in the same order).
+- MDCT (0.60): the DCT-IV keeps four subband accumulators in flight per coefficient.
+- Rate loop (0.47): pair symbols, the largest-magnitude scans and the sign masks use vector lanes (pair symbols were
+  3.7 us per plan, as long as quantising); the region-split prefix sums start at the first band a table can code.
+- Huffman and bitstream (0.70): `BitWriter` keeps a 64-bit accumulator and stores 32 bits at a time (it wrote one
+  byte per field), each Huffman pair is one call (code, escape bits and signs packed together), and zero padding
+  longer than 32 bits no longer goes bit by bit.
+- PCM read (0.57): 16-bit samples widen in vector lanes. File writes (0.16): a 64 KB write buffer instead of 4 KB.
+
 ### MP3 decode (Intel Core i7-8850H, 6 cores / 12 threads, .NET 10.0.12, AVX2 + FMA, scratch harness, best of 30 decodes after one warm-up)
 
 60 s of stereo 44.1 kHz 192 kb/s LAME MP3 (two tones with noise), decoded to interleaved 16-bit PCM.
