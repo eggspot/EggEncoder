@@ -15,35 +15,6 @@ using EggEncoder.Pcm;
 
 namespace EggEncoder.Codecs
 {
-    // Stream-to-Stream Convert/Cut (docs/feature-roadmap.md item 1's own "ConvertFile/CutFile Stream
-    // overloads" half) -- the AudioFormat-keyed counterpart to AudioCutter.cs's own DecodeSource/
-    // OpenSink (extension-keyed) and AudioCutter.Pipeline.cs's own pipeline-aware Convert/Cut, which
-    // this reuses CutOptions/BuildCutPipeline/ForwardOverlap/GetSampleRange/ScratchBuffer/
-    // DeferredFixedHeaderSink from directly rather than duplicating any of that logic. Source: every
-    // format this project's own Stream-based Probe already decodes from a Stream (see
-    // NativeEncoder.Stream.cs), MP3 included. Destination: WAV/AIFF/AU/FLAC/TTA/AAC/WMA so
-    // far, via WavWriter.Create(Stream, ...)/AiffWriter.Create(Stream, ...)/AuWriter.Create(Stream, ...)/
-    // FlacEncoder.OpenSession(Stream, ...)/TtaEncoderSession.OpenSession(Stream, ...)/
-    // AacEncoderSession.OpenSession(Stream, ...)/WmaEncoderSession.OpenSession(Stream, ...) --
-    // WAV/AIFF/AU need no Stream.CanSeek at all (each writes a fixed-size header with every size
-    // field already known from totalFrames up front, no patch-up on Finish()); FLAC is the first
-    // destination here that genuinely does require CanSeek (FlacEncoderSession.Finish() seeks back
-    // to patch STREAMINFO once totalSamples/MD5 are known); TTA needs no CanSeek either, despite
-    // also needing no exactTotalFrames up front -- unlike FLAC's provisional-header-then-patch
-    // design, TtaEncoderSession holds every compressed frame in memory until Finish(), at which
-    // point TtaWriter writes the header/seek-table/frames in one single forward pass since the
-    // whole frame list (and every frame's own final size) is already known by then; AAC needs
-    // neither exactTotalFrames nor CanSeek, and unlike TTA doesn't even buffer anything -- every
-    // ADTS frame is written straight to dest as soon as it's encoded, with no whole-file patch-up
-    // step of any kind; WMA needs neither either -- like TTA it buffers every encoded frame
-    // (compressed WMA payloads, not raw PCM) until Finish(), at which point AsfContainerWriter.Write
-    // computes every header stat from that already-complete list and writes the whole container in
-    // one forward pass, needing no Stream.Position/Seek at all (a real, if small, fix: the
-    // pre-existing path-based writer used to read back writer.BaseStream.Position purely to measure
-    // a value -- PacketHeaderOverhead + payload.Length -- already fully computable from its own
-    // inputs, so that read was both unnecessary and the one thing that would have blocked a
-    // non-seekable destination). Every other destination codec's own Stream write side is still
-    // open, one format at a time, the same way Stream-based Probe itself was rolled out.
     public static partial class AudioCutter
     {
         /// <summary>
@@ -103,8 +74,6 @@ namespace EggEncoder.Codecs
                     var (outBuffer, outFrameCount, outChannels, outSampleRate, outBitsPerSample) =
                         pipeline.Apply(scratchBuffer, block.Length / channels, channels, sampleRate, bitsPerSample);
 
-                    // Opened only after the first successful Apply() call -- see the path-based
-                    // Convert(pipeline) overload's own matching comment for why.
                     destSink ??= OpenSinkStream(destFormat, dest, outChannels, outSampleRate, outBitsPerSample, pipeline.CanChangeFrameCount ? null : totalSamples);
                     destSink.WriteInterleavedSamples(outBuffer, outFrameCount);
                 });
@@ -333,39 +302,12 @@ namespace EggEncoder.Codecs
                         ? AuWriter.Create(dest, channels, sampleRate, bitsPerSample, exactTotalFrames.Value)
                         : new DeferredFixedHeaderSink(channels, totalFrames => AuWriter.Create(dest, channels, sampleRate, bitsPerSample, totalFrames));
                 case AudioFormat.Flac:
-                    // Unlike WAV/AIFF/AU above, FlacEncoder.OpenSession needs no exactTotalFrames at
-                    // all (and so no DeferredFixedHeaderSink either) -- FlacEncoderSession.Finish()
-                    // already patches STREAMINFO's totalSamples/MD5/block-size-range fields in place
-                    // once they're known, the same provisional-header-then-patch design the
-                    // path-based AudioCutter.cs's own ".flac" => FlacEncoder.OpenSession(...) dispatch
-                    // already relies on. Requires dest.CanSeek -- that patch-up seeks back to a fixed
-                    // byte offset -- which FlacEncoder.OpenSession(Stream, ...) itself validates and
-                    // throws a clear ArgumentException for if it's missing.
                     return FlacEncoder.OpenSession(dest, channels, bitsPerSample, sampleRate);
                 case AudioFormat.Tta:
-                    // Like FLAC, TtaEncoderSession.OpenSession needs no exactTotalFrames at all (so
-                    // no DeferredFixedHeaderSink either) -- but unlike FLAC, it also needs no
-                    // dest.CanSeek: every compressed frame is held in memory until Finish(), which
-                    // then writes the header/seek-table/frames in one single forward pass, since the
-                    // whole frame list (and every frame's own final size) is already known by then.
                     return TtaEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 case AudioFormat.Aac:
-                    // Like TTA, AacEncoderSession.OpenSession needs no exactTotalFrames at all (so
-                    // no DeferredFixedHeaderSink either) and no dest.CanSeek -- every ADTS frame is
-                    // written forward-only to dest as soon as it's encoded, with no whole-file
-                    // patch-up step at all (not even TTA's own "buffer every frame until Finish()").
-                    // AacFrameEncoder only accepts 16-bit-range input, so bitsPerSample is passed
-                    // through for the session to rescale to 16-bit (the same as the path-based
-                    // ".aac" dispatch) -- a 24-bit source would otherwise wrap and encode as noise.
                     return AacEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 case AudioFormat.Wma:
-                    // Like AAC, WmaEncoderSession.OpenSession needs no exactTotalFrames and no
-                    // dest.CanSeek -- AsfContainerWriter.Write computes every header stat (packet
-                    // count/size, duration, average bitrate) from the already-fully-encoded frame
-                    // list in Finish() and writes the whole container in one forward pass, the same
-                    // "every size known before the first byte is written" shape FLAC's STREAMINFO
-                    // patch-up does NOT share (that one does seek back). bitsPerSample is passed
-                    // through for the session to rescale to 16-bit, the same as AAC above.
                     return WmaEncoderSession.OpenSession(dest, channels, sampleRate, bitsPerSample);
                 default:
                     throw new NotSupportedException($"Converting to an AudioFormat.{destFormat} stream destination is not supported yet -- see docs/feature-roadmap.md item 1 for status. Use the path-based Convert(string, ...)/Cut(string, ...) overload for this format in the meantime.");

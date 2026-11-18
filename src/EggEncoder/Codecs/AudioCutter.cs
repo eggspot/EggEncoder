@@ -317,7 +317,6 @@ namespace EggEncoder.Codecs
             }
         }
 
-        // Reused, grow-only backing array so repeated block callbacks don't allocate on every invocation.
         private sealed class ScratchBuffer
         {
             private int[] _buffer = [];
