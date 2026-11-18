@@ -82,8 +82,8 @@ namespace EggEncoder.Codecs.Flac
             FlacFrameHeader.WriteBlockSizeTail(writer, blockSizeCode, sampleCount);
             FlacFrameHeader.WriteSampleRateTail(writer, sampleRateCode, sampleRate);
 
-            var headerBytes = writer.ToArray();
-            writer.WriteBits(FlacCrc.Crc8(headerBytes, 0, headerBytes.Length), 8);
+            var (headerBytes, headerLength) = writer.AlignedBytes();
+            writer.WriteBits(FlacCrc.Crc8(headerBytes, 0, headerLength), 8);
 
             for (var c = 0; c < channels; c++)
             {
@@ -91,8 +91,8 @@ namespace EggEncoder.Codecs.Flac
             }
 
             writer.ByteAlign();
-            var preFooterBytes = writer.ToArray();
-            writer.WriteBits(FlacCrc.Crc16(preFooterBytes, 0, preFooterBytes.Length), 16);
+            var (frameBytes, frameLength) = writer.AlignedBytes();
+            writer.WriteBits(FlacCrc.Crc16(frameBytes, 0, frameLength), 16);
 
             return writer.ToArray();
         }
@@ -234,21 +234,10 @@ namespace EggEncoder.Codecs.Flac
                 return new SubframePlan(SubframeKind.Constant, 0, 8 + bitsPerSample, null, 0, null, 0);
             }
 
-            SubframePlan? bestFixed = null;
-            var maxFixedOrder = Math.Min(MaxFixedOrder, sampleCount - 1);
-            for (var order = 0; order <= maxFixedOrder; order++)
-            {
-                var residual = ComputeFixedResidual(samples, order);
-                var (residualCost, riceParameter) = ChooseResidualCoding(residual);
-                var totalCost = 8L + ((long)order * bitsPerSample) + 6 /* residual method (2 bits) + partition order (4 bits) */ + residualCost;
-
-                if (bestFixed is null || totalCost < bestFixed.Value.CostBits)
-                {
-                    bestFixed = new SubframePlan(SubframeKind.Fixed, order, totalCost, residual, riceParameter, null, 0);
-                }
-            }
-
-            var best = bestFixed!.Value;
+            var fixedOrder = BestFixedOrderBySum(samples, Math.Min(MaxFixedOrder, sampleCount - 1));
+            var fixedResidual = ComputeFixedResidual(samples, fixedOrder);
+            var (fixedResidualCost, fixedRiceParameter) = ChooseResidualCoding(fixedResidual);
+            var best = new SubframePlan(SubframeKind.Fixed, fixedOrder, 8L + ((long)fixedOrder * bitsPerSample) + 6 + fixedResidualCost, fixedResidual, fixedRiceParameter, null, 0);
             TryLpcOrders(samples, bitsPerSample, ref best);
             var verbatimCost = 8L + ((long)sampleCount * bitsPerSample);
             return verbatimCost < best.CostBits ? new SubframePlan(SubframeKind.Verbatim, 0, verbatimCost, null, 0, null, 0) : best;
@@ -259,6 +248,11 @@ namespace EggEncoder.Codecs.Flac
         // RestoreFixedPrediction formulas (order, not coefficients, determines the shape).
         private static double[] AutocorrelationEightLags(double[] x)
         {
+            if (System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated)
+            {
+                return AutocorrelationEightLagsTwoLanes(x);
+            }
+
             var head = new double[MaxLpcOrder + 1];
             for (var i = 0; i < MaxLpcOrder; i++)
             {
@@ -285,6 +279,56 @@ namespace EggEncoder.Codecs.Flac
             }
 
             return [r0, r1, r2, r3, r4, r5, r6, r7, r8];
+        }
+
+        private static double[] AutocorrelationEightLagsTwoLanes(double[] x)
+        {
+            var lags = new double[MaxLpcOrder + 1];
+            var start = MaxLpcOrder;
+            for (var i = 0; i < start; i++)
+            {
+                for (var lag = 0; lag <= i; lag++)
+                {
+                    lags[lag] += x[i] * x[i - lag];
+                }
+            }
+
+            ref var values = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(x);
+            var r0 = System.Runtime.Intrinsics.Vector128<double>.Zero;
+            var r1 = r0;
+            var r2 = r0;
+            var r3 = r0;
+            var r4 = r0;
+            var r5 = r0;
+            var r6 = r0;
+            var r7 = r0;
+            var r8 = r0;
+            var i0 = start;
+            for (; i0 + 2 <= x.Length; i0 += 2)
+            {
+                var current = System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)i0);
+                r0 += current * current;
+                r1 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 1));
+                r2 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 2));
+                r3 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 3));
+                r4 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 4));
+                r5 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 5));
+                r6 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 6));
+                r7 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 7));
+                r8 += current * System.Runtime.Intrinsics.Vector128.LoadUnsafe(ref values, (nuint)(i0 - 8));
+            }
+
+            System.Runtime.Intrinsics.Vector128<double>[] sums = [r0, r1, r2, r3, r4, r5, r6, r7, r8];
+            for (var lag = 0; lag <= MaxLpcOrder; lag++)
+            {
+                lags[lag] += System.Runtime.Intrinsics.Vector128.GetElement(sums[lag], 0) + System.Runtime.Intrinsics.Vector128.GetElement(sums[lag], 1);
+                for (var i = i0; i < x.Length; i++)
+                {
+                    lags[lag] += x[i] * x[i - lag];
+                }
+            }
+
+            return lags;
         }
 
         private static int[] ComputeFixedResidual(int[] samples, int order)
@@ -377,7 +421,9 @@ namespace EggEncoder.Codecs.Flac
 
             var lpc = new double[maxOrder];
             var error = autocorrelation[0];
-            var values = bitsPerSample <= MaxExactDoubleLpcBits ? ToDoubles(samples) : null;
+            var coefficientsByOrder = new double[maxOrder + 1][];
+            var bestOrder = 0;
+            var bestEstimate = double.MaxValue;
 
             for (var order = 1; order <= maxOrder; order++)
             {
@@ -406,40 +452,197 @@ namespace EggEncoder.Codecs.Flac
                 Array.Copy(updated, lpc, order);
                 error *= 1 - (reflection * reflection);
 
-                var (coefficients, shift) = QuantizeCoefficients(lpc[..order], LpcPrecision);
-                if (coefficients is null)
+                coefficientsByOrder[order] = lpc[..order];
+                var estimate = (EstimatedBitsPerResidual(error, sampleCount) * (sampleCount - order)) + (order * (double)(LpcPrecision + bitsPerSample));
+                if (estimate < bestEstimate)
                 {
-                    continue;
+                    bestEstimate = estimate;
+                    bestOrder = order;
                 }
+            }
 
-                var residual = ComputeLpcResidual(samples, values, coefficients, shift, bitsPerSample);
-                var (residualCost, riceParameter) = ChooseResidualCoding(residual);
+            if (bestOrder == 0)
+            {
+                return;
+            }
 
-                // 8 (subframe header) + order*bitsPerSample (warmup) + 4 (precision code) + 5
-                // (shift) + order*LpcPrecision (coefficients) + 6 (residual method + partition
-                // order) + the residual payload itself.
-                var totalCost = 8L + ((long)order * bitsPerSample) + 4 + 5 + ((long)order * LpcPrecision) + 6 + residualCost;
+            var (coefficients, shift) = QuantizeCoefficients(coefficientsByOrder[bestOrder], LpcPrecision);
+            if (coefficients is null)
+            {
+                return;
+            }
 
-                if (totalCost < best.CostBits)
-                {
-                    best = new SubframePlan(SubframeKind.Lpc, order, totalCost, residual, riceParameter, coefficients, shift);
-                }
+            var values = bitsPerSample <= MaxExactDoubleLpcBits && FlacFrameDecoder.NeedsWideLpcAccumulator(bitsPerSample, bestOrder, LpcPrecision) ? ToDoubles(samples) : null;
+            var residual = ComputeLpcResidual(samples, values, coefficients, shift, bitsPerSample);
+            var (residualCost, riceParameter) = ChooseResidualCoding(residual);
+            var totalCost = 8L + ((long)bestOrder * bitsPerSample) + 4 + 5 + ((long)bestOrder * LpcPrecision) + 6 + residualCost;
+            if (totalCost < best.CostBits)
+            {
+                best = new SubframePlan(SubframeKind.Lpc, bestOrder, totalCost, residual, riceParameter, coefficients, shift);
             }
         }
 
-        // The classic Welch window: a simple parabola, 0 at both edges and 1 at the center --
-        // cheap to compute and, unlike a rectangular (i.e. no) window, doesn't bias the
-        // autocorrelation estimate with the sharp discontinuity a finite block's own hard edges
-        // would otherwise introduce.
+        private static double EstimatedBitsPerResidual(double error, int sampleCount)
+        {
+            if (!(error > 0))
+            {
+                return 0;
+            }
+
+            var bits = 0.5 * Math.Log2(error * 0.5 / sampleCount);
+            return bits > 0 ? bits : 0;
+        }
+
+        private const int RiceRunSteps = 16;
+
+        private static int FixedSumRunSteps(int[] samples)
+        {
+            var largest = 0;
+            var i = 0;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var lanes = System.Numerics.Vector<int>.Count;
+                var largestLanes = System.Numerics.Vector<int>.Zero;
+                for (; i + lanes <= samples.Length; i += lanes)
+                {
+                    largestLanes = System.Numerics.Vector.Max(largestLanes, System.Numerics.Vector.Abs(new System.Numerics.Vector<int>(samples, i)));
+                }
+
+                for (var lane = 0; lane < lanes; lane++)
+                {
+                    largest = Math.Max(largest, largestLanes[lane]);
+                }
+            }
+
+            for (; i < samples.Length; i++)
+            {
+                largest = Math.Max(largest, Math.Abs(samples[i]));
+            }
+
+            var largestDifference = 16L * largest;
+            return largestDifference == 0 ? 1 << 20 : (int)Math.Max(1, uint.MaxValue / 2 / largestDifference);
+        }
+
+        private static int BestFixedOrderBySum(int[] samples, int maxOrder)
+        {
+            if (samples.Length <= MaxFixedOrder)
+            {
+                return 0;
+            }
+
+            long sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0, sum4 = 0;
+            var start = MaxFixedOrder;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var lanes = System.Numerics.Vector<int>.Count;
+                var lanes0 = System.Numerics.Vector<long>.Zero;
+                var lanes1 = System.Numerics.Vector<long>.Zero;
+                var lanes2 = System.Numerics.Vector<long>.Zero;
+                var lanes3 = System.Numerics.Vector<long>.Zero;
+                var lanes4 = System.Numerics.Vector<long>.Zero;
+                var runSteps = FixedSumRunSteps(samples);
+                while (start + lanes <= samples.Length)
+                {
+                    var run0 = System.Numerics.Vector<uint>.Zero;
+                    var run1 = System.Numerics.Vector<uint>.Zero;
+                    var run2 = System.Numerics.Vector<uint>.Zero;
+                    var run3 = System.Numerics.Vector<uint>.Zero;
+                    var run4 = System.Numerics.Vector<uint>.Zero;
+                    var end = Math.Min(samples.Length - lanes, start + ((runSteps - 1) * lanes));
+                    for (; start <= end; start += lanes)
+                    {
+                    var s0 = new System.Numerics.Vector<int>(samples, start);
+                    var s1 = new System.Numerics.Vector<int>(samples, start - 1);
+                    var s2 = new System.Numerics.Vector<int>(samples, start - 2);
+                    var s3 = new System.Numerics.Vector<int>(samples, start - 3);
+                    var s4 = new System.Numerics.Vector<int>(samples, start - 4);
+                    var e1 = s0 - s1;
+                    var e2 = e1 - (s1 - s2);
+                    var e3 = e2 - ((s1 - s2) - (s2 - s3));
+                    var e4 = e3 - (((s1 - s2) - (s2 - s3)) - ((s2 - s3) - (s3 - s4)));
+                    run0 += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(s0));
+                    run1 += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(e1));
+                    run2 += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(e2));
+                    run3 += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(e3));
+                    run4 += System.Numerics.Vector.AsVectorUInt32(System.Numerics.Vector.Abs(e4));
+                    }
+
+                    lanes0 += System.Numerics.Vector.AsVectorInt64(WidenedSum(run0));
+                    lanes1 += System.Numerics.Vector.AsVectorInt64(WidenedSum(run1));
+                    lanes2 += System.Numerics.Vector.AsVectorInt64(WidenedSum(run2));
+                    lanes3 += System.Numerics.Vector.AsVectorInt64(WidenedSum(run3));
+                    lanes4 += System.Numerics.Vector.AsVectorInt64(WidenedSum(run4));
+                }
+
+                sum0 = System.Numerics.Vector.Sum(lanes0);
+                sum1 = System.Numerics.Vector.Sum(lanes1);
+                sum2 = System.Numerics.Vector.Sum(lanes2);
+                sum3 = System.Numerics.Vector.Sum(lanes3);
+                sum4 = System.Numerics.Vector.Sum(lanes4);
+            }
+
+            var e0Previous = samples[start - 1];
+            var e1Previous = samples[start - 1] - samples[start - 2];
+            var e2Previous = e1Previous - (samples[start - 2] - samples[start - 3]);
+            var e3Previous = e2Previous - ((samples[start - 2] - samples[start - 3]) - (samples[start - 3] - samples[start - 4]));
+            for (var i = start; i < samples.Length; i++)
+            {
+                var e0 = samples[i];
+                var e1 = e0 - e0Previous;
+                var e2 = e1 - e1Previous;
+                var e3 = e2 - e2Previous;
+                var e4 = e3 - e3Previous;
+                sum0 += Math.Abs((long)e0);
+                sum1 += Math.Abs((long)e1);
+                sum2 += Math.Abs((long)e2);
+                sum3 += Math.Abs((long)e3);
+                sum4 += Math.Abs((long)e4);
+                e0Previous = e0;
+                e1Previous = e1;
+                e2Previous = e2;
+                e3Previous = e3;
+            }
+
+            long[] sums = [sum0, sum1, sum2, sum3, sum4];
+            var best = 0;
+            for (var order = 1; order <= maxOrder; order++)
+            {
+                if (sums[order] < sums[best])
+                {
+                    best = order;
+                }
+            }
+
+            return best;
+        }
+
+        [ThreadStatic]
+        private static double[]? _welchWindow;
+
+        [ThreadStatic]
+        private static uint[]? _zigzagBuffer;
+
         private static double[] ApplyWelchWindow(int[] samples)
         {
             var n = samples.Length;
+            var window = _welchWindow;
+            if (window is null || window.Length != n)
+            {
+                window = new double[n];
+                var half = (n - 1) / 2.0;
+                for (var i = 0; i < n; i++)
+                {
+                    var t = (i - half) / half;
+                    window[i] = 1 - (t * t);
+                }
+
+                _welchWindow = window;
+            }
+
             var windowed = new double[n];
-            var half = (n - 1) / 2.0;
             for (var i = 0; i < n; i++)
             {
-                var t = (i - half) / half;
-                windowed[i] = samples[i] * (1 - (t * t));
+                windowed[i] = samples[i] * window[i];
             }
 
             return windowed;
@@ -567,7 +770,7 @@ namespace EggEncoder.Codecs.Flac
                 return (FourBitRiceParameterBits, 0);
             }
 
-            var zigzag = new uint[n];
+            var zigzag = _zigzagBuffer is { } buffer && buffer.Length >= n ? buffer : (_zigzagBuffer = new uint[n]);
             var total = 0L;
             var z0 = 0;
             if (System.Numerics.Vector.IsHardwareAccelerated)
@@ -595,11 +798,24 @@ namespace EggEncoder.Codecs.Flac
 
             var mean = total / n;
             var start = mean == 0 ? 0 : Math.Min(MaxRiceParameter, System.Numerics.BitOperations.Log2((ulong)mean));
+            var (atLower, atStart, atHigher) = RiceDataBitsAround(zigzag, n, start);
             var bestParameter = start;
-            var bestRiceCost = RiceDataBits(zigzag, start);
-            while (bestParameter > 0)
+            var bestRiceCost = atStart;
+            if (start > 0 && atLower <= atStart)
             {
-                var lower = RiceDataBits(zigzag, bestParameter - 1);
+                bestParameter = start - 1;
+                bestRiceCost = atLower;
+            }
+            else if (start < MaxRiceParameter && atHigher < atStart)
+            {
+                bestParameter = start + 1;
+                bestRiceCost = atHigher;
+            }
+
+            var walkedDown = bestParameter < start;
+            while (walkedDown && bestParameter > 0)
+            {
+                var lower = RiceDataBits(zigzag, n, bestParameter - 1);
                 if (lower > bestRiceCost)
                 {
                     break;
@@ -609,11 +825,11 @@ namespace EggEncoder.Codecs.Flac
                 bestRiceCost = lower;
             }
 
-            if (bestParameter == start)
+            if (bestParameter > start)
             {
                 while (bestParameter < MaxRiceParameter)
                 {
-                    var higher = RiceDataBits(zigzag, bestParameter + 1);
+                    var higher = RiceDataBits(zigzag, n, bestParameter + 1);
                     if (higher >= bestRiceCost)
                     {
                         break;
@@ -734,15 +950,68 @@ namespace EggEncoder.Codecs.Flac
             return i;
         }
 
-        private static long RiceDataBits(uint[] zigzag, int parameter)
+        private static (long Lower, long Middle, long Higher) RiceDataBitsAround(uint[] zigzag, int count, int parameter)
         {
-            var bits = (long)zigzag.Length * (parameter + 1);
+            var lowerParameter = Math.Max(parameter - 1, 0);
+            var higherParameter = Math.Min(parameter + 1, MaxRiceParameter);
+            long lower = 0, middle = 0, higher = 0;
+            var i = 0;
+            if (System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var lanes = System.Numerics.Vector<uint>.Count;
+                var lowerSums = System.Numerics.Vector<ulong>.Zero;
+                var middleSums = System.Numerics.Vector<ulong>.Zero;
+                var higherSums = System.Numerics.Vector<ulong>.Zero;
+                while (i + lanes <= count)
+                {
+                    var lowerRun = System.Numerics.Vector<uint>.Zero;
+                    var middleRun = System.Numerics.Vector<uint>.Zero;
+                    var higherRun = System.Numerics.Vector<uint>.Zero;
+                    var end = Math.Min(count - lanes, i + ((RiceRunSteps - 1) * lanes));
+                    for (; i <= end; i += lanes)
+                    {
+                        var values = new System.Numerics.Vector<uint>(zigzag, i);
+                        lowerRun += System.Numerics.Vector.ShiftRightLogical(values, lowerParameter);
+                        middleRun += System.Numerics.Vector.ShiftRightLogical(values, parameter);
+                        higherRun += System.Numerics.Vector.ShiftRightLogical(values, higherParameter);
+                    }
+
+                    lowerSums += WidenedSum(lowerRun);
+                    middleSums += WidenedSum(middleRun);
+                    higherSums += WidenedSum(higherRun);
+                }
+
+                lower = (long)System.Numerics.Vector.Sum(lowerSums);
+                middle = (long)System.Numerics.Vector.Sum(middleSums);
+                higher = (long)System.Numerics.Vector.Sum(higherSums);
+            }
+
+            for (; i < count; i++)
+            {
+                lower += zigzag[i] >> lowerParameter;
+                middle += zigzag[i] >> parameter;
+                higher += zigzag[i] >> higherParameter;
+            }
+
+            return (lower + ((long)count * (lowerParameter + 1)), middle + ((long)count * (parameter + 1)), higher + ((long)count * (higherParameter + 1)));
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private static System.Numerics.Vector<ulong> WidenedSum(System.Numerics.Vector<uint> values)
+        {
+            System.Numerics.Vector.Widen(values, out var low, out var high);
+            return low + high;
+        }
+
+        private static long RiceDataBits(uint[] zigzag, int count, int parameter)
+        {
+            var bits = (long)count * (parameter + 1);
             var i = 0;
             if (System.Numerics.Vector.IsHardwareAccelerated)
             {
                 var lanes = System.Numerics.Vector<uint>.Count;
                 var sums = System.Numerics.Vector<ulong>.Zero;
-                for (; i + lanes <= zigzag.Length; i += lanes)
+                for (; i + lanes <= count; i += lanes)
                 {
                     var shifted = System.Numerics.Vector.ShiftRightLogical(new System.Numerics.Vector<uint>(zigzag, i), parameter);
                     System.Numerics.Vector.Widen(shifted, out var low, out var high);
@@ -752,7 +1021,7 @@ namespace EggEncoder.Codecs.Flac
                 bits += (long)System.Numerics.Vector.Sum(sums);
             }
 
-            for (; i < zigzag.Length; i++)
+            for (; i < count; i++)
             {
                 bits += zigzag[i] >> parameter;
             }
@@ -813,13 +1082,22 @@ namespace EggEncoder.Codecs.Flac
             writer.WriteBits(0, 4);
 
             writer.WriteBits((uint)plan.RiceParameter, parameterBits);
+            var parameter = plan.RiceParameter;
+            var remainderMask = (1u << parameter) - 1;
             foreach (var r in plan.Residual!)
             {
                 var zigzag = (uint)((r << 1) ^ (r >> 31));
-                writer.WriteUnary(zigzag >> plan.RiceParameter);
-                if (plan.RiceParameter > 0)
+                var quotient = zigzag >> parameter;
+                if (quotient + 1 + parameter <= 32)
                 {
-                    writer.WriteBits(zigzag & ((1u << plan.RiceParameter) - 1), plan.RiceParameter);
+                    writer.WriteBits((1u << parameter) | (zigzag & remainderMask), (int)quotient + 1 + parameter);
+                    continue;
+                }
+
+                writer.WriteUnary(quotient);
+                if (parameter > 0)
+                {
+                    writer.WriteBits(zigzag & remainderMask, parameter);
                 }
             }
         }

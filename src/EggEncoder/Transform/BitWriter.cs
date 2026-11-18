@@ -98,6 +98,28 @@ namespace EggEncoder.Transform
             return result;
         }
 
+        internal (byte[] Buffer, int Length) AlignedBytes()
+        {
+            if (_pendingBits % 8 != 0)
+            {
+                throw new InvalidOperationException("AlignedBytes needs a whole number of bytes written");
+            }
+
+            while (_pendingBits > 0)
+            {
+                _pendingBits -= 8;
+                if (_byteLength == _buffer.Length)
+                {
+                    Array.Resize(ref _buffer, _buffer.Length * 2);
+                }
+
+                _buffer[_byteLength++] = (byte)(_pending >> _pendingBits);
+            }
+
+            _pending = 0;
+            return (_buffer, _byteLength);
+        }
+
         private void WriteBitsOneByOne(uint value, int bitCount)
         {
             if (value == 0)

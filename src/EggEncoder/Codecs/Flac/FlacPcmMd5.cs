@@ -14,6 +14,28 @@ namespace EggEncoder.Codecs.Flac
         // per sample used to cost more than the whole rest of FLAC decode.
         private const int ChunkSamples = 4096;
 
+        private static int Pack(ReadOnlySpan<int> samples, int bytesPerSample, byte[] chunk)
+        {
+            var i = 0;
+            if (bytesPerSample == 2 && BitConverter.IsLittleEndian && System.Numerics.Vector.IsHardwareAccelerated)
+            {
+                var shorts = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(chunk.AsSpan(0, samples.Length * 2));
+                var lanes = System.Numerics.Vector<int>.Count;
+                for (; i + (2 * lanes) <= samples.Length; i += 2 * lanes)
+                {
+                    System.Numerics.Vector.Narrow(new System.Numerics.Vector<int>(samples[i..]), new System.Numerics.Vector<int>(samples[(i + lanes)..])).CopyTo(shorts[i..]);
+                }
+            }
+
+            ref var output = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(chunk);
+            for (; i < samples.Length; i++)
+            {
+                System.Runtime.CompilerServices.Unsafe.WriteUnaligned(ref System.Runtime.CompilerServices.Unsafe.Add(ref output, i * bytesPerSample), BitConverter.IsLittleEndian ? samples[i] : BinaryPrimitives.ReverseEndianness(samples[i]));
+            }
+
+            return samples.Length * bytesPerSample;
+        }
+
         public static void Append(IncrementalHash md5, ReadOnlySpan<int> interleavedSamples, int bitsPerSample)
         {
             var bytesPerSample = (bitsPerSample + 7) / 8;
@@ -23,14 +45,7 @@ namespace EggEncoder.Codecs.Flac
                 while (!interleavedSamples.IsEmpty)
                 {
                     var count = Math.Min(ChunkSamples, interleavedSamples.Length);
-                    var length = 0;
-                    foreach (var sample in interleavedSamples[..count])
-                    {
-                        // A full 4-byte write, then advance by bytesPerSample: the next write
-                        // overwrites the unused high bytes. The +3 above leaves room for the last one.
-                        BinaryPrimitives.WriteInt32LittleEndian(chunk.AsSpan(length), sample);
-                        length += bytesPerSample;
-                    }
+                    var length = Pack(interleavedSamples[..count], bytesPerSample, chunk);
 
                     md5.AppendData(chunk, 0, length);
                     interleavedSamples = interleavedSamples[count..];
