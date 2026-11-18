@@ -582,10 +582,21 @@ namespace EggEncoder.Codecs.Mp3
                     return prefix;
                 }
 
+                var firstBand = 0;
+                if (_linbits[table] == 0)
+                {
+                    while (firstBand < Bands - 1 && _bandLargest[firstBand] >= _widths[table])
+                    {
+                        firstBand++;
+                    }
+                }
+
+                var firstPair = _bandEnds[firstBand] / 2;
                 var symbolBits = _pairSymbolBits[table];
                 var symbols = _symbols;
                 var bits = 0;
-                for (var pair = 0; pair < _pairs; pair++)
+                prefix[firstPair] = 0;
+                for (var pair = firstPair; pair < _pairs; pair++)
                 {
                     bits += symbolBits[symbols[pair]];
                     prefix[pair + 1] = bits;
