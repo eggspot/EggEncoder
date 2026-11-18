@@ -377,3 +377,19 @@ wider samples in `double` lanes, exact because every product and sum stays below
 autocorrelation runs its nine lags in one pass in the same order; samples convert to double once per channel; frames
 encode on up to `MaxDegreeOfParallelism` threads (processor count, at most 4, or `EggEncoderOptions`) and are
 written in order. libFLAC 1.4.3 `flac -8` takes 1,119 ms and 2,130 ms on the same files on one thread.
+
+### FLAC encode against libFLAC and ffmpeg (v4.115.0+, same machine, fastest of 3, whole process)
+
+| Source | ours, 1 thread | ours, default (4) | libFLAC 1.4.3 `flac -8` | ffmpeg 2021 `-c:a flac` (1 thread) |
+|---|---:|---:|---:|---:|
+| 5 min, 44.1 kHz/16-bit | 1,242-1,365 ms, 14,679,850 B | 494-520 ms | 1,032-1,148 ms, 14,686,132 B | 655-662 ms, 14,691,776 B |
+| 232 s, 48 kHz/24-bit | 1,783-1,788 ms, 51,638,275 B | 821-832 ms | 2,007-2,268 ms, 51,136,522 B | 876-1,303 ms, 51,487,836 B |
+
+With default threads we beat both everywhere; on one thread we beat libFLAC on 24-bit, trail it by about 20% on
+16-bit, and trail ffmpeg by about 2x. The output changes from v4.114.3 (choices are now estimated, as libFLAC and
+ffmpeg do), sizes stay within 0.05% of before and of libFLAC on 16-bit (24-bit is 1% above libFLAC, 0.3% above ffmpeg).
+How: the fixed order comes from |residual| sums of orders 0-4 in one pass, the LPC order from the Levinson error
+(libFLAC's estimate), the stereo mode from estimated bits of left, right, mid and side (only the chosen pair is
+analysed), Rice parameters from residual sums (ffmpeg's estimate), and exact residuals only for the chosen
+candidates; MD5 runs on its own task when more than one thread is allowed, and frames are written straight from the
+bit writer's buffer.
