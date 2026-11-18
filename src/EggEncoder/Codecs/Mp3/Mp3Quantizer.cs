@@ -53,14 +53,16 @@ namespace EggEncoder.Codecs.Mp3
                 }
 
                 var (code, length) = quads.GetCode(pattern);
-                writer.WriteBits(code, length);
                 for (var j = 0; j < 4; j++)
                 {
                     if (plan.Quantized[i + j] != 0)
                     {
-                        writer.WriteBits(plan.Quantized[i + j] < 0 ? 1u : 0u, 1);
+                        code = (code << 1) | (plan.Quantized[i + j] < 0 ? 1u : 0u);
+                        length++;
                     }
                 }
+
+                writer.WriteBits(code, length);
             }
         }
 
@@ -641,30 +643,26 @@ namespace EggEncoder.Codecs.Mp3
         {
             var absX = Math.Abs(x);
             var absY = Math.Abs(y);
-            var codeX = Math.Min(absX, maxDirect);
-            var codeY = Math.Min(absY, maxDirect);
+            var (code, length) = table.GetCode((Math.Min(absX, maxDirect) * (maxDirect + 1)) + Math.Min(absY, maxDirect));
+            ulong bits = code;
+            var count = length;
+            AppendValueBits(ref bits, ref count, x, absX, maxDirect, linbits);
+            AppendValueBits(ref bits, ref count, y, absY, maxDirect, linbits);
+            writer.WriteBits(bits, count);
+        }
 
-            var (code, length) = table.GetCode((codeX * (maxDirect + 1)) + codeY);
-            writer.WriteBits(code, length);
-
-            if (absX >= maxDirect && linbits > 0)
+        private static void AppendValueBits(ref ulong bits, ref int count, int value, int magnitude, int maxDirect, int linbits)
+        {
+            if (linbits > 0 && magnitude >= maxDirect)
             {
-                writer.WriteBits((uint)(absX - maxDirect), linbits);
+                bits = (bits << linbits) | (uint)(magnitude - maxDirect);
+                count += linbits;
             }
 
-            if (x != 0)
+            if (value != 0)
             {
-                writer.WriteBits(x < 0 ? 1u : 0u, 1);
-            }
-
-            if (absY >= maxDirect && linbits > 0)
-            {
-                writer.WriteBits((uint)(absY - maxDirect), linbits);
-            }
-
-            if (y != 0)
-            {
-                writer.WriteBits(y < 0 ? 1u : 0u, 1);
+                bits = (bits << 1) | (value < 0 ? 1u : 0u);
+                count++;
             }
         }
     }
