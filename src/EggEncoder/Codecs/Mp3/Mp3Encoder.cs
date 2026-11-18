@@ -307,6 +307,7 @@ namespace EggEncoder.Codecs.Mp3
             _analyzed.Clear();
             if (_maxDegreeOfParallelism == 1)
             {
+                WriteFinishedRuns(all: true);
                 WriteFrames(EncodeRun(frames));
                 return;
             }

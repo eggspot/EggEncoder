@@ -28,6 +28,33 @@ namespace EggEncoder.UnitTests.Codecs.Mp3
         }
 
         [Fact]
+        public void Dropping_To_One_Thread_Mid_Stream_Should_Keep_Frames_In_Order()
+        {
+            var samples = Music(3.1);
+            var expected = Encode(samples, variableBitRate: false, threads: 1, writeFrames: 4096);
+            var path = Path.Combine(Path.GetTempPath(), $"mp3_parallel_{Guid.NewGuid():N}.mp3");
+            try
+            {
+                using (var session = Mp3Encoder.OpenSession(path, Channels, SampleRate, bitsPerSample: 16, bitRateKbps: 192))
+                {
+                    session.MaxDegreeOfParallelism = 4;
+                    var half = samples.Length / Channels / 2;
+                    session.WriteInterleavedSamples(samples[..(half * Channels)], half);
+                    session.MaxDegreeOfParallelism = 1;
+                    var rest = samples[(half * Channels)..];
+                    session.WriteInterleavedSamples(rest, rest.Length / Channels);
+                    session.Finish();
+                }
+
+                File.ReadAllBytes(path).Should().Equal(expected);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void A_Thread_Count_Below_One_Should_Be_Rejected()
         {
             var path = Path.Combine(Path.GetTempPath(), $"mp3_parallel_{Guid.NewGuid():N}.mp3");
