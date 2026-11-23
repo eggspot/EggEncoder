@@ -191,11 +191,17 @@ namespace EggEncoder.Codecs.Wav
                 long? factChunkTotalSamples = null;
                 Dictionary<string, string>? tags = null;
 
-                while (stream.Position < stream.Length)
+                while (stream.Length - stream.Position >= ChunkHeaderBytes)
                 {
-                    var chunkId = new string(reader.ReadChars(4));
+                    var chunkIdBytes = reader.ReadBytes(4);
                     var chunkSize = reader.ReadUInt32();
                     var chunkDataStart = stream.Position;
+                    if (dataChunkFound && !IsPrintableChunkId(chunkIdBytes))
+                    {
+                        break;
+                    }
+
+                    var chunkId = Encoding.ASCII.GetString(chunkIdBytes);
 
                     if (chunkId == "fmt ")
                     {
@@ -415,10 +421,7 @@ namespace EggEncoder.Codecs.Wav
                 }
 
                 var pcmFrameBytes = channels.Value * (bitsPerSample.Value / 8);
-                if (dataRunsToEndOfStream)
-                {
-                    dataChunkLength -= dataChunkLength % pcmFrameBytes;
-                }
+                dataChunkLength -= dataChunkLength % pcmFrameBytes;
 
                 var pcmTotalSamples = dataChunkLength / pcmFrameBytes;
 
@@ -445,6 +448,10 @@ namespace EggEncoder.Codecs.Wav
         }
 
         private const uint UnknownDataChunkSize = 0xFFFFFFFF;
+        private const int ChunkHeaderBytes = 8;
+
+        private static bool IsPrintableChunkId(byte[] chunkId) =>
+            Array.TrueForAll(chunkId, character => character is >= 0x20 and <= 0x7E);
 
         private static bool IsUnsizedDataChunk(BinaryReader reader, long chunkDataStart, uint chunkSize)
         {
@@ -460,7 +467,7 @@ namespace EggEncoder.Codecs.Wav
         private static bool StartsWithWellFormedChunk(BinaryReader reader, long position)
         {
             var stream = reader.BaseStream;
-            if (stream.Length - position < 8)
+            if (stream.Length - position < ChunkHeaderBytes)
             {
                 return false;
             }
@@ -469,7 +476,7 @@ namespace EggEncoder.Codecs.Wav
             var id = reader.ReadBytes(4);
             var size = reader.ReadUInt32();
             stream.Position = position;
-            return Array.TrueForAll(id, character => character is >= 0x20 and <= 0x7E) && position + 8 + size <= stream.Length;
+            return IsPrintableChunkId(id) && position + ChunkHeaderBytes + size <= stream.Length;
         }
 
         private static Dictionary<string, string>? TryParseListInfoTags(BinaryReader reader, long chunkDataStart, uint chunkSize)

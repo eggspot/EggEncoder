@@ -11,6 +11,14 @@ Reasons and edge cases behind code that keeps no comments. Each section names th
   the end (a truncated `fmt `) makes `BinaryReader` throw `EndOfStreamException`. `OpenCore` converts that
   to `InvalidDataException`, as `AiffReader` and `AuReader` do, and disposes only a stream it opened
   itself.
+- **Bytes after the last chunk.** Fewer than 8 bytes left (too few for a chunk header) end the walk, and so
+  does a chunk id with a byte outside printable ASCII once the `data` chunk is found: some writers leave
+  zero padding after the audio, which used to read as zero-size chunks until the last few bytes threw
+  "unable to read beyond the end of the stream". ffmpeg ignores those bytes too.
+- **Partial frames.** PCM and float data is floored to whole frames, so a `data` size that ends in part of a
+  frame (seen in label masters: two bytes of a four-byte stereo frame) drops that part, as ffmpeg does with
+  its "Invalid PCM packet" warning. G.711, Yamaha ADPCM and the block ADPCM formats already count whole
+  samples or blocks.
 - **Unsized `data` chunks.** A `data` chunk whose size is 0xFFFFFFFF, points past the end of the stream, or
   is 0 with no well-formed chunk after it (printable four-character id and a size that fits) runs to the
   end of the stream, PCM floored to whole frames. Streaming writers that never patch their header leave
